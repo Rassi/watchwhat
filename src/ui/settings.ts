@@ -2,6 +2,7 @@ import type { Route } from "../router";
 import { el, toast } from "./components";
 import { getSettings, saveSettings, isAuthenticated, isConfigured } from "../data/settings";
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
+import { reconcileCard } from "./reconcile";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -145,6 +146,6 @@ export const settingsRoute: Route = {
       clearBtn,
     );
 
-    container.append(traktCard, connectCard, tmdbCard, prefsCard, dataCard);
+    container.append(traktCard, connectCard, tmdbCard, prefsCard, reconcileCard(), dataCard);
   },
 };

@@ -316,6 +316,14 @@ export async function addEpisodesToHistory(episodeTraktIds: number[], watchedAt?
   });
 }
 
+/** Add episodes to history with individual watched-at timestamps (for imports). */
+export async function addEpisodesToHistoryAt(items: { traktId: number; watchedAt?: string }[]): Promise<void> {
+  await request("/sync/history", {
+    method: "POST",
+    body: { episodes: items.map((i) => ({ ids: { trakt: i.traktId }, ...(i.watchedAt ? { watched_at: i.watchedAt } : {}) })) },
+  });
+}
+
 export async function removeEpisodesFromHistory(episodeTraktIds: number[]): Promise<void> {
   await request("/sync/history/remove", {
     method: "POST",
