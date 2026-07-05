@@ -1,0 +1,7 @@
+# Personal TV Time export data — contains tokens, IPs, personal info. Never commit.
+tvtime/
+
+node_modules/
+dist/
+*.local
+.DS_Store
