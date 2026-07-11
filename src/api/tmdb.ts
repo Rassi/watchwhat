@@ -69,19 +69,30 @@ export async function fetchShowExtras(tmdbId: number, seasonNumbers: number[]): 
   const out: TmdbShowExtras = { episodesBySeason: new Map(), cast: [] };
   if (!tmdbApiKey) return out;
 
-  for (let i = 0; i < seasonNumbers.length; i += 20) {
-    const chunk = seasonNumbers.slice(i, i + 20);
-    const appends = chunk.map((n) => `season/${n}`);
-    if (i === 0) appends.push("aggregate_credits");
+  // TMDB allows at most 20 appended sub-requests per call — credits counts too.
+  const groups: string[][] = [];
+  let current: string[] = ["aggregate_credits"];
+  for (const n of seasonNumbers) {
+    if (current.length >= 20) {
+      groups.push(current);
+      current = [];
+    }
+    current.push(`season/${n}`);
+  }
+  if (current.length > 0) groups.push(current);
+
+  for (const appends of groups) {
     const res = await fetch(
       `${API}/tv/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=${appends.join(",")}`,
     );
-    if (!res.ok) break;
+    if (!res.ok) continue;
     const data = (await res.json()) as Record<string, unknown> & {
       aggregate_credits?: { cast?: TmdbCreditsCast[] };
     };
-    for (const n of chunk) {
-      const season = data[`season/${n}`] as { episodes?: TmdbEpisode[] } | undefined;
+    for (const append of appends) {
+      if (!append.startsWith("season/")) continue;
+      const n = Number(append.slice("season/".length));
+      const season = data[append] as { episodes?: TmdbEpisode[] } | undefined;
       if (season?.episodes) out.episodesBySeason.set(n, season.episodes);
     }
     if (data.aggregate_credits?.cast) {
