@@ -6,6 +6,7 @@ export interface AppSettings {
   tmdbApiKey: string;
   /** Days without watching before a show moves to "Haven't watched for a while". */
   staleDays: number;
+  theme: "auto" | "dark" | "light";
 }
 
 const SETTINGS_KEY = "watchwhat.settings";
@@ -17,6 +18,7 @@ const defaults: AppSettings = {
   traktClientSecret: "",
   tmdbApiKey: "",
   staleDays: 30,
+  theme: "auto",
 };
 
 function readJson<T>(key: string): T | null {

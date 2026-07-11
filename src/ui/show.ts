@@ -2,17 +2,20 @@ import type { Route } from "../router";
 import { dialog, el, spinner, toast } from "./components";
 import { addNeverMarkPrevious, getNeverMarkPrevious } from "../data/settings";
 import {
+  addToWatchlist,
   ensureEpisodes,
   ensureImages,
   ensureProgress,
   isEpisodeWatched,
   loadLibrary,
+  refreshShowSummary,
+  removeFromWatchlist,
   setEpisodesWatched,
   type EpisodeRef,
 } from "../data/sync";
 import type { EpisodeInfo, EpisodesRec, Library, ShowRec } from "../data/model";
 import { getShowSummary } from "../api/trakt";
-import { backdropUrl, stillUrl } from "../api/tmdb";
+import { backdropUrl, posterUrl, stillUrl } from "../api/tmdb";
 
 function epCode(season: number, number: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -64,6 +67,19 @@ export const showRoute: Route = {
 function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec: EpisodesRec): void {
   const expanded = new Set<number>();
   const expandedEpisodes = new Set<string>(); // "season:number" rows showing their description
+  let activeTab: "about" | "episodes" = "episodes";
+  let ratingsSeason =
+    episodesRec.seasons.find((s) => s.number > 0 && s.episodes.some((e) => (e.rating ?? 0) > 0))?.number ?? 1;
+
+  // Older cached shows may predate the metadata fields — backfill once.
+  if (show.genres === undefined || !show.overview) {
+    void refreshShowSummary(lib, show.traktId).then((rec) => {
+      if (rec) {
+        show = rec;
+        renderContent();
+      }
+    });
+  }
   const progress0 = lib.progress.get(show.traktId);
   const firstOpen = progress0?.nextEpisode?.season ?? progress0?.seasons.find((s) => s.completed < s.aired)?.number;
   if (firstOpen != null) expanded.add(firstOpen);
@@ -193,6 +209,150 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     }
     return out;
   };
+
+  // ---------- about view ----------
+
+  function ratingsChart(): HTMLElement | null {
+    const ratedSeasons = episodesRec.seasons.filter((s) => s.number > 0 && s.episodes.some((e) => (e.rating ?? 0) > 0));
+    if (ratedSeasons.length === 0) return null;
+    if (!ratedSeasons.some((s) => s.number === ratingsSeason)) ratingsSeason = ratedSeasons[0].number;
+    const season = ratedSeasons.find((s) => s.number === ratingsSeason)!;
+    const points = season.episodes.filter((e) => (e.rating ?? 0) > 0);
+
+    const W = 640;
+    const H = 200;
+    const padLeft = 30;
+    const padBottom = 24;
+    const padTop = 12;
+    const plotW = W - padLeft - 10;
+    const plotH = H - padTop - padBottom;
+    const x = (i: number) => padLeft + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+    const y = (rating: number) => padTop + (1 - rating / 10) * plotH;
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("class", "ratings-svg");
+    const add = (tag: string, attrs: Record<string, string>, text?: string) => {
+      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+      if (text) node.textContent = text;
+      svg.append(node);
+      return node;
+    };
+    for (const grid of [2, 4, 6, 8, 10]) {
+      add("line", { x1: String(padLeft), y1: String(y(grid)), x2: String(W - 10), y2: String(y(grid)), class: "grid" });
+      add("text", { x: String(padLeft - 6), y: String(y(grid) + 3), "text-anchor": "end", class: "axis" }, String(grid));
+    }
+    if (points.length > 1) {
+      add("polyline", {
+        points: points.map((e, i) => `${x(i)},${y(e.rating!)}`).join(" "),
+        class: "rating-line",
+      });
+    }
+    points.forEach((e, i) => {
+      add("circle", { cx: String(x(i)), cy: String(y(e.rating!)), r: "3.5", class: "rating-dot" });
+      add("text", { x: String(x(i)), y: String(H - 8), "text-anchor": "middle", class: "axis" }, String(e.number));
+    });
+
+    const select = el("select", { class: "season-select" });
+    for (const s of ratedSeasons) {
+      const opt = el("option", { value: String(s.number) }, `Season ${s.number}`);
+      if (s.number === ratingsSeason) opt.setAttribute("selected", "");
+      select.append(opt);
+    }
+    select.addEventListener("change", () => {
+      ratingsSeason = Number(select.value);
+      renderContent();
+    });
+
+    return el(
+      "div",
+      { class: "card" },
+      el("div", { class: "card-head" }, el("h2", {}, "Episode ratings"), select),
+      svg,
+    );
+  }
+
+  function aboutView(): HTMLElement {
+    const wrap = el("div", {});
+
+    // Show info
+    const meta: string[] = [];
+    const years = show.firstAired ? String(new Date(show.firstAired).getFullYear()) : show.year ? String(show.year) : "";
+    if (years) meta.push(years);
+    if (show.genres?.length) meta.push(show.genres.slice(0, 4).join(", "));
+    const facts: string[] = [];
+    if (show.airs?.day && show.status !== "ended" && show.status !== "canceled") {
+      facts.push(`${show.airs.day}${show.airs.time ? ` | ${show.airs.time}` : ""}`);
+    }
+    if (show.runtime) facts.push(`${show.runtime} min`);
+    if (show.network) facts.push(show.network);
+    if (show.status) facts.push(show.status);
+
+    wrap.append(
+      el(
+        "div",
+        { class: "card" },
+        el("h2", {}, "Show info"),
+        el("p", { class: "about-meta" }, meta.join(" • ")),
+        show.rating ? el("p", { class: "about-rating" }, `★ ${show.rating.toFixed(1)}/10`) : null,
+        el("p", { class: "about-overview" }, show.overview || "No description available."),
+        el("p", { class: "about-facts" }, facts.join("  ·  ")),
+      ),
+    );
+
+    // Cast
+    if (episodesRec.cast?.length) {
+      const strip = el("div", { class: "cast-strip" });
+      for (const member of episodesRec.cast) {
+        const photo = posterUrl(member.profile, "w185");
+        strip.append(
+          el(
+            "div",
+            { class: "cast-card" },
+            photo
+              ? (() => {
+                  const img = el("img", { loading: "lazy", alt: member.name });
+                  img.src = photo;
+                  return img;
+                })()
+              : el("div", { class: "cast-photo-placeholder" }, member.name[0] ?? "?"),
+            el("div", { class: "cast-name" }, member.name),
+            el("div", { class: "cast-role" }, member.character ?? ""),
+          ),
+        );
+      }
+      wrap.append(el("div", { class: "card" }, el("h2", {}, "Cast"), strip));
+    }
+
+    const chart = ratingsChart();
+    if (chart) wrap.append(chart);
+
+    // Watchlist membership
+    const onList = lib.watchlist.some((e) => e.traktId === show.traktId);
+    const started = (lib.watched.get(show.traktId)?.plays ?? 0) > 0;
+    if (onList || !started) {
+      const btn = el("button", { class: `btn ${onList ? "danger" : "primary"}` }, onList ? "Remove from watchlist" : "Add to watchlist");
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          if (onList) {
+            await removeFromWatchlist(lib, show.traktId);
+            toast(`Removed "${show.title}" from your watchlist`);
+          } else {
+            await addToWatchlist(lib, { title: show.title, year: show.year, ids: show.ids });
+            toast(`Added "${show.title}" to your watchlist`);
+          }
+        } catch (e) {
+          toast(e instanceof Error ? e.message : "Update failed", "error");
+        }
+        renderContent();
+      });
+      wrap.append(el("div", { class: "card" }, btn));
+    }
+
+    return wrap;
+  }
 
   function continueStrip(): HTMLElement | null {
     const next = nextUnwatched(6);
@@ -354,8 +514,22 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       seasonsWrap.append(seasonBox);
     }
 
-    const strip = continueStrip();
-    body.replaceChildren(header, ...(strip ? [strip] : []), seasonsWrap);
+    const tabBar = el("div", { class: "show-tabs" });
+    for (const tab of ["about", "episodes"] as const) {
+      const b = el("button", { class: `show-tab ${activeTab === tab ? "active" : ""}` }, tab.toUpperCase());
+      b.addEventListener("click", () => {
+        activeTab = tab;
+        renderContent();
+      });
+      tabBar.append(b);
+    }
+
+    if (activeTab === "about") {
+      body.replaceChildren(header, tabBar, aboutView());
+    } else {
+      const strip = continueStrip();
+      body.replaceChildren(header, tabBar, ...(strip ? [strip] : []), seasonsWrap);
+    }
   }
 
   renderContent();

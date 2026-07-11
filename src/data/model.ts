@@ -11,9 +11,21 @@ export interface ShowRec {
   network?: string;
   overview?: string;
   airedEpisodes?: number;
+  genres?: string[];
+  runtime?: number | null;
+  airs?: { day: string | null; time: string | null } | null;
+  /** Trakt community rating 0..10 */
+  rating?: number | null;
+  firstAired?: string | null;
   poster?: string | null;
   backdrop?: string | null;
   imagesFetchedAt?: number;
+}
+
+export interface CastMemberRec {
+  name: string;
+  character: string | null;
+  profile: string | null;
 }
 
 /**
@@ -67,6 +79,8 @@ export interface EpisodeInfo {
   overview?: string | null;
   still?: string | null;
   airDate?: string | null;
+  /** TMDB community rating 0..10 */
+  rating?: number | null;
 }
 
 /**
@@ -78,6 +92,8 @@ export interface EpisodesRec {
   fetchedAt: number;
   /** Set when TMDB details were merged in. */
   tmdbMergedAt?: number;
+  /** Main cast from TMDB aggregate credits. */
+  cast?: CastMemberRec[];
   seasons: {
     number: number;
     episodes: EpisodeInfo[];

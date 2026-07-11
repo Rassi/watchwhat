@@ -11,7 +11,7 @@
  */
 
 import * as trakt from "../api/trakt";
-import { fetchSeasonsEpisodes, fetchShowImages } from "../api/tmdb";
+import { fetchShowExtras, fetchShowImages } from "../api/tmdb";
 import { dbBulkPut, dbClear, dbGet, dbGetAll, dbPut } from "./db";
 import type { EpisodesRec, Library, ProgressRec, ShowRec, WatchedRec, WatchlistEntry } from "./model";
 import { getSettings, isAuthenticated } from "./settings";
@@ -32,8 +32,14 @@ function toShowRec(show: trakt.TraktShow, existing?: ShowRec): ShowRec {
     year: show.year,
     status: show.status ?? existing?.status,
     network: show.network ?? existing?.network,
-    overview: show.overview ?? existing?.overview,
+    // `||` not `??`: Trakt sometimes returns "" — don't clobber a TMDB-sourced overview
+    overview: show.overview || existing?.overview,
     airedEpisodes: show.aired_episodes ?? existing?.airedEpisodes,
+    genres: show.genres ?? existing?.genres,
+    runtime: show.runtime ?? existing?.runtime,
+    airs: show.airs ? { day: show.airs.day, time: show.airs.time } : existing?.airs,
+    rating: show.rating ?? existing?.rating,
+    firstAired: show.first_aired ?? existing?.firstAired,
     poster: existing?.poster,
     backdrop: existing?.backdrop,
     imagesFetchedAt: existing?.imagesFetchedAt,
@@ -218,6 +224,7 @@ export async function ensureImages(lib: Library, traktIds: number[], onUpdate?: 
     if (!images) return; // no key / transient failure
     show.poster = images.poster;
     show.backdrop = images.backdrop;
+    if (!show.overview && images.overview) show.overview = images.overview;
     show.imagesFetchedAt = Date.now();
     await dbPut("shows", traktId, show);
     if (++pendingNotify >= 8) {
@@ -228,16 +235,16 @@ export async function ensureImages(lib: Library, traktIds: number[], onUpdate?: 
   if (pendingNotify > 0) onUpdate?.();
 }
 
-/** Merge TMDB stills/overviews/air dates into an episodes record (best effort). */
+/** Merge TMDB stills/overviews/air dates/ratings + cast into an episodes record (best effort). */
 async function mergeTmdbEpisodes(show: ShowRec, rec: EpisodesRec): Promise<boolean> {
   if (!show.ids.tmdb || !getSettings().tmdbApiKey) return false;
-  const bySeason = await fetchSeasonsEpisodes(
+  const extras = await fetchShowExtras(
     show.ids.tmdb,
     rec.seasons.map((s) => s.number),
   );
-  if (bySeason.size === 0) return false;
+  if (extras.episodesBySeason.size === 0 && extras.cast.length === 0) return false;
   for (const season of rec.seasons) {
-    const tmdbEps = bySeason.get(season.number);
+    const tmdbEps = extras.episodesBySeason.get(season.number);
     if (!tmdbEps) continue;
     for (const ep of season.episodes) {
       const t = tmdbEps.find((x) => x.episode_number === ep.number);
@@ -245,9 +252,11 @@ async function mergeTmdbEpisodes(show: ShowRec, rec: EpisodesRec): Promise<boole
       ep.overview = t.overview;
       ep.still = t.still_path;
       ep.airDate = t.air_date;
+      ep.rating = t.vote_average ?? null;
       ep.title ??= t.name;
     }
   }
+  rec.cast = extras.cast;
   rec.tmdbMergedAt = Date.now();
   return true;
 }
@@ -258,8 +267,9 @@ export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
   const ttl = progressTtlMs(show) * 2;
 
   if (cached && Date.now() - cached.fetchedAt < ttl) {
-    // Cached from before a TMDB key was configured — enrich it now.
-    if (!cached.tmdbMergedAt && (await mergeTmdbEpisodes(show, cached))) {
+    // Cached from before a TMDB key was configured (or before cast/ratings
+    // were collected) — enrich it now.
+    if ((!cached.tmdbMergedAt || cached.cast === undefined) && (await mergeTmdbEpisodes(show, cached))) {
       await dbPut("episodes", show.traktId, cached);
     }
     return cached;
@@ -286,6 +296,23 @@ export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
   } catch (e) {
     if (cached) return cached; // offline — serve stale
     throw e;
+  }
+}
+
+/** Refresh a show's Trakt metadata (genres/airs/rating etc.) into the cache. */
+export async function refreshShowSummary(lib: Library, traktId: number): Promise<ShowRec | undefined> {
+  try {
+    const summary = await trakt.getShowSummary(traktId);
+    const rec = toShowRec(summary, lib.shows.get(traktId));
+    if (!rec.overview && rec.ids.tmdb) {
+      const images = await fetchShowImages(rec.ids.tmdb);
+      if (images?.overview) rec.overview = images.overview;
+    }
+    lib.shows.set(traktId, rec);
+    await dbPut("shows", traktId, rec);
+    return rec;
+  } catch {
+    return lib.shows.get(traktId);
   }
 }
 

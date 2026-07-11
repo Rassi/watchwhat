@@ -3,6 +3,7 @@ import { el, toast } from "./components";
 import { getSettings, saveSettings, isAuthenticated, isConfigured } from "../data/settings";
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
 import { reconcileCard } from "./reconcile";
+import { applyTheme } from "../theme";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -125,11 +126,23 @@ export const settingsRoute: Route = {
       saveSettings({ staleDays: days });
       toast(`Shows move to "Haven't watched for a while" after ${days} days`);
     });
+    const themeSelect = el("select", { class: "season-select" });
+    for (const [value, label] of [["auto", "Auto (follow system)"], ["dark", "Dark"], ["light", "Light"]] as const) {
+      const opt = el("option", { value }, label);
+      if (settings.theme === value) opt.setAttribute("selected", "");
+      themeSelect.append(opt);
+    }
+    themeSelect.addEventListener("change", () => {
+      saveSettings({ theme: themeSelect.value as "auto" | "dark" | "light" });
+      applyTheme();
+    });
+
     const prefsCard = el(
       "div",
       { class: "card" },
       el("h2", {}, "Preferences"),
       field('Days before a show counts as "not watched for a while"', staleInput),
+      el("div", { class: "field" }, el("label", {}, "Theme"), themeSelect),
     );
 
     // --- Data ---

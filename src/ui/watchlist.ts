@@ -4,6 +4,7 @@ import { getSettings, isAuthenticated, isConfigured } from "../data/settings";
 import { ensureImages, ensureProgress, loadLibrary, syncLibrary } from "../data/sync";
 import type { Library, ProgressRec, ShowRec, WatchedRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
+import { homeTabs } from "./hometabs";
 
 const NEW_WINDOW_DAYS = 30;
 
@@ -58,6 +59,7 @@ function card(row: RowData): HTMLElement {
 export const watchlistRoute: Route = {
   name: "home",
   async render(container) {
+    container.append(homeTabs("watchlist"));
     if (!isConfigured() || !isAuthenticated()) {
       container.append(
         el(

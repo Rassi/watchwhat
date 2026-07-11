@@ -1,6 +1,8 @@
 export interface Route {
   /** e.g. "show" for #/show/123 — first hash segment */
   name: string;
+  /** Which bottom tab to highlight (defaults to `name`). */
+  tab?: string;
   render: (container: HTMLElement, params: string[]) => void | Promise<void>;
 }
 
@@ -21,7 +23,7 @@ async function dispatch(): Promise<void> {
   const { name, params } = parseHash();
   const route = routes.get(name) ?? routes.get("home")!;
   document.querySelectorAll<HTMLAnchorElement>("#tabbar a").forEach((a) => {
-    a.classList.toggle("active", a.dataset.route === route.name);
+    a.classList.toggle("active", a.dataset.route === (route.tab ?? route.name));
   });
   container.replaceChildren();
   container.scrollTop = 0;

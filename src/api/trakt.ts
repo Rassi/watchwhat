@@ -33,6 +33,10 @@ export interface TraktShow {
   network?: string;
   aired_episodes?: number;
   first_aired?: string | null;
+  genres?: string[];
+  runtime?: number | null;
+  airs?: { day: string | null; time: string | null; timezone: string | null };
+  rating?: number | null;
 }
 
 /**
@@ -353,6 +357,17 @@ export async function searchShows(query: string): Promise<SearchResult[]> {
       query: { query, extended: "full", limit: 30 },
     })
   ).data;
+}
+
+export interface CalendarEntry {
+  first_aired: string; // UTC timestamp of the airing
+  episode: EpisodeSummary;
+  show: TraktShow;
+}
+
+/** Upcoming episodes for shows the user watches, from startDate (YYYY-MM-DD) for `days`. */
+export async function getMyCalendar(startDate: string, days: number): Promise<CalendarEntry[]> {
+  return (await request<CalendarEntry[]>(`/calendars/my/shows/${startDate}/${days}`)).data;
 }
 
 export async function lookupByTvdb(tvdbId: number): Promise<TraktShow | null> {

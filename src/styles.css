@@ -7,7 +7,29 @@
   --accent: #fdc620; /* TV Time yellow */
   --green: #34c759;
   --danger: #ff5252;
+  --border: #2c2c35;
+  --control-bg: #3a3a42;
+  --control-fg: #babac2;
+  --track: #3a3a42;
+  --toast-bg: #2e2e38;
+  --ph1: #2a2a33;
+  --ph2: #17171d;
   --tabbar-h: 56px;
+}
+
+:root[data-theme="light"] {
+  --bg: #f4f4f6;
+  --bg-raised: #ffffff;
+  --bg-row: #f1f1f3;
+  --text: #17171c;
+  --text-dim: #6a6a74;
+  --danger: #e03131;
+  --border: #e3e3e8;
+  --control-bg: #e8e8ec;
+  --control-fg: #7a7a84;
+  --track: #e0e0e5;
+  --ph1: #e8e8ec;
+  --ph2: #d8d8de;
 }
 
 * {
@@ -48,7 +70,7 @@ button {
   height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   background: var(--bg-raised);
-  border-top: 1px solid #2c2c35;
+  border-top: 1px solid var(--border);
   display: flex;
   justify-content: space-around;
   align-items: center;
@@ -120,7 +142,7 @@ button {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-dim);
-  background: linear-gradient(160deg, #2a2a33, #17171d);
+  background: linear-gradient(160deg, var(--ph1), var(--ph2));
 }
 
 .poster-card .badge {
@@ -137,7 +159,7 @@ button {
 
 .progress-track {
   height: 5px;
-  background: #3a3a42;
+  background: var(--track);
   border-radius: 0 0 6px 6px;
   overflow: hidden;
 }
@@ -169,6 +191,8 @@ button {
 .show-header .backdrop {
   position: absolute;
   inset: 0;
+  /* dark base so header text stays readable in light theme / without artwork */
+  background-color: #2a2a33;
   background-size: cover;
   background-position: center;
   filter: brightness(0.45);
@@ -178,6 +202,7 @@ button {
   position: relative;
   padding: 48px 16px 12px;
   width: 100%;
+  color: #fff; /* always over the darkened backdrop, regardless of theme */
 }
 
 .show-header h1 {
@@ -250,7 +275,7 @@ button {
 }
 
 .placeholder-still {
-  background: linear-gradient(160deg, #2a2a33, #17171d);
+  background: linear-gradient(160deg, var(--ph1), var(--ph2));
 }
 
 .next-info {
@@ -300,7 +325,7 @@ button {
 
 .season-bar {
   height: 3px;
-  background: #3a3a42;
+  background: var(--track);
 }
 
 .episode-row {
@@ -308,7 +333,7 @@ button {
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  border-top: 1px solid #2c2c35;
+  border-top: 1px solid var(--border);
 }
 
 .episode-row.expandable {
@@ -333,7 +358,7 @@ button {
 
 .ep-airdate {
   font-size: 11px;
-  color: #7c7c88;
+  color: var(--text-dim);
   margin-bottom: 4px;
 }
 
@@ -367,8 +392,8 @@ button {
   align-items: center;
   justify-content: center;
   font-size: 15px;
-  background: #3a3a42;
-  color: #babac2;
+  background: var(--control-bg);
+  color: var(--control-fg);
 }
 
 .check.on {
@@ -410,7 +435,7 @@ button {
   width: 100%;
   padding: 10px;
   border-radius: 8px;
-  border: 1px solid #33333d;
+  border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
   font-size: 14px;
@@ -423,7 +448,7 @@ button {
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  background: #3a3a42;
+  background: var(--control-bg);
   color: var(--text);
 }
 
@@ -465,7 +490,7 @@ button {
   padding: 12px;
   font-size: 16px;
   border-radius: 10px;
-  border: 1px solid #33333d;
+  border: 1px solid var(--border);
   background: var(--bg-raised);
   color: var(--text);
 }
@@ -474,7 +499,7 @@ button {
   display: flex;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid #22222b;
+  border-bottom: 1px solid var(--border);
   align-items: center;
 }
 
@@ -521,8 +546,8 @@ button {
 }
 
 .toast {
-  background: #2e2e38;
-  color: var(--text);
+  background: var(--toast-bg);
+  color: #f2f2f5;
   padding: 12px 16px;
   border-radius: 10px;
   font-size: 14px;
@@ -598,7 +623,7 @@ button {
 .spinner {
   width: 28px;
   height: 28px;
-  border: 3px solid #33333d;
+  border: 3px solid var(--track);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
@@ -615,4 +640,225 @@ button {
   color: var(--text-dim);
   font-size: 14px;
   padding: 24px 12px;
+}
+
+/* ---------- home top tabs (Watch list | Upcoming) ---------- */
+.home-tabs {
+  display: flex;
+  margin: -4px -12px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.home-tab {
+  flex: 1;
+  text-align: center;
+  padding: 12px 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  border-bottom: 3px solid transparent;
+}
+
+.home-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+/* ---------- show page tabs (About | Episodes) ---------- */
+.show-tabs {
+  display: flex;
+  margin: -4px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.show-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: center;
+  padding: 12px 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  border-bottom: 3px solid transparent;
+}
+
+.show-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+/* ---------- about tab ---------- */
+.about-meta {
+  margin: 0 0 6px;
+}
+
+.about-rating {
+  color: var(--accent);
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+
+.card .about-overview {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.about-facts {
+  margin: 0;
+}
+
+.cast-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cast-card {
+  width: 96px;
+  flex-shrink: 0;
+}
+
+.cast-card img,
+.cast-photo-placeholder {
+  width: 96px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--bg-row);
+}
+
+.cast-photo-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: linear-gradient(160deg, var(--ph1), var(--ph2));
+}
+
+.cast-name {
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cast-role {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.card-head h2 {
+  margin: 0;
+}
+
+.season-select {
+  background: var(--control-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.ratings-svg {
+  width: 100%;
+  height: auto;
+}
+
+.ratings-svg .grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.ratings-svg .axis {
+  fill: var(--text-dim);
+  font-size: 10px;
+}
+
+.ratings-svg .rating-line {
+  stroke: var(--accent);
+  stroke-width: 2;
+  fill: none;
+}
+
+.ratings-svg .rating-dot {
+  fill: var(--accent);
+}
+
+/* ---------- upcoming ---------- */
+.date-header {
+  font-weight: 700;
+  font-size: 14px;
+  margin: 18px 2px 8px;
+}
+
+.upcoming-group {
+  padding: 0;
+}
+
+.upcoming-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.upcoming-row + .upcoming-row {
+  border-top: 1px solid var(--border);
+}
+
+.up-poster {
+  width: 40px;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--bg-row);
+  flex-shrink: 0;
+}
+
+.upcoming-row .info {
+  flex: 1;
+  min-width: 0;
+}
+
+.upcoming-row .t {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.upcoming-row .o {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.up-time {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
