@@ -16,14 +16,16 @@ export interface ShowRec {
   imagesFetchedAt?: number;
 }
 
-/** Per-show watched state from /sync/watched/shows (account-wide, one call). */
+/**
+ * Per-show watched summary from /sync/watched/shows. Per-episode watched
+ * state lives in ProgressRec (Trakt's 2026 API removed seasons from the
+ * watched list endpoint).
+ */
 export interface WatchedRec {
   traktId: number;
   plays: number;
   lastWatchedAt: string;
   lastUpdatedAt: string;
-  /** season -> episode -> play count */
-  seasons: Record<number, Record<number, number>>;
 }
 
 export interface NextEpisodeRec {
@@ -34,7 +36,12 @@ export interface NextEpisodeRec {
   firstAired: string | null;
 }
 
-/** Aired/completed counts from /shows/:id/progress/watched (specials excluded). */
+/**
+ * Per-episode watched flags + aired counts from /shows/:id/progress/watched.
+ * Seasons include specials (season 0); the aired/completed totals here are
+ * recomputed client-side over non-special seasons only. Episode lists contain
+ * only episodes that have aired.
+ */
 export interface ProgressRec {
   traktId: number;
   fetchedAt: number;

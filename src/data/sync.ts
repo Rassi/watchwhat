@@ -41,26 +41,24 @@ function toShowRec(show: trakt.TraktShow, existing?: ShowRec): ShowRec {
 }
 
 function toWatchedRec(w: trakt.WatchedShow): WatchedRec {
-  const seasons: WatchedRec["seasons"] = {};
-  for (const s of w.seasons) {
-    seasons[s.number] = {};
-    for (const e of s.episodes) seasons[s.number][e.number] = e.plays;
-  }
   return {
     traktId: w.show.ids.trakt,
     plays: w.plays,
     lastWatchedAt: w.last_watched_at,
     lastUpdatedAt: w.last_updated_at,
-    seasons,
   };
 }
 
 function toProgressRec(traktId: number, p: trakt.ShowProgress): ProgressRec {
+  // Recompute totals over regular seasons — Trakt counts specials in its
+  // totals whenever specials are included in the response.
+  const regular = p.seasons.filter((s) => s.number > 0);
+  const nextEp = p.next_episode && p.next_episode.season > 0 ? p.next_episode : null;
   return {
     traktId,
     fetchedAt: Date.now(),
-    aired: p.aired,
-    completed: p.completed,
+    aired: regular.reduce((n, s) => n + s.aired, 0),
+    completed: regular.reduce((n, s) => n + s.completed, 0),
     lastWatchedAt: p.last_watched_at,
     seasons: p.seasons.map((s) => ({
       number: s.number,
@@ -68,16 +66,23 @@ function toProgressRec(traktId: number, p: trakt.ShowProgress): ProgressRec {
       completed: s.completed,
       episodes: s.episodes.map((e) => ({ number: e.number, completed: e.completed })),
     })),
-    nextEpisode: p.next_episode
+    nextEpisode: nextEp
       ? {
-          traktId: p.next_episode.ids.trakt,
-          season: p.next_episode.season,
-          number: p.next_episode.number,
-          title: p.next_episode.title,
-          firstAired: p.next_episode.first_aired ?? null,
+          traktId: nextEp.ids.trakt,
+          season: nextEp.season,
+          number: nextEp.number,
+          title: nextEp.title,
+          firstAired: nextEp.first_aired ?? null,
         }
       : null,
   };
+}
+
+/** Per-episode watched flag, from the progress cache. */
+export function isEpisodeWatched(lib: Library, showTraktId: number, season: number, episode: number): boolean {
+  const progress = lib.progress.get(showTraktId);
+  const s = progress?.seasons.find((x) => x.number === season);
+  return s?.episodes.find((e) => e.number === episode)?.completed ?? false;
 }
 
 // ---------- library load & sync ----------
@@ -265,30 +270,23 @@ function applyLocalWatch(lib: Library, showTraktId: number, episodes: EpisodeRef
 
   let watchedRec = lib.watched.get(showTraktId);
   if (!watchedRec && watched) {
-    watchedRec = { traktId: showTraktId, plays: 0, lastWatchedAt: nowIso, lastUpdatedAt: nowIso, seasons: {} };
+    watchedRec = { traktId: showTraktId, plays: 0, lastWatchedAt: nowIso, lastUpdatedAt: nowIso };
     lib.watched.set(showTraktId, watchedRec);
   }
   const progress = lib.progress.get(showTraktId);
 
   for (const ep of episodes) {
     if (watchedRec) {
-      const season = (watchedRec.seasons[ep.season] ??= {});
-      if (watched) {
-        season[ep.number] = (season[ep.number] ?? 0) + 1;
-        watchedRec.plays++;
-        watchedRec.lastWatchedAt = nowIso;
-      } else if (season[ep.number]) {
-        watchedRec.plays = Math.max(0, watchedRec.plays - season[ep.number]);
-        delete season[ep.number];
-      }
+      watchedRec.plays = Math.max(0, watchedRec.plays + (watched ? 1 : -1));
+      if (watched) watchedRec.lastWatchedAt = nowIso;
     }
-    if (progress && ep.season > 0) {
+    if (progress) {
       const season = progress.seasons.find((s) => s.number === ep.season);
       const entry = season?.episodes.find((e) => e.number === ep.number);
       if (season && entry && entry.completed !== watched) {
         entry.completed = watched;
         season.completed += watched ? 1 : -1;
-        progress.completed += watched ? 1 : -1;
+        if (ep.season > 0) progress.completed += watched ? 1 : -1; // totals exclude specials
       }
     }
   }
@@ -341,8 +339,6 @@ export async function setEpisodesWatched(
     // Adopt the new server state as our baseline so the next app open doesn't full-resync.
     const acts = await trakt.getLastActivities();
     await dbPut("meta", "lastActivities", acts);
-    const remoteWatched = (await trakt.getWatchedShows()).find((w) => w.show.ids.trakt === showTraktId);
-    if (remoteWatched) await dbPut("watched", showTraktId, toWatchedRec(remoteWatched));
     emitChange();
   } catch {
     // Refresh failed; cache is optimistic but close enough. Next sync fixes it.

@@ -5,16 +5,7 @@ import { ensureImages, ensureProgress, loadLibrary, syncLibrary } from "../data/
 import type { Library, ProgressRec, ShowRec, WatchedRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 
-const NEW_BADGE_DAYS = 7;
-
-/** Watched episode count excluding specials (fallback when progress isn't fetched yet). */
-function watchedCount(w: WatchedRec): number {
-  let n = 0;
-  for (const [season, eps] of Object.entries(w.seasons)) {
-    if (season !== "0") n += Object.keys(eps).length;
-  }
-  return n;
-}
+const NEW_WINDOW_DAYS = 30;
 
 interface RowData {
   show: ShowRec;
@@ -28,16 +19,28 @@ function rowData(lib: Library, watched: WatchedRec): RowData | null {
   const show = lib.shows.get(watched.traktId);
   if (!show) return null;
   const progress = lib.progress.get(watched.traktId);
-  const completed = progress?.completed ?? watchedCount(watched);
-  const aired = progress?.aired ?? show.airedEpisodes ?? completed;
+  // Until progress is fetched, estimate from total plays (may overcount rewatches).
+  const aired = progress?.aired ?? show.airedEpisodes ?? watched.plays;
+  const completed = progress?.completed ?? Math.min(watched.plays, aired);
   return { show, watched, progress, aired, completed };
 }
 
 function isNewBadge(row: RowData): boolean {
-  const firstAired = row.progress?.nextEpisode?.firstAired;
-  if (!firstAired) return false;
-  const aired = new Date(firstAired).getTime();
-  return aired <= Date.now() && Date.now() - aired < NEW_BADGE_DAYS * 24 * 3600 * 1000;
+  // "NEW" = the newest aired episode is unwatched (there's fresh content) and
+  // the next unwatched episode aired recently — covers both "caught up and a
+  // new episode dropped" and "a new season just started".
+  const progress = row.progress;
+  if (!progress?.nextEpisode?.firstAired) return false;
+
+  // Latest aired episode: episodes air in order, so it's episode `aired` of
+  // the highest regular season that has aired anything.
+  const lastSeason = [...progress.seasons].filter((s) => s.number > 0 && s.aired > 0).sort((a, b) => b.number - a.number)[0];
+  if (!lastSeason) return false;
+  const latest = lastSeason.episodes.find((e) => e.number === lastSeason.aired);
+  if (latest?.completed !== false) return false;
+
+  const nextAired = new Date(progress.nextEpisode.firstAired).getTime();
+  return nextAired <= Date.now() && Date.now() - nextAired < NEW_WINDOW_DAYS * 24 * 3600 * 1000;
 }
 
 function card(row: RowData): HTMLElement {
@@ -90,8 +93,11 @@ export const watchlistRoute: Route = {
         .filter((r) => r.aired > r.completed && r.completed > 0)
         .sort((a, b) => b.watched.lastWatchedAt.localeCompare(a.watched.lastWatchedAt));
 
-      const watchNext = started.filter((r) => new Date(r.watched.lastWatchedAt).getTime() >= cutoff);
-      const stale = started.filter((r) => new Date(r.watched.lastWatchedAt).getTime() < cutoff);
+      // Shows with fresh episodes surface in Watch Next (badged, first) even
+      // if they haven't been watched lately — like TV Time did with Silo.
+      const watchNext = started.filter((r) => new Date(r.watched.lastWatchedAt).getTime() >= cutoff || isNewBadge(r));
+      const stale = started.filter((r) => !watchNext.includes(r));
+      watchNext.sort((a, b) => Number(isNewBadge(b)) - Number(isNewBadge(a)));
 
       const startedIds = new Set([...lib.watched.entries()].filter(([, w]) => w.plays > 0).map(([id]) => id));
       const notStarted = lib.watchlist

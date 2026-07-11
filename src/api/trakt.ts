@@ -35,15 +35,16 @@ export interface TraktShow {
   first_aired?: string | null;
 }
 
+/**
+ * Item of /sync/watched/shows. Since Trakt's 2026 API changes this endpoint
+ * is always paginated and no longer returns per-episode seasons data — per-
+ * episode watched state comes from /shows/:id/progress/watched instead.
+ */
 export interface WatchedShow {
   plays: number;
   last_watched_at: string;
   last_updated_at: string;
   show: TraktShow;
-  seasons: {
-    number: number;
-    episodes: { number: number; plays: number; last_watched_at: string }[];
-  }[];
 }
 
 export interface WatchlistItem {
@@ -270,33 +271,40 @@ export async function getLastActivities(): Promise<LastActivities> {
   return (await request<LastActivities>("/sync/last_activities")).data;
 }
 
-export async function getWatchedShows(): Promise<WatchedShow[]> {
-  return (await request<WatchedShow[]>("/sync/watched/shows", { query: { extended: "full" } })).data;
-}
-
-export async function getWatchlistShows(): Promise<WatchlistItem[]> {
-  return (await request<WatchlistItem[]>("/sync/watchlist/shows", { query: { extended: "full" } })).data;
-}
-
-/** Shows the user hid from progress ("stopped watching"). Paginated. */
-export async function getHiddenShows(): Promise<TraktShow[]> {
-  const out: TraktShow[] = [];
+/** Fetch every page of a paginated collection endpoint. */
+async function getAllPages<T>(path: string, query: Record<string, string | number | boolean>): Promise<T[]> {
+  const out: T[] = [];
   let page = 1;
   for (;;) {
-    const { data, headers } = await request<{ show: TraktShow }[]>("/users/hidden/progress_watched", {
-      query: { type: "show", limit: 100, page },
-    });
-    out.push(...data.map((i) => i.show));
+    const { data, headers } = await request<T[]>(path, { query: { ...query, limit: 250, page } });
+    out.push(...data);
     const pageCount = Number(headers.get("X-Pagination-Page-Count") ?? "1");
     if (page >= pageCount) return out;
     page++;
   }
 }
 
+export async function getWatchedShows(): Promise<WatchedShow[]> {
+  return getAllPages<WatchedShow>("/sync/watched/shows", { extended: "full" });
+}
+
+export async function getWatchlistShows(): Promise<WatchlistItem[]> {
+  return getAllPages<WatchlistItem>("/sync/watchlist/shows", { extended: "full" });
+}
+
+/** Shows the user hid from progress ("stopped watching"). */
+export async function getHiddenShows(): Promise<TraktShow[]> {
+  const items = await getAllPages<{ show: TraktShow }>("/users/hidden/progress_watched", { type: "show" });
+  return items.map((i) => i.show);
+}
+
 export async function getShowProgress(showId: number): Promise<ShowProgress> {
   return (
     await request<ShowProgress>(`/shows/${showId}/progress/watched`, {
-      query: { hidden: false, specials: false, count_specials: false, extended: "full" },
+      // specials=true so season 0 watched-flags are available; note Trakt then
+      // counts specials in aired/completed totals regardless of count_specials,
+      // so totals are recomputed client-side from non-special seasons.
+      query: { hidden: false, specials: true, count_specials: false, extended: "full" },
     })
   ).data;
 }

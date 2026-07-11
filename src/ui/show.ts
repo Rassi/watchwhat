@@ -1,7 +1,15 @@
 import type { Route } from "../router";
 import { dialog, el, spinner, toast } from "./components";
 import { addNeverMarkPrevious, getNeverMarkPrevious } from "../data/settings";
-import { ensureEpisodes, ensureImages, ensureProgress, loadLibrary, setEpisodesWatched, type EpisodeRef } from "../data/sync";
+import {
+  ensureEpisodes,
+  ensureImages,
+  ensureProgress,
+  isEpisodeWatched,
+  loadLibrary,
+  setEpisodesWatched,
+  type EpisodeRef,
+} from "../data/sync";
 import type { EpisodesRec, Library, ShowRec } from "../data/model";
 import { getShowSummary } from "../api/trakt";
 import { backdropUrl } from "../api/tmdb";
@@ -63,21 +71,14 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
 
   // ---------- helpers over current lib state ----------
 
-  const isWatched = (season: number, number: number): boolean => {
-    const plays = lib.watched.get(show.traktId)?.seasons[season]?.[number] ?? 0;
-    return plays > 0;
-  };
-
-  const airedSet = (): Map<number, Set<number>> | null => {
-    const progress = lib.progress.get(show.traktId);
-    if (!progress) return null;
-    return new Map(progress.seasons.map((s) => [s.number, new Set(s.episodes.map((e) => e.number))]));
-  };
+  const isWatched = (season: number, number: number): boolean => isEpisodeWatched(lib, show.traktId, season, number);
 
   const isAired = (season: number, number: number): boolean => {
-    if (season === 0) return true; // specials: no aired info (excluded from progress) — allow marking
-    const aired = airedSet();
-    return aired ? (aired.get(season)?.has(number) ?? false) : true;
+    // Progress episode lists (incl. specials) contain only aired episodes.
+    const progress = lib.progress.get(show.traktId);
+    if (!progress) return true; // no progress info — don't block marking
+    const s = progress.seasons.find((x) => x.number === season);
+    return s ? s.episodes.some((e) => e.number === number) : false;
   };
 
   /** All aired, unwatched, non-special episodes strictly before (season, number). */

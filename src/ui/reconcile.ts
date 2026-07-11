@@ -6,7 +6,7 @@
 
 import { el, toast } from "./components";
 import { addShowToWatchlist, lookupByTvdb, addEpisodesToHistoryAt, type TraktShow } from "../api/trakt";
-import { ensureEpisodes, loadLibrary, syncLibrary } from "../data/sync";
+import { ensureEpisodes, ensureProgress, isEpisodeWatched, loadLibrary, syncLibrary } from "../data/sync";
 import type { Library, ShowRec } from "../data/model";
 
 interface ExportEpisode {
@@ -33,6 +33,8 @@ interface ShowDiff {
   traktShow: TraktShow | ShowRec | null;
   missingEpisodes: MissingEpisode[];
   needsWatchlist: boolean;
+  /** Progress could not be fetched — skip pushing episodes to avoid duplicates. */
+  unverified?: boolean;
 }
 
 /** "2019-12-12 20:02:22" (UTC, no zone marker) -> ISO 8601 */
@@ -51,10 +53,11 @@ async function analyze(lib: Library, exportShows: ExportShow[], onProgress: (msg
     if (show.ids.tvdb) byTvdb.set(show.ids.tvdb, show);
   }
 
-  const diffs: ShowDiff[] = [];
+  // Pass 1: match every export show to a Trakt show.
+  const matched: { exp: ExportShow; traktShow: TraktShow | ShowRec | null; watchedInExport: MissingEpisode[]; followedNotStarted: boolean }[] = [];
   let done = 0;
   for (const exp of exportShows) {
-    onProgress(`Analyzing ${++done}/${exportShows.length}: ${exp.title}`);
+    onProgress(`Matching ${++done}/${exportShows.length}: ${exp.title}`);
 
     const watchedInExport: MissingEpisode[] = exp.seasons.flatMap((s) =>
       s.episodes.filter((e) => e.is_watched).map((e) => ({ season: s.number, number: e.number, watchedAt: e.watched_at })),
@@ -71,18 +74,42 @@ async function analyze(lib: Library, exportShows: ExportShow[], onProgress: (msg
         traktShow = null;
       }
     }
+    matched.push({ exp, traktShow, watchedInExport, followedNotStarted });
+  }
+
+  // Pass 2: per-episode watched state lives in the progress endpoint — fetch it
+  // for every matched show that has watched episodes in the export.
+  const needProgress = matched
+    .filter((m) => m.traktShow && m.watchedInExport.length > 0)
+    .map((m) => traktIdOf(m.traktShow!));
+  let fetched = 0;
+  onProgress(`Fetching progress for ${needProgress.length} shows…`);
+  await ensureProgress(lib, needProgress, () => onProgress(`Fetching progress… ${Math.min((fetched += 5), needProgress.length)}/${needProgress.length}`));
+
+  // Pass 3: diff.
+  const diffs: ShowDiff[] = [];
+  for (const { exp, traktShow, watchedInExport, followedNotStarted } of matched) {
     if (!traktShow) {
       diffs.push({ export: exp, traktShow: null, missingEpisodes: watchedInExport, needsWatchlist: followedNotStarted });
       continue;
     }
+    const traktId = traktIdOf(traktShow);
 
-    const watchedRec = lib.watched.get(traktIdOf(traktShow));
-    const missingEpisodes = watchedInExport.filter((e) => !(watchedRec?.seasons[e.season]?.[e.number]));
+    const hasProgress = lib.progress.has(traktId);
+    const missingEpisodes = hasProgress
+      ? watchedInExport.filter((e) => !isEpisodeWatched(lib, traktId, e.season, e.number))
+      : watchedInExport;
 
-    const onWatchlist = lib.watchlist.some((w) => w.traktId === traktIdOf(traktShow!));
-    const needsWatchlist = followedNotStarted && !onWatchlist && !watchedRec;
+    const onWatchlist = lib.watchlist.some((w) => w.traktId === traktId);
+    const needsWatchlist = followedNotStarted && !onWatchlist && !lib.watched.has(traktId);
 
-    diffs.push({ export: exp, traktShow, missingEpisodes, needsWatchlist });
+    diffs.push({
+      export: exp,
+      traktShow,
+      missingEpisodes,
+      needsWatchlist,
+      unverified: watchedInExport.length > 0 && !hasProgress,
+    });
   }
   return diffs;
 }
@@ -96,7 +123,9 @@ async function push(lib: Library, diffs: ShowDiff[], onProgress: (msg: string) =
     if (!diff.traktShow) continue;
     const traktId = traktIdOf(diff.traktShow);
 
-    if (diff.missingEpisodes.length > 0) {
+    if (diff.unverified) {
+      failed.push(`"${diff.export.title}": progress unavailable — episodes skipped to avoid duplicates`);
+    } else if (diff.missingEpisodes.length > 0) {
       onProgress(`Pushing ${diff.missingEpisodes.length} episodes of "${diff.export.title}"…`);
       try {
         const show: ShowRec =
@@ -174,7 +203,8 @@ export function reconcileCard(): HTMLElement {
       const diffs = await analyze(lib, exportShows, (m) => (status.textContent = m));
 
       const unmatched = diffs.filter((d) => !d.traktShow);
-      const withMissing = diffs.filter((d) => d.traktShow && d.missingEpisodes.length > 0);
+      const unverified = diffs.filter((d) => d.traktShow && d.unverified);
+      const withMissing = diffs.filter((d) => d.traktShow && !d.unverified && d.missingEpisodes.length > 0);
       const needList = diffs.filter((d) => d.traktShow && d.needsWatchlist);
       const totalMissing = withMissing.reduce((n, d) => n + d.missingEpisodes.length, 0);
 
@@ -187,6 +217,9 @@ export function reconcileCard(): HTMLElement {
         lines.push(el("p", {}, ` · ${d.export.title}: ${d.missingEpisodes.length} episodes`));
       }
       lines.push(el("p", {}, needList.length === 0 ? "✔ All unstarted followed shows are on your watchlist." : `⚠ ${needList.length} followed shows missing from the watchlist.`));
+      for (const d of unverified) {
+        lines.push(el("p", {}, `? Could not verify ${d.export.title} (progress fetch failed) — run Analyze again`));
+      }
       for (const d of unmatched) {
         lines.push(el("p", {}, `✖ Not found on Trakt: ${d.export.title} (tvdb ${d.export.id.tvdb})`));
       }
