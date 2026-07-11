@@ -31,9 +31,11 @@ export const moviesRoute: Route = {
 
     const renderContent = (): void => {
       const all = [...movies.values()];
+      // Prefer the original TV Time added-date (the Trakt import flattened listed_at).
+      const addedAt = (m: MovieRec): string => m.tvtimeAddedAt ?? m.listedAt ?? "";
       const watchlist = all
         .filter((m) => m.onWatchlist && m.plays === 0)
-        .sort((a, b) => (b.listedAt ?? "").localeCompare(a.listedAt ?? ""));
+        .sort((a, b) => addedAt(b).localeCompare(addedAt(a)));
       const watched = all
         .filter((m) => m.plays > 0)
         .sort((a, b) => (b.lastWatchedAt ?? "").localeCompare(a.lastWatchedAt ?? ""));

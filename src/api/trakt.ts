@@ -344,6 +344,25 @@ export async function removeMovieFromWatchlist(ids: TraktIds): Promise<void> {
   await request("/sync/watchlist/remove", { method: "POST", body: { movies: [{ ids }] } });
 }
 
+export async function lookupMovieByImdb(imdbId: string): Promise<TraktMovie | null> {
+  const { data } = await request<{ type: string; movie?: TraktMovie }[]>(`/search/imdb/${imdbId}`, {
+    query: { type: "movie" },
+  });
+  return data.find((r) => r.movie)?.movie ?? null;
+}
+
+/** Add movies to history with individual watched-at timestamps (for imports). */
+export async function addMoviesToHistoryAt(items: { ids: TraktIds; watchedAt?: string }[]): Promise<void> {
+  await request("/sync/history", {
+    method: "POST",
+    body: { movies: items.map((i) => ({ ids: i.ids, ...(i.watchedAt ? { watched_at: i.watchedAt } : {}) })) },
+  });
+}
+
+export async function addMoviesToWatchlist(ids: TraktIds[]): Promise<void> {
+  await request("/sync/watchlist", { method: "POST", body: { movies: ids.map((i) => ({ ids: i })) } });
+}
+
 export interface MovieSearchResult {
   type: string;
   score: number;

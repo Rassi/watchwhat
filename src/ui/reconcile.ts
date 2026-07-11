@@ -5,9 +5,19 @@
  */
 
 import { el, toast } from "./components";
-import { addShowToWatchlist, lookupByTvdb, addEpisodesToHistoryAt, type TraktShow } from "../api/trakt";
-import { ensureEpisodes, ensureProgress, isEpisodeWatched, loadLibrary, syncLibrary } from "../data/sync";
-import type { Library, ShowRec } from "../data/model";
+import {
+  addShowToWatchlist,
+  lookupByTvdb,
+  addEpisodesToHistoryAt,
+  lookupMovieByImdb,
+  addMoviesToHistoryAt,
+  addMoviesToWatchlist,
+  type TraktIds,
+  type TraktShow,
+} from "../api/trakt";
+import { ensureEpisodes, ensureProgress, isEpisodeWatched, loadLibrary, loadMovies, syncLibrary, syncMovies } from "../data/sync";
+import { dbPut } from "../data/db";
+import type { Library, MovieRec, ShowRec } from "../data/model";
 
 interface ExportEpisode {
   number: number;
@@ -167,6 +177,147 @@ async function push(lib: Library, diffs: ShowDiff[], onProgress: (msg: string) =
   return { episodes, listed, failed };
 }
 
+// ---------- movies ----------
+
+interface ExportMovie {
+  id: { imdb: string | null };
+  created_at: string;
+  title: string;
+  year: number | null;
+  watched_at: string | null;
+  is_watched: boolean;
+}
+
+interface MovieDiff {
+  export: ExportMovie;
+  traktIds: TraktIds | null;
+  missingWatched: boolean;
+  needsWatchlist: boolean;
+}
+
+async function analyzeMovies(
+  movies: Map<number, MovieRec>,
+  exportMovies: ExportMovie[],
+  onProgress: (msg: string) => void,
+): Promise<MovieDiff[]> {
+  const byImdb = new Map<string, MovieRec>();
+  for (const movie of movies.values()) {
+    if (movie.ids.imdb) byImdb.set(movie.ids.imdb, movie);
+  }
+
+  const diffs: MovieDiff[] = [];
+  let done = 0;
+  for (const exp of exportMovies) {
+    onProgress(`Matching ${++done}/${exportMovies.length}: ${exp.title}`);
+    let rec = exp.id.imdb ? (byImdb.get(exp.id.imdb) ?? null) : null;
+    let traktIds = rec?.ids ?? null;
+    if (!rec && exp.id.imdb) {
+      // Not in the local library — the import may have missed it entirely.
+      try {
+        traktIds = (await lookupMovieByImdb(exp.id.imdb))?.ids ?? null;
+      } catch {
+        traktIds = null;
+      }
+    }
+    diffs.push({
+      export: exp,
+      traktIds,
+      missingWatched: exp.is_watched && (rec?.plays ?? 0) === 0,
+      needsWatchlist: !exp.is_watched && !(rec?.onWatchlist ?? false) && (rec?.plays ?? 0) === 0,
+    });
+  }
+  return diffs;
+}
+
+/** Store TV Time added dates on matching movie records (drives watchlist ordering). */
+async function applyTvtimeAddedDates(exportMovies: ExportMovie[]): Promise<number> {
+  const movies = await loadMovies();
+  const byImdb = new Map(exportMovies.filter((m) => m.id.imdb).map((m) => [m.id.imdb!, m.created_at]));
+  let applied = 0;
+  for (const movie of movies.values()) {
+    const addedAt = movie.ids.imdb ? byImdb.get(movie.ids.imdb) : undefined;
+    if (addedAt && movie.tvtimeAddedAt !== addedAt) {
+      movie.tvtimeAddedAt = addedAt;
+      await dbPut("movies", movie.traktId, movie);
+      applied++;
+    }
+  }
+  return applied;
+}
+
+function movieReconcileReport(
+  status: HTMLElement,
+  report: HTMLElement,
+  movies: Map<number, MovieRec>,
+  diffs: MovieDiff[],
+  exportMovies: ExportMovie[],
+): void {
+  const unmatched = diffs.filter((d) => !d.traktIds);
+  const missingWatched = diffs.filter((d) => d.traktIds && d.missingWatched);
+  const needList = diffs.filter((d) => d.traktIds && d.needsWatchlist);
+
+  status.textContent = "";
+  const lines: HTMLElement[] = [
+    el("p", {}, `✔ ${diffs.length} movies in export, ${diffs.length - unmatched.length} matched on Trakt.`),
+    el(
+      "p",
+      {},
+      missingWatched.length === 0
+        ? "✔ No missing watched movies — Trakt has your full movie history."
+        : `⚠ ${missingWatched.length} watched movies missing on Trakt.`,
+    ),
+    el(
+      "p",
+      {},
+      needList.length === 0
+        ? "✔ All unwatched movies are on your movie watchlist."
+        : `⚠ ${needList.length} movies missing from the watchlist.`,
+    ),
+  ];
+  for (const d of missingWatched.slice(0, 30)) lines.push(el("p", {}, ` · ${d.export.title} (${d.export.year ?? "?"})`));
+  for (const d of unmatched) lines.push(el("p", {}, `✖ Not found on Trakt: ${d.export.title} (${d.export.id.imdb ?? "no imdb id"})`));
+  report.replaceChildren(...lines);
+
+  if (missingWatched.length > 0 || needList.length > 0) {
+    const pushBtn = el(
+      "button",
+      { class: "btn primary" },
+      `Push ${missingWatched.length} watched + ${needList.length} watchlist movies to Trakt`,
+    );
+    pushBtn.addEventListener("click", async () => {
+      pushBtn.disabled = true;
+      try {
+        if (missingWatched.length > 0) {
+          status.textContent = `Pushing ${missingWatched.length} watched movies…`;
+          await addMoviesToHistoryAt(
+            missingWatched.map((d) => ({ ids: d.traktIds!, watchedAt: d.export.watched_at ?? undefined })),
+          );
+        }
+        if (needList.length > 0) {
+          status.textContent = `Adding ${needList.length} movies to the watchlist…`;
+          await addMoviesToWatchlist(needList.map((d) => d.traktIds!));
+        }
+        status.textContent = "Refreshing from Trakt…";
+        await syncMovies(true);
+        const applied = await applyTvtimeAddedDates(exportMovies);
+        status.textContent = "";
+        report.replaceChildren(
+          el("p", {}, `Done: ${missingWatched.length} watched movies and ${needList.length} watchlist items pushed.`),
+          el("p", {}, `TV Time added-dates stored for ${applied} movies (used for watchlist ordering).`),
+        );
+        toast("Movie reconcile complete");
+      } catch (e) {
+        status.textContent = "";
+        toast(e instanceof Error ? e.message : "Push failed", "error");
+        pushBtn.disabled = false;
+      }
+    });
+    report.append(pushBtn);
+  } else {
+    void movies;
+  }
+}
+
 export function reconcileCard(): HTMLElement {
   const fileInput = el("input", { type: "file", accept: ".json,application/json" });
   const analyzeBtn = el("button", { class: "btn primary" }, "Analyze");
@@ -179,7 +330,7 @@ export function reconcileCard(): HTMLElement {
     el(
       "p",
       {},
-      "Checks your TV Time export (tvtime-series-….json from the Chrome exporter) against Trakt and pushes anything the import missed: watched episodes (with their original timestamps) and followed-but-unstarted shows.",
+      "Checks a TV Time export (tvtime-series-….json or tvtime-movies-….json from the Chrome exporter) against Trakt and pushes anything the import missed — watched items keep their original timestamps. The movies file also restores TV Time's added-dates for watchlist ordering.",
     ),
     el("div", { class: "field" }, fileInput),
     analyzeBtn,
@@ -196,7 +347,24 @@ export function reconcileCard(): HTMLElement {
     analyzeBtn.disabled = true;
     report.replaceChildren();
     try {
-      const exportShows = JSON.parse(await file.text()) as ExportShow[];
+      const parsed = JSON.parse(await file.text()) as Record<string, unknown>[];
+      const first = parsed[0];
+
+      if (first && "is_watched" in first && !("seasons" in first)) {
+        // Movies export
+        const exportMovies = parsed as unknown as ExportMovie[];
+        status.textContent = "Refreshing movies from Trakt…";
+        await syncMovies(true);
+        const movies = await loadMovies();
+        const diffs = await analyzeMovies(movies, exportMovies, (m) => (status.textContent = m));
+        const applied = await applyTvtimeAddedDates(exportMovies);
+        movieReconcileReport(status, report, movies, diffs, exportMovies);
+        report.prepend(el("p", {}, `✔ TV Time added-dates stored for ${applied} movies.`));
+        analyzeBtn.disabled = false;
+        return;
+      }
+
+      const exportShows = parsed as unknown as ExportShow[];
       status.textContent = "Refreshing Trakt data…";
       await syncLibrary(true);
       const lib = await loadLibrary();
