@@ -446,8 +446,8 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
           "a",
           {
             class: "cast-card",
-            // TMDB credits carry no per-person IMDb id; the name search lands right.
-            href: `https://www.imdb.com/find/?q=${encodeURIComponent(member.name)}&s=nm`,
+            // TMDB credits carry no per-person IMDb id; exact name search lands right.
+            href: `https://www.imdb.com/find/?q=${encodeURIComponent(member.name)}&s=nm&exact=true&ref_=fn_nme_ex`,
             target: "_blank",
             rel: "noopener",
             title: `${member.name} on IMDb`,
