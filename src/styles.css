@@ -405,6 +405,16 @@ button {
   color: #fff;
 }
 
+/* season partially watched — TV Time yellow */
+.check.partial {
+  background: var(--accent);
+  color: #000;
+}
+
+.progress-fill.complete {
+  background: var(--green);
+}
+
 /* ---------- forms / settings ---------- */
 .card {
   background: var(--bg-raised);

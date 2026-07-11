@@ -178,19 +178,23 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     const unwatched = airedEps.filter((e) => !isWatched(seasonNumber, e.number));
 
     if (unwatched.length > 0) {
+      // Aired, unwatched episodes in earlier (non-special) seasons.
+      const previous = previousUnwatched(seasonNumber, 1);
       const choice = await dialog(
         `Mark Season ${seasonNumber} as watched?`,
-        `${unwatched.length} episode${unwatched.length === 1 ? "" : "s"} will be marked as watched.`,
+        previous.length > 0
+          ? `${unwatched.length} episode${unwatched.length === 1 ? "" : "s"} in this season — and ${previous.length} unwatched in earlier seasons.`
+          : `${unwatched.length} episode${unwatched.length === 1 ? "" : "s"} will be marked as watched.`,
         [
-          { label: "Mark watched", value: "yes", kind: "primary" },
+          { label: `This season (${unwatched.length})`, value: "season", kind: "primary" },
+          ...(previous.length > 0 ? [{ label: `Incl. previous seasons (${unwatched.length + previous.length})`, value: "all" }] : []),
           { label: "Cancel", value: "no" },
         ],
       );
-      if (choice !== "yes") return;
-      await mutate(
-        unwatched.map((e) => ({ traktId: e.traktId, season: seasonNumber, number: e.number })),
-        true,
-      );
+      if (choice !== "season" && choice !== "all") return;
+      const episodes = unwatched.map((e) => ({ traktId: e.traktId, season: seasonNumber, number: e.number }));
+      if (choice === "all") episodes.push(...previous);
+      await mutate(episodes, true);
     } else {
       const choice = await dialog(
         `Unmark Season ${seasonNumber}?`,
@@ -526,7 +530,10 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     if (show.status) headerBits.push(show.status);
 
     const fill = el("div", { class: "progress-fill" });
-    if (progress && progress.aired > 0) fill.style.width = `${Math.round((progress.completed / progress.aired) * 100)}%`;
+    if (progress && progress.aired > 0) {
+      fill.style.width = `${Math.round((progress.completed / progress.aired) * 100)}%`;
+      if (progress.completed === progress.aired) fill.classList.add("complete"); // all caught up
+    }
 
     const header = el(
       "div",
@@ -560,8 +567,9 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       const airedEps = season.episodes.filter((e) => isAired(season.number, e.number));
       const watchedInSeason = airedEps.filter((e) => isWatched(season.number, e.number)).length;
       const complete = airedEps.length > 0 && watchedInSeason === airedEps.length;
+      const partial = !complete && watchedInSeason > 0;
 
-      const checkAll = el("button", { class: `check ${complete ? "on" : ""}` }, "✓");
+      const checkAll = el("button", { class: `check ${complete ? "on" : partial ? "partial" : ""}` }, "✓");
       checkAll.addEventListener("click", (e) => {
         e.stopPropagation();
         void onToggleSeason(season.number);
@@ -580,7 +588,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       });
 
       const bar = el("div", { class: "season-bar" });
-      const barFill = el("div", { class: "progress-fill" });
+      const barFill = el("div", { class: `progress-fill ${complete ? "complete" : ""}` });
       barFill.style.height = "100%";
       if (airedEps.length > 0) barFill.style.width = `${Math.round((watchedInSeason / airedEps.length) * 100)}%`;
       bar.append(barFill);
