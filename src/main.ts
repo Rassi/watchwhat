@@ -9,8 +9,10 @@ import { movieRoute } from "./ui/movie";
 import { searchRoute } from "./ui/search";
 import { settingsRoute } from "./ui/settings";
 import { applyTheme } from "./theme";
+import { ensureUnlocked } from "./gate";
 
 applyTheme();
+await ensureUnlocked();
 
 registerRoute(watchlistRoute);
 registerRoute(upcomingRoute);

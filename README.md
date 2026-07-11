@@ -32,6 +32,17 @@ the repo can be public.
 
 Repeat step 3 on each device (phone, desktop); the data stays in sync via Trakt.
 
+## Passcode gate
+
+The deployed app asks for a passcode once per browser (skipped on
+localhost). It's a light deterrent — the repo is public, and nothing
+sensitive ships in the build (API keys and tokens stay in each browser's
+localStorage). Change it in `src/app-config.ts`:
+
+```sh
+printf %s "your-new-passcode" | sha256sum   # paste the hash into PASSCODE_SHA256
+```
+
 ## Development
 
 ```sh

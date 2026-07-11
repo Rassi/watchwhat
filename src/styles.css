@@ -1075,3 +1075,51 @@ a.cast-card {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* ---------- passcode gate ---------- */
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+
+.lock-box {
+  text-align: center;
+  width: min(90vw, 320px);
+}
+
+.lock-icon {
+  font-size: 44px;
+}
+
+.lock-box h1 {
+  font-size: 22px;
+  margin: 8px 0 20px;
+}
+
+.lock-box input {
+  width: 100%;
+  padding: 12px;
+  font-size: 16px;
+  text-align: center;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.lock-box .btn {
+  width: 100%;
+}
+
+.lock-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 10px;
+}
