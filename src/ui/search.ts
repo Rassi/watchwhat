@@ -1,5 +1,5 @@
 import type { Route } from "../router";
-import { el, toast } from "./components";
+import { dialog, el, toast } from "./components";
 import { searchShows, type TraktShow } from "../api/trakt";
 import { fetchShowImages, posterUrl } from "../api/tmdb";
 import { addToWatchlist, loadLibrary, removeFromWatchlist } from "../data/sync";
@@ -7,6 +7,7 @@ import { isAuthenticated, isConfigured } from "../data/settings";
 
 export const searchRoute: Route = {
   name: "search",
+  title: "Search · WatchWhat",
   async render(container) {
     if (!isConfigured() || !isAuthenticated()) {
       container.append(el("div", { class: "empty-note" }, "Connect to Trakt in Settings to search for shows."));
@@ -56,6 +57,14 @@ export const searchRoute: Route = {
         action.disabled = true;
         try {
           if (inWatchlist(show.ids.trakt)) {
+            const choice = await dialog(`Remove "${show.title}"?`, "It will be removed from your watchlist.", [
+              { label: "Remove", value: "yes", kind: "danger" },
+              { label: "Cancel", value: "no" },
+            ]);
+            if (choice !== "yes") {
+              refreshAction();
+              return;
+            }
             await removeFromWatchlist(lib, show.ids.trakt);
             toast(`Removed "${show.title}" from your list`);
           } else {

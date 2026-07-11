@@ -3,6 +3,7 @@ import { dialog, el, spinner, toast } from "./components";
 import { addNeverMarkPrevious, getNeverMarkPrevious } from "../data/settings";
 import {
   addToWatchlist,
+  setShowHidden,
   ensureEpisodes,
   ensureImages,
   ensureProgress,
@@ -20,6 +21,15 @@ import { backdropUrl, posterUrl, stillUrl } from "../api/tmdb";
 function epCode(season: number, number: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `S${pad(season)} | E${pad(number)}`;
+}
+
+/** "Today" / "Tomorrow" / "12 days" until an air date, or null if it has passed. */
+function daysUntilLabel(airDate: string): string | null {
+  const days = Math.ceil((new Date(`${airDate}T00:00:00`).getTime() - Date.now()) / (24 * 3600 * 1000));
+  if (days < 0) return null;
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  return `${days} days`;
 }
 
 export const showRoute: Route = {
@@ -54,6 +64,7 @@ export const showRoute: Route = {
         lib.shows.set(traktId, show);
       }
       await ensureImages(lib, [traktId]);
+      document.title = `${show.title} · WatchWhat`;
       const [episodesRec] = await Promise.all([ensureEpisodes(show), ensureProgress(lib, [traktId])]);
       renderPage(body, lib, show, episodesRec);
     } catch (e) {
@@ -254,6 +265,42 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       add("text", { x: String(x(i)), y: String(H - 8), "text-anchor": "middle", class: "axis" }, String(e.number));
     });
 
+    // hover/touch: nearest-point tooltip
+    const marker = add("circle", { r: "6", class: "rating-dot-active", display: "none" });
+    const tip = el("div", { class: "chart-tip" });
+    tip.style.display = "none";
+    const chartWrap = el("div", { class: "chart-wrap" });
+    chartWrap.append(svg, tip);
+    const showTip = (clientX: number): void => {
+      const rect = svg.getBoundingClientRect();
+      const vx = ((clientX - rect.left) / rect.width) * W;
+      let best = 0;
+      let bestDist = Infinity;
+      points.forEach((_, i) => {
+        const d = Math.abs(x(i) - vx);
+        if (d < bestDist) {
+          bestDist = d;
+          best = i;
+        }
+      });
+      const e = points[best];
+      marker.setAttribute("cx", String(x(best)));
+      marker.setAttribute("cy", String(y(e.rating!)));
+      marker.removeAttribute("display");
+      tip.textContent = `E${e.number}${e.title ? ` ${e.title}` : ""} · ★ ${e.rating!.toFixed(1)}`;
+      tip.style.display = "block";
+      const left = (x(best) / W) * rect.width;
+      tip.style.left = `${Math.min(Math.max(left, 60), rect.width - 60)}px`;
+      tip.style.top = `${(y(e.rating!) / H) * rect.height - 36}px`;
+    };
+    svg.style.touchAction = "pan-y"; // horizontal drags scrub the chart, vertical still scrolls
+    svg.addEventListener("pointerdown", (ev) => showTip(ev.clientX));
+    svg.addEventListener("pointermove", (ev) => showTip(ev.clientX));
+    chartWrap.addEventListener("pointerleave", () => {
+      tip.style.display = "none";
+      marker.setAttribute("display", "none");
+    });
+
     const select = el("select", { class: "season-select" });
     for (const s of ratedSeasons) {
       const opt = el("option", { value: String(s.number) }, `Season ${s.number}`);
@@ -269,7 +316,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       "div",
       { class: "card" },
       el("div", { class: "card-head" }, el("h2", {}, "Episode ratings"), select),
-      svg,
+      chartWrap,
     );
   }
 
@@ -289,6 +336,17 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     if (show.network) facts.push(show.network);
     if (show.status) facts.push(show.status);
 
+    const extLinks: [string, string][] = [];
+    extLinks.push(["Trakt", `https://trakt.tv/shows/${show.ids.slug ?? show.traktId}`]);
+    if (show.ids.imdb) extLinks.push(["IMDb", `https://www.imdb.com/title/${show.ids.imdb}/`]);
+    if (show.ids.tmdb) extLinks.push(["TMDB", `https://www.themoviedb.org/tv/${show.ids.tmdb}`]);
+    if (show.ids.tvdb) extLinks.push(["TheTVDB", `https://thetvdb.com/dereferrer/series/${show.ids.tvdb}`]);
+    const linkRow = el(
+      "div",
+      { class: "ext-links" },
+      ...extLinks.map(([label, href]) => el("a", { class: "ext-link", href, target: "_blank", rel: "noopener" }, `${label} ↗`)),
+    );
+
     wrap.append(
       el(
         "div",
@@ -298,6 +356,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
         show.rating ? el("p", { class: "about-rating" }, `★ ${show.rating.toFixed(1)}/10`) : null,
         el("p", { class: "about-overview" }, show.overview || "No description available."),
         el("p", { class: "about-facts" }, facts.join("  ·  ")),
+        linkRow,
       ),
     );
 
@@ -306,21 +365,28 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       const strip = el("div", { class: "cast-strip" });
       for (const member of episodesRec.cast) {
         const photo = posterUrl(member.profile, "w185");
-        strip.append(
-          el(
-            "div",
-            { class: "cast-card" },
-            photo
-              ? (() => {
-                  const img = el("img", { loading: "lazy", alt: member.name });
-                  img.src = photo;
-                  return img;
-                })()
-              : el("div", { class: "cast-photo-placeholder" }, member.name[0] ?? "?"),
-            el("div", { class: "cast-name" }, member.name),
-            el("div", { class: "cast-role" }, member.character ?? ""),
-          ),
+        const card = el(
+          member.tmdbId ? "a" : "div",
+          member.tmdbId
+            ? {
+                class: "cast-card",
+                href: `https://www.themoviedb.org/person/${member.tmdbId}`,
+                target: "_blank",
+                rel: "noopener",
+                title: `${member.name} on TMDB`,
+              }
+            : { class: "cast-card" },
+          photo
+            ? (() => {
+                const img = el("img", { loading: "lazy", alt: member.name });
+                img.src = photo;
+                return img;
+              })()
+            : el("div", { class: "cast-photo-placeholder" }, member.name[0] ?? "?"),
+          el("div", { class: "cast-name" }, member.name),
+          el("div", { class: "cast-role" }, member.character ?? ""),
         );
+        strip.append(card);
       }
       wrap.append(el("div", { class: "card" }, el("h2", {}, "Cast"), strip));
     }
@@ -328,27 +394,78 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     const chart = ratingsChart();
     if (chart) wrap.append(chart);
 
-    // Watchlist membership
+    // Manage: watchlist membership + stop/resume tracking, with confirmations
     const onList = lib.watchlist.some((e) => e.traktId === show.traktId);
     const started = (lib.watched.get(show.traktId)?.plays ?? 0) > 0;
-    if (onList || !started) {
-      const btn = el("button", { class: `btn ${onList ? "danger" : "primary"}` }, onList ? "Remove from watchlist" : "Add to watchlist");
+    const isHidden = lib.hidden.has(show.traktId);
+    const manageButtons: HTMLElement[] = [];
+
+    const makeButton = (label: string, tooltip: string, kind: string, action: () => Promise<void>): HTMLElement => {
+      const btn = el("button", { class: `btn ${kind}`, title: tooltip }, label);
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         try {
-          if (onList) {
-            await removeFromWatchlist(lib, show.traktId);
-            toast(`Removed "${show.title}" from your watchlist`);
-          } else {
-            await addToWatchlist(lib, { title: show.title, year: show.year, ids: show.ids });
-            toast(`Added "${show.title}" to your watchlist`);
-          }
+          await action();
         } catch (e) {
           toast(e instanceof Error ? e.message : "Update failed", "error");
         }
         renderContent();
       });
-      wrap.append(el("div", { class: "card" }, btn));
+      return btn;
+    };
+
+    if (onList) {
+      manageButtons.push(
+        makeButton("Remove from watchlist", "Removes this show from your Trakt watchlist", "danger", async () => {
+          const choice = await dialog(
+            `Remove "${show.title}"?`,
+            "It will be removed from your watchlist. Nothing else is affected.",
+            [
+              { label: "Remove", value: "yes", kind: "danger" },
+              { label: "Cancel", value: "no" },
+            ],
+          );
+          if (choice !== "yes") return;
+          await removeFromWatchlist(lib, show.traktId);
+          toast(`Removed "${show.title}" from your watchlist`);
+        }),
+      );
+    } else if (!started && !isHidden) {
+      manageButtons.push(
+        makeButton("Add to watchlist", "Adds this show to your Trakt watchlist (Haven't started)", "primary", async () => {
+          await addToWatchlist(lib, { title: show.title, year: show.year, ids: show.ids });
+          toast(`Added "${show.title}" to your watchlist`);
+        }),
+      );
+    }
+
+    if (isHidden) {
+      manageButtons.push(
+        makeButton("Resume tracking", "Bring this show back to your watch list", "primary", async () => {
+          await setShowHidden(lib, show.traktId, false);
+          toast(`Resumed tracking "${show.title}"`);
+        }),
+      );
+    } else if (started) {
+      manageButtons.push(
+        makeButton("Stop tracking", "Hides this show from your watch list — history stays on Trakt", "danger", async () => {
+          const choice = await dialog(
+            `Stop tracking "${show.title}"?`,
+            "It disappears from your watch list and moves to Stopped in the Library. Your watch history stays on Trakt, and you can resume any time.",
+            [
+              { label: "Stop tracking", value: "yes", kind: "danger" },
+              { label: "Cancel", value: "no" },
+            ],
+          );
+          if (choice !== "yes") return;
+          await setShowHidden(lib, show.traktId, true);
+          toast(`Stopped tracking "${show.title}"`);
+        }),
+      );
+    }
+
+    if (manageButtons.length > 0) {
+      wrap.append(el("div", { class: "card" }, el("h2", {}, "Manage"), el("div", { class: "manage-buttons" }, ...manageButtons)));
     }
 
     return wrap;
@@ -477,6 +594,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
           });
 
           const still = stillUrl(e.still, "w185");
+          const countdown = !aired && e.airDate ? daysUntilLabel(e.airDate) : null;
           const row = el(
             "div",
             { class: `episode-row ${aired ? "" : "unaired"}` },
@@ -489,7 +607,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
               : null,
             el("span", { class: "ep-num" }, epCode(season.number, e.number)),
             el("span", { class: "ep-title" }, e.title ?? ""),
-            check,
+            countdown ? el("span", { class: "days-until", title: `Airs ${e.airDate}` }, countdown) : check,
           );
           if (e.overview || e.airDate) {
             row.classList.add("expandable");

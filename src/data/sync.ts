@@ -267,9 +267,11 @@ export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
   const ttl = progressTtlMs(show) * 2;
 
   if (cached && Date.now() - cached.fetchedAt < ttl) {
-    // Cached from before a TMDB key was configured (or before cast/ratings
-    // were collected) — enrich it now.
-    if ((!cached.tmdbMergedAt || cached.cast === undefined) && (await mergeTmdbEpisodes(show, cached))) {
+    // Cached from before a TMDB key was configured (or before cast/ratings/
+    // person-ids were collected) — enrich it now.
+    const needsMerge =
+      !cached.tmdbMergedAt || cached.cast === undefined || cached.cast.some((c) => c.tmdbId === undefined);
+    if (needsMerge && (await mergeTmdbEpisodes(show, cached))) {
       await dbPut("episodes", show.traktId, cached);
     }
     return cached;
@@ -412,6 +414,21 @@ export async function addToWatchlist(lib: Library, show: trakt.TraktShow): Promi
   await Promise.all([
     dbPut("shows", rec.traktId, rec),
     dbPut("meta", "watchlist", lib.watchlist),
+    dbPut("meta", "lastActivities", await trakt.getLastActivities()),
+  ]);
+  emitChange();
+}
+
+/** Stop/resume tracking a show (Trakt "hidden from progress"; Library's Stopped bucket). */
+export async function setShowHidden(lib: Library, traktId: number, hidden: boolean): Promise<void> {
+  const show = lib.shows.get(traktId);
+  if (!show) return;
+  if (hidden) await trakt.hideShowFromProgress(show.ids);
+  else await trakt.unhideShowFromProgress(show.ids);
+  if (hidden) lib.hidden.add(traktId);
+  else lib.hidden.delete(traktId);
+  await Promise.all([
+    dbPut("meta", "hidden", [...lib.hidden]),
     dbPut("meta", "lastActivities", await trakt.getLastActivities()),
   ]);
   emitChange();

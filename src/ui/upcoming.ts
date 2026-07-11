@@ -30,6 +30,7 @@ function dateLabel(iso: string): string {
 export const upcomingRoute: Route = {
   name: "upcoming",
   tab: "home",
+  title: "Upcoming · WatchWhat",
   async render(container) {
     container.append(homeTabs("upcoming"));
     if (!isConfigured() || !isAuthenticated()) {

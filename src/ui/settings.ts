@@ -17,6 +17,7 @@ function textInput(value: string, placeholder = ""): HTMLInputElement {
 
 export const settingsRoute: Route = {
   name: "settings",
+  title: "Settings · WatchWhat",
   render(container) {
     const settings = getSettings();
 

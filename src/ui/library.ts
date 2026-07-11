@@ -32,6 +32,7 @@ function bucketOf(lib: Library, show: ShowRec): Bucket | null {
 
 export const libraryRoute: Route = {
   name: "library",
+  title: "Library · WatchWhat",
   async render(container) {
     if (!isConfigured() || !isAuthenticated()) {
       container.append(el("div", { class: "empty-note" }, "Connect to Trakt in Settings first."));
@@ -40,7 +41,19 @@ export const libraryRoute: Route = {
 
     const lib = await loadLibrary();
     const content = el("div", {});
-    container.append(content);
+
+    // Burger menu to jump between sections
+    const burgerMenu = el("div", { class: "burger-menu" });
+    const burgerBtn = el("button", { class: "burger-btn", title: "Jump to section" }, "☰");
+    const burgerWrap = el("div", { class: "lib-burger" }, burgerBtn, burgerMenu);
+    burgerBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      burgerWrap.classList.toggle("open");
+    });
+    container.addEventListener("click", () => burgerWrap.classList.remove("open"));
+    container.append(burgerWrap, content);
+
+    const sectionAnchors = new Map<Bucket, HTMLElement>();
 
     const renderContent = (): void => {
       const buckets = new Map<Bucket, ShowRec[]>();
@@ -51,12 +64,22 @@ export const libraryRoute: Route = {
       }
 
       content.replaceChildren();
+      burgerMenu.replaceChildren();
+      sectionAnchors.clear();
       for (const bucket of ["watching", "upToDate", "finished", "stopped", "notStarted"] as Bucket[]) {
         const shows = buckets.get(bucket);
         if (!shows?.length) continue;
         shows.sort((a, b) => a.title.localeCompare(b.title));
+        const anchor = sectionHeader(`${LABELS[bucket]} (${shows.length})`);
+        sectionAnchors.set(bucket, anchor);
+        const item = el("button", { class: "burger-item" }, `${LABELS[bucket]} (${shows.length})`);
+        item.addEventListener("click", () => {
+          burgerWrap.classList.remove("open");
+          sectionAnchors.get(bucket)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        burgerMenu.append(item);
         content.append(
-          sectionHeader(`${LABELS[bucket]} (${shows.length})`),
+          anchor,
           el(
             "div",
             { class: "poster-grid" },

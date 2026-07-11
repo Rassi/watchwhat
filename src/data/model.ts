@@ -23,6 +23,7 @@ export interface ShowRec {
 }
 
 export interface CastMemberRec {
+  tmdbId?: number;
   name: string;
   character: string | null;
   profile: string | null;

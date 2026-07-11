@@ -359,6 +359,15 @@ export async function searchShows(query: string): Promise<SearchResult[]> {
   ).data;
 }
 
+/** "Stop tracking": hide a show from progress (TV Time's remove-show equivalent). */
+export async function hideShowFromProgress(ids: TraktIds): Promise<void> {
+  await request("/users/hidden/progress_watched", { method: "POST", body: { shows: [{ ids }] } });
+}
+
+export async function unhideShowFromProgress(ids: TraktIds): Promise<void> {
+  await request("/users/hidden/progress_watched/remove", { method: "POST", body: { shows: [{ ids }] } });
+}
+
 export interface CalendarEntry {
   first_aired: string; // UTC timestamp of the airing
   episode: EpisodeSummary;

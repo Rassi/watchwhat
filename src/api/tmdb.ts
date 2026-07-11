@@ -41,6 +41,7 @@ export interface TmdbEpisode {
 }
 
 export interface TmdbCastMember {
+  tmdbId: number;
   name: string;
   character: string | null;
   profile: string | null; // TMDB image path
@@ -52,6 +53,7 @@ export interface TmdbShowExtras {
 }
 
 interface TmdbCreditsCast {
+  id: number;
   name: string;
   character?: string | null;
   roles?: { character: string }[];
@@ -98,7 +100,7 @@ export async function fetchShowExtras(tmdbId: number, seasonNumbers: number[]): 
     if (data.aggregate_credits?.cast) {
       out.cast = data.aggregate_credits.cast
         .slice(0, 15)
-        .map((c) => ({ name: c.name, character: c.roles?.[0]?.character ?? c.character ?? null, profile: c.profile_path }));
+        .map((c) => ({ tmdbId: c.id, name: c.name, character: c.roles?.[0]?.character ?? c.character ?? null, profile: c.profile_path }));
     }
   }
   return out;

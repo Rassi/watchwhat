@@ -3,6 +3,8 @@ export interface Route {
   name: string;
   /** Which bottom tab to highlight (defaults to `name`). */
   tab?: string;
+  /** Static page title; routes with dynamic titles (show) set document.title themselves. */
+  title?: string;
   render: (container: HTMLElement, params: string[]) => void | Promise<void>;
 }
 
@@ -25,6 +27,7 @@ async function dispatch(): Promise<void> {
   document.querySelectorAll<HTMLAnchorElement>("#tabbar a").forEach((a) => {
     a.classList.toggle("active", a.dataset.route === (route.tab ?? route.name));
   });
+  document.title = route.title ?? "WatchWhat";
   container.replaceChildren();
   container.scrollTop = 0;
   await route.render(container, params);
