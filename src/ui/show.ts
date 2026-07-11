@@ -10,9 +10,9 @@ import {
   setEpisodesWatched,
   type EpisodeRef,
 } from "../data/sync";
-import type { EpisodesRec, Library, ShowRec } from "../data/model";
+import type { EpisodeInfo, EpisodesRec, Library, ShowRec } from "../data/model";
 import { getShowSummary } from "../api/trakt";
-import { backdropUrl } from "../api/tmdb";
+import { backdropUrl, stillUrl } from "../api/tmdb";
 
 function epCode(season: number, number: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -63,6 +63,7 @@ export const showRoute: Route = {
 
 function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec: EpisodesRec): void {
   const expanded = new Set<number>();
+  const expandedEpisodes = new Set<string>(); // "season:number" rows showing their description
   const progress0 = lib.progress.get(show.traktId);
   const firstOpen = progress0?.nextEpisode?.season ?? progress0?.seasons.find((s) => s.completed < s.aired)?.number;
   if (firstOpen != null) expanded.add(firstOpen);
@@ -178,6 +179,55 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
 
   // ---------- rendering ----------
 
+  /** Next unwatched aired episodes, in watch order (for the Continue tracking strip). */
+  const nextUnwatched = (limit: number): EpisodeInfo[] => {
+    const out: EpisodeInfo[] = [];
+    for (const s of episodesRec.seasons) {
+      if (s.number === 0) continue;
+      for (const e of s.episodes) {
+        if (isAired(s.number, e.number) && !isWatched(s.number, e.number)) {
+          out.push(e);
+          if (out.length >= limit) return out;
+        }
+      }
+    }
+    return out;
+  };
+
+  function continueStrip(): HTMLElement | null {
+    const next = nextUnwatched(6);
+    if (next.length === 0) return null;
+    const strip = el("div", { class: "continue-strip" });
+    for (const e of next) {
+      const check = el("button", { class: "check" }, "✓");
+      check.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        void onToggleEpisode({ traktId: e.traktId, season: e.season, number: e.number });
+      });
+      const still = stillUrl(e.still, "w300");
+      const card = el(
+        "div",
+        { class: "next-card" },
+        still
+          ? (() => {
+              const img = el("img", { class: "next-still", loading: "lazy", alt: "" });
+              img.src = still;
+              return img;
+            })()
+          : el("div", { class: "next-still placeholder-still" }),
+        el(
+          "div",
+          { class: "next-info" },
+          el("div", { class: "ep-num" }, epCode(e.season, e.number)),
+          el("div", { class: "next-title" }, e.title ?? ""),
+        ),
+        check,
+      );
+      strip.append(card);
+    }
+    return el("div", {}, el("div", { class: "strip-label" }, "Continue tracking"), strip);
+  }
+
   function renderContent(): void {
     const progress = lib.progress.get(show.traktId);
     const backdrop = backdropUrl(show.backdrop);
@@ -259,23 +309,53 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
         for (const e of season.episodes) {
           const aired = isAired(season.number, e.number);
           const watched = isWatched(season.number, e.number);
+          const epKey = `${season.number}:${e.number}`;
           const check = el("button", { class: `check ${watched ? "on" : ""}` }, "✓");
-          check.addEventListener("click", () => void onToggleEpisode({ traktId: e.traktId, season: season.number, number: e.number }));
-          seasonBox.append(
-            el(
-              "div",
-              { class: `episode-row ${aired ? "" : "unaired"}` },
-              el("span", { class: "ep-num" }, epCode(season.number, e.number)),
-              el("span", { class: "ep-title" }, e.title ?? ""),
-              check,
-            ),
+          check.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            void onToggleEpisode({ traktId: e.traktId, season: season.number, number: e.number });
+          });
+
+          const still = stillUrl(e.still, "w185");
+          const row = el(
+            "div",
+            { class: `episode-row ${aired ? "" : "unaired"}` },
+            still
+              ? (() => {
+                  const img = el("img", { class: "ep-thumb", loading: "lazy", alt: "" });
+                  img.src = still;
+                  return img;
+                })()
+              : null,
+            el("span", { class: "ep-num" }, epCode(season.number, e.number)),
+            el("span", { class: "ep-title" }, e.title ?? ""),
+            check,
           );
+          if (e.overview || e.airDate) {
+            row.classList.add("expandable");
+            row.addEventListener("click", () => {
+              expandedEpisodes.has(epKey) ? expandedEpisodes.delete(epKey) : expandedEpisodes.add(epKey);
+              renderContent();
+            });
+          }
+          seasonBox.append(row);
+          if (expandedEpisodes.has(epKey)) {
+            seasonBox.append(
+              el(
+                "div",
+                { class: "ep-overview" },
+                e.airDate ? el("div", { class: "ep-airdate" }, `Aired ${e.airDate}`) : null,
+                e.overview ?? "No description available.",
+              ),
+            );
+          }
         }
       }
       seasonsWrap.append(seasonBox);
     }
 
-    body.replaceChildren(header, seasonsWrap);
+    const strip = continueStrip();
+    body.replaceChildren(header, ...(strip ? [strip] : []), seasonsWrap);
   }
 
   renderContent();

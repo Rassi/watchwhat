@@ -58,13 +58,29 @@ export interface ProgressRec {
   nextEpisode: NextEpisodeRec | null;
 }
 
-/** Episode titles/ids per season from /shows/:id/seasons?extended=episodes. */
+export interface EpisodeInfo {
+  traktId: number;
+  season: number;
+  number: number;
+  title: string | null;
+  // from TMDB (when a key is configured)
+  overview?: string | null;
+  still?: string | null;
+  airDate?: string | null;
+}
+
+/**
+ * Episode titles/ids per season from /shows/:id/seasons?extended=episodes,
+ * enriched with TMDB stills/overviews/air dates when available.
+ */
 export interface EpisodesRec {
   traktId: number;
   fetchedAt: number;
+  /** Set when TMDB details were merged in. */
+  tmdbMergedAt?: number;
   seasons: {
     number: number;
-    episodes: { traktId: number; season: number; number: number; title: string | null }[];
+    episodes: EpisodeInfo[];
   }[];
 }
 

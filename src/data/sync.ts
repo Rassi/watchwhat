@@ -11,10 +11,10 @@
  */
 
 import * as trakt from "../api/trakt";
-import { fetchShowImages } from "../api/tmdb";
+import { fetchSeasonsEpisodes, fetchShowImages } from "../api/tmdb";
 import { dbBulkPut, dbClear, dbGet, dbGetAll, dbPut } from "./db";
 import type { EpisodesRec, Library, ProgressRec, ShowRec, WatchedRec, WatchlistEntry } from "./model";
-import { isAuthenticated } from "./settings";
+import { getSettings, isAuthenticated } from "./settings";
 
 export const dataEvents = new EventTarget();
 
@@ -228,11 +228,42 @@ export async function ensureImages(lib: Library, traktIds: number[], onUpdate?: 
   if (pendingNotify > 0) onUpdate?.();
 }
 
+/** Merge TMDB stills/overviews/air dates into an episodes record (best effort). */
+async function mergeTmdbEpisodes(show: ShowRec, rec: EpisodesRec): Promise<boolean> {
+  if (!show.ids.tmdb || !getSettings().tmdbApiKey) return false;
+  const bySeason = await fetchSeasonsEpisodes(
+    show.ids.tmdb,
+    rec.seasons.map((s) => s.number),
+  );
+  if (bySeason.size === 0) return false;
+  for (const season of rec.seasons) {
+    const tmdbEps = bySeason.get(season.number);
+    if (!tmdbEps) continue;
+    for (const ep of season.episodes) {
+      const t = tmdbEps.find((x) => x.episode_number === ep.number);
+      if (!t) continue;
+      ep.overview = t.overview;
+      ep.still = t.still_path;
+      ep.airDate = t.air_date;
+      ep.title ??= t.name;
+    }
+  }
+  rec.tmdbMergedAt = Date.now();
+  return true;
+}
+
 /** Episode titles/ids for the show page (24h TTL for airing shows, 7d for ended). */
 export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
   const cached = await dbGet<EpisodesRec>("episodes", show.traktId);
   const ttl = progressTtlMs(show) * 2;
-  if (cached && Date.now() - cached.fetchedAt < ttl) return cached;
+
+  if (cached && Date.now() - cached.fetchedAt < ttl) {
+    // Cached from before a TMDB key was configured — enrich it now.
+    if (!cached.tmdbMergedAt && (await mergeTmdbEpisodes(show, cached))) {
+      await dbPut("episodes", show.traktId, cached);
+    }
+    return cached;
+  }
 
   try {
     const seasons = await trakt.getSeasons(show.traktId);
@@ -249,6 +280,7 @@ export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
         })),
       })),
     };
+    await mergeTmdbEpisodes(show, rec);
     await dbPut("episodes", show.traktId, rec);
     return rec;
   } catch (e) {

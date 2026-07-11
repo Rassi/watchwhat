@@ -213,6 +213,64 @@ button {
   overflow: hidden;
 }
 
+/* ---------- continue tracking strip ---------- */
+.strip-label {
+  font-weight: 600;
+  font-size: 15px;
+  margin: 4px 2px 8px;
+}
+
+.continue-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 12px;
+  margin-bottom: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.next-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-raised);
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 250px;
+  flex-shrink: 0;
+}
+
+.next-still {
+  width: 84px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--bg-row);
+  flex-shrink: 0;
+}
+
+.placeholder-still {
+  background: linear-gradient(160deg, #2a2a33, #17171d);
+}
+
+.next-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.next-info .ep-num {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.next-title {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .season {
   background: var(--bg-raised);
   border-radius: 8px;
@@ -251,6 +309,32 @@ button {
   gap: 12px;
   padding: 10px 14px;
   border-top: 1px solid #2c2c35;
+}
+
+.episode-row.expandable {
+  cursor: pointer;
+}
+
+.ep-thumb {
+  width: 64px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--bg-row);
+  flex-shrink: 0;
+}
+
+.ep-overview {
+  padding: 0 14px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.ep-airdate {
+  font-size: 11px;
+  color: #7c7c88;
+  margin-bottom: 4px;
 }
 
 .episode-row .ep-num {
