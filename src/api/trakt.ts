@@ -60,7 +60,31 @@ export interface LastActivities {
   all: string;
   episodes: { watched_at: string; watchlisted_at: string; paused_at?: string };
   shows: { rated_at: string; watchlisted_at: string; hidden_at?: string };
+  movies: { watched_at: string; watchlisted_at: string; rated_at?: string };
   watchlist: { updated_at: string };
+}
+
+export interface TraktMovie {
+  title: string;
+  year: number | null;
+  ids: TraktIds;
+  // present with ?extended=full
+  overview?: string;
+  runtime?: number | null;
+  rating?: number | null;
+  genres?: string[];
+  released?: string | null;
+}
+
+export interface WatchedMovie {
+  plays: number;
+  last_watched_at: string;
+  movie: TraktMovie;
+}
+
+export interface MovieWatchlistItem {
+  listed_at: string;
+  movie: TraktMovie;
 }
 
 export interface EpisodeSummary {
@@ -294,6 +318,48 @@ export async function getWatchedShows(): Promise<WatchedShow[]> {
 
 export async function getWatchlistShows(): Promise<WatchlistItem[]> {
   return getAllPages<WatchlistItem>("/sync/watchlist/shows", { extended: "full" });
+}
+
+export async function getWatchedMovies(): Promise<WatchedMovie[]> {
+  return getAllPages<WatchedMovie>("/sync/watched/movies", { extended: "full" });
+}
+
+export async function getWatchlistMovies(): Promise<MovieWatchlistItem[]> {
+  return getAllPages<MovieWatchlistItem>("/sync/watchlist/movies", { extended: "full" });
+}
+
+export async function addMovieToHistory(ids: TraktIds): Promise<void> {
+  await request("/sync/history", { method: "POST", body: { movies: [{ ids }] } });
+}
+
+export async function removeMovieFromHistory(ids: TraktIds): Promise<void> {
+  await request("/sync/history/remove", { method: "POST", body: { movies: [{ ids }] } });
+}
+
+export async function addMovieToWatchlist(ids: TraktIds): Promise<void> {
+  await request("/sync/watchlist", { method: "POST", body: { movies: [{ ids }] } });
+}
+
+export async function removeMovieFromWatchlist(ids: TraktIds): Promise<void> {
+  await request("/sync/watchlist/remove", { method: "POST", body: { movies: [{ ids }] } });
+}
+
+export interface MovieSearchResult {
+  type: string;
+  score: number;
+  movie: TraktMovie;
+}
+
+export async function searchMovies(query: string): Promise<MovieSearchResult[]> {
+  return (
+    await request<MovieSearchResult[]>("/search/movie", {
+      query: { query, extended: "full", limit: 30 },
+    })
+  ).data;
+}
+
+export async function getMovieSummary(movieId: number): Promise<TraktMovie> {
+  return (await request<TraktMovie>(`/movies/${movieId}`, { query: { extended: "full" } })).data;
 }
 
 /** Shows the user hid from progress ("stopped watching"). */

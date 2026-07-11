@@ -1,10 +1,10 @@
 /** Minimal promise wrapper around IndexedDB with out-of-line keys. */
 
 const DB_NAME = "watchwhat";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
-export type StoreName = "shows" | "watched" | "progress" | "episodes" | "meta";
-const STORES: StoreName[] = ["shows", "watched", "progress", "episodes", "meta"];
+export type StoreName = "shows" | "watched" | "progress" | "episodes" | "movies" | "meta";
+const STORES: StoreName[] = ["shows", "watched", "progress", "episodes", "movies", "meta"];
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 

@@ -22,6 +22,64 @@ export async function fetchShowImages(tmdbId: number): Promise<ShowImages | null
   return { poster: data.poster_path, backdrop: data.backdrop_path, overview: data.overview || null };
 }
 
+export interface TmdbMovieExtras {
+  poster: string | null;
+  backdrop: string | null;
+  overview: string | null;
+  cast: TmdbCastMember[];
+  providersByCountry: Record<string, TmdbCountryProviders>;
+}
+
+/** Poster path only — for movie search results. */
+export async function fetchMoviePoster(tmdbId: number): Promise<string | null> {
+  const { tmdbApiKey } = getSettings();
+  if (!tmdbApiKey) return null;
+  const res = await fetch(`${API}/movie/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}`);
+  if (!res.ok) return null;
+  return ((await res.json()) as { poster_path: string | null }).poster_path;
+}
+
+/** Movie artwork + cast + watch providers, one request. */
+export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras | null> {
+  const { tmdbApiKey } = getSettings();
+  if (!tmdbApiKey) return null;
+  const res = await fetch(
+    `${API}/movie/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=credits,watch/providers`,
+  );
+  if (!res.ok) return null;
+  interface RawProviderEntry {
+    provider_name: string;
+    logo_path: string | null;
+  }
+  const data = (await res.json()) as {
+    poster_path: string | null;
+    backdrop_path: string | null;
+    overview: string | null;
+    credits?: { cast?: { id: number; name: string; character?: string | null; profile_path: string | null }[] };
+    "watch/providers"?: {
+      results?: Record<string, { link?: string; flatrate?: RawProviderEntry[]; free?: RawProviderEntry[]; ads?: RawProviderEntry[] }>;
+    };
+  };
+  const out: TmdbMovieExtras = {
+    poster: data.poster_path,
+    backdrop: data.backdrop_path,
+    overview: data.overview || null,
+    cast: (data.credits?.cast ?? [])
+      .slice(0, 15)
+      .map((c) => ({ tmdbId: c.id, name: c.name, character: c.character ?? null, profile: c.profile_path })),
+    providersByCountry: {},
+  };
+  for (const [country, entry] of Object.entries(data["watch/providers"]?.results ?? {})) {
+    const providers: TmdbProvider[] = [
+      ...(entry.flatrate ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "stream" })),
+      ...(entry.free ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "free" })),
+      ...(entry.ads ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "ads" })),
+    ];
+    if (providers.length > 0) out.providersByCountry[country] = { link: entry.link ?? null, providers };
+  }
+  return out;
+}
+
 export function posterUrl(path: string | null | undefined, size = "w342"): string | null {
   return path ? `${IMG}${size}${path}` : null;
 }

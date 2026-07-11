@@ -1,6 +1,7 @@
 import type { Route } from "../router";
 import { dialog, el, spinner, toast } from "./components";
-import { addNeverMarkPrevious, getNeverMarkPrevious, getSettings } from "../data/settings";
+import { addNeverMarkPrevious, getNeverMarkPrevious } from "../data/settings";
+import { castStripCard, whereToWatchCard } from "./shared";
 import {
   addToWatchlist,
   setShowHidden,
@@ -16,7 +17,7 @@ import {
 } from "../data/sync";
 import type { EpisodeInfo, EpisodesRec, Library, ShowRec } from "../data/model";
 import { getShowSummary } from "../api/trakt";
-import { backdropUrl, posterUrl, stillUrl } from "../api/tmdb";
+import { backdropUrl, stillUrl } from "../api/tmdb";
 
 function epCode(season: number, number: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -231,72 +232,6 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
 
   // ---------- about view ----------
 
-  /** Loose provider-name match: lowercase, strip punctuation/spaces, "plus" -> "+". */
-  const normalizeService = (name: string): string =>
-    name
-      .toLowerCase()
-      .replace(/\bplus\b/g, "+")
-      .replace(/[^a-z0-9+]/g, "");
-
-  function whereToWatchCard(): HTMLElement | null {
-    const providers = episodesRec.providers;
-    if (!providers) return null;
-    const settings = getSettings();
-    const countries = settings.watchCountries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
-    const mine = settings.myServices.split(",").map(normalizeService).filter(Boolean);
-    const haveIt = (name: string): boolean => {
-      const normalized = normalizeService(name);
-      return mine.some((m) => normalized.includes(m) || m.includes(normalized));
-    };
-    const flag = (cc: string): string =>
-      cc.length === 2 ? String.fromCodePoint(...[...cc].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65)) : cc;
-
-    const rows: HTMLElement[] = [];
-    for (const cc of countries) {
-      const entry = providers[cc];
-      const chips = el("div", { class: "wtw-chips" });
-      if (!entry) {
-        chips.append(el("span", { class: "wtw-none" }, "Not streaming here"));
-      } else {
-        // De-duplicate providers that appear under several kinds; sort "mine" first.
-        const seen = new Set<string>();
-        const list = entry.providers
-          .filter((p) => !seen.has(p.name) && seen.add(p.name))
-          .sort((a, b) => Number(haveIt(b.name)) - Number(haveIt(a.name)));
-        for (const p of list) {
-          const chip = el(
-            "a",
-            {
-              class: `provider-chip ${haveIt(p.name) ? "have" : ""}`,
-              href: entry.link ?? "#",
-              target: "_blank",
-              rel: "noopener",
-              title: `${p.name}${p.kind === "free" ? " (free)" : p.kind === "ads" ? " (with ads)" : ""} — details on JustWatch`,
-            },
-            p.logo
-              ? (() => {
-                  const img = el("img", { loading: "lazy", alt: "" });
-                  img.src = posterUrl(p.logo, "w92")!;
-                  return img;
-                })()
-              : null,
-            p.name,
-          );
-          chips.append(chip);
-        }
-      }
-      rows.push(el("div", { class: "wtw-country" }, el("span", { class: "wtw-flag", title: cc }, flag(cc)), chips));
-    }
-    if (rows.length === 0) return null;
-    return el(
-      "div",
-      { class: "card" },
-      el("h2", {}, "Where to watch"),
-      ...rows,
-      el("p", { class: "wtw-attrib" }, "Streaming data by JustWatch via TMDB"),
-    );
-  }
-
   function ratingsChart(): HTMLElement | null {
     const ratedSeasons = episodesRec.seasons.filter((s) => s.number > 0 && s.episodes.some((e) => (e.rating ?? 0) > 0));
     if (ratedSeasons.length === 0) return null;
@@ -434,38 +369,11 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       ),
     );
 
-    const wtw = whereToWatchCard();
+    const wtw = whereToWatchCard(episodesRec.providers);
     if (wtw) wrap.append(wtw);
 
-    // Cast
-    if (episodesRec.cast?.length) {
-      const strip = el("div", { class: "cast-strip" });
-      for (const member of episodesRec.cast) {
-        const photo = posterUrl(member.profile, "w185");
-        const card = el(
-          "a",
-          {
-            class: "cast-card",
-            // TMDB credits carry no per-person IMDb id; exact name search lands right.
-            href: `https://www.imdb.com/find/?q=${encodeURIComponent(member.name)}&s=nm&exact=true&ref_=fn_nme_ex`,
-            target: "_blank",
-            rel: "noopener",
-            title: `${member.name} on IMDb`,
-          },
-          photo
-            ? (() => {
-                const img = el("img", { loading: "lazy", alt: member.name });
-                img.src = photo;
-                return img;
-              })()
-            : el("div", { class: "cast-photo-placeholder" }, member.name[0] ?? "?"),
-          el("div", { class: "cast-name" }, member.name),
-          el("div", { class: "cast-role" }, member.character ?? ""),
-        );
-        strip.append(card);
-      }
-      wrap.append(el("div", { class: "card" }, el("h2", {}, "Cast"), strip));
-    }
+    const castCard = castStripCard(episodesRec.cast);
+    if (castCard) wrap.append(castCard);
 
     const chart = ratingsChart();
     if (chart) wrap.append(chart);

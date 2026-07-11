@@ -108,6 +108,30 @@ export interface WatchlistEntry {
   listedAt: string;
 }
 
+/** A movie: watch state + Trakt metadata + TMDB artwork/cast/providers, one record. */
+export interface MovieRec {
+  traktId: number;
+  ids: TraktIds;
+  title: string;
+  year: number | null;
+  plays: number;
+  lastWatchedAt: string | null;
+  onWatchlist: boolean;
+  listedAt: string | null;
+  // Trakt ?extended=full
+  overview?: string;
+  runtime?: number | null;
+  rating?: number | null;
+  genres?: string[];
+  released?: string | null;
+  // TMDB
+  poster?: string | null;
+  backdrop?: string | null;
+  cast?: CastMemberRec[];
+  providers?: Record<string, { link: string | null; providers: { name: string; logo: string | null; kind: string }[] }>;
+  tmdbFetchedAt?: number;
+}
+
 /** Everything the screens need, loaded from IndexedDB in one go. */
 export interface Library {
   shows: Map<number, ShowRec>;

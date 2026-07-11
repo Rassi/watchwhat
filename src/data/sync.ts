@@ -11,9 +11,9 @@
  */
 
 import * as trakt from "../api/trakt";
-import { fetchShowExtras, fetchShowImages } from "../api/tmdb";
+import { fetchMovieExtras, fetchShowExtras, fetchShowImages } from "../api/tmdb";
 import { dbBulkPut, dbClear, dbGet, dbGetAll, dbPut } from "./db";
-import type { EpisodesRec, Library, ProgressRec, ShowRec, WatchedRec, WatchlistEntry } from "./model";
+import type { EpisodesRec, Library, MovieRec, ProgressRec, ShowRec, WatchedRec, WatchlistEntry } from "./model";
 import { getSettings, isAuthenticated } from "./settings";
 
 export const dataEvents = new EventTarget();
@@ -303,6 +303,135 @@ export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
     if (cached) return cached; // offline — serve stale
     throw e;
   }
+}
+
+// ---------- movies ----------
+
+function toMovieRec(movie: trakt.TraktMovie, existing: MovieRec | undefined, state: Partial<MovieRec>): MovieRec {
+  return {
+    traktId: movie.ids.trakt,
+    ids: movie.ids,
+    title: movie.title,
+    year: movie.year,
+    plays: 0,
+    lastWatchedAt: null,
+    onWatchlist: false,
+    listedAt: null,
+    overview: movie.overview || existing?.overview,
+    runtime: movie.runtime ?? existing?.runtime,
+    rating: movie.rating ?? existing?.rating,
+    genres: movie.genres ?? existing?.genres,
+    released: movie.released ?? existing?.released,
+    poster: existing?.poster,
+    backdrop: existing?.backdrop,
+    cast: existing?.cast,
+    providers: existing?.providers,
+    tmdbFetchedAt: existing?.tmdbFetchedAt,
+    ...state,
+  };
+}
+
+export async function loadMovies(): Promise<Map<number, MovieRec>> {
+  const movies = await dbGetAll<MovieRec>("movies");
+  return new Map(movies.map((m) => [m.traktId, m]));
+}
+
+/** Pull movies from Trakt if changed remotely (gated on last_activities like shows). */
+export async function syncMovies(force = false): Promise<boolean> {
+  if (!isAuthenticated()) return false;
+
+  const acts = await trakt.getLastActivities();
+  const prev = await dbGet<trakt.LastActivities>("meta", "movieActivities");
+  const changed =
+    force ||
+    !prev ||
+    prev.movies.watched_at !== acts.movies.watched_at ||
+    prev.movies.watchlisted_at !== acts.movies.watchlisted_at ||
+    prev.watchlist.updated_at !== acts.watchlist.updated_at;
+  if (!changed) return false;
+
+  const [watched, watchlist] = await Promise.all([trakt.getWatchedMovies(), trakt.getWatchlistMovies()]);
+  const existing = await loadMovies();
+
+  const entries = new Map<number, MovieRec>();
+  for (const w of watched) {
+    entries.set(
+      w.movie.ids.trakt,
+      toMovieRec(w.movie, existing.get(w.movie.ids.trakt), { plays: w.plays, lastWatchedAt: w.last_watched_at }),
+    );
+  }
+  for (const item of watchlist) {
+    const id = item.movie.ids.trakt;
+    const rec = entries.get(id) ?? toMovieRec(item.movie, existing.get(id), {});
+    rec.onWatchlist = true;
+    rec.listedAt = item.listed_at;
+    entries.set(id, rec);
+  }
+
+  await dbClear("movies");
+  await dbBulkPut("movies", [...entries.entries()]);
+  await dbPut("meta", "movieActivities", acts);
+  emitChange();
+  return true;
+}
+
+/** TMDB artwork/cast/providers for movies missing them (7-day TTL), limited concurrency. */
+export async function ensureMovieDetails(
+  movies: Map<number, MovieRec>,
+  traktIds: number[],
+  onUpdate?: () => void,
+): Promise<void> {
+  const maxAge = 7 * 24 * 3600 * 1000;
+  const stale = traktIds.filter((id) => {
+    const movie = movies.get(id);
+    return movie?.ids.tmdb && (movie.tmdbFetchedAt == null || Date.now() - movie.tmdbFetchedAt > maxAge);
+  });
+  if (stale.length === 0) return;
+
+  let pendingNotify = 0;
+  await mapWithConcurrency(stale, 4, async (traktId) => {
+    const movie = movies.get(traktId)!;
+    const extras = await fetchMovieExtras(movie.ids.tmdb!);
+    if (!extras) return;
+    movie.poster = extras.poster;
+    movie.backdrop = extras.backdrop;
+    if (!movie.overview && extras.overview) movie.overview = extras.overview;
+    movie.cast = extras.cast;
+    movie.providers = extras.providersByCountry;
+    movie.tmdbFetchedAt = Date.now();
+    await dbPut("movies", traktId, movie);
+    if (++pendingNotify >= 8) {
+      pendingNotify = 0;
+      onUpdate?.();
+    }
+  });
+  if (pendingNotify > 0) onUpdate?.();
+}
+
+export async function setMovieWatched(movies: Map<number, MovieRec>, movie: MovieRec, watched: boolean): Promise<void> {
+  if (watched) await trakt.addMovieToHistory(movie.ids);
+  else await trakt.removeMovieFromHistory(movie.ids);
+  movie.plays = watched ? movie.plays + 1 : 0;
+  movie.lastWatchedAt = watched ? new Date().toISOString() : null;
+  movies.set(movie.traktId, movie);
+  await Promise.all([
+    dbPut("movies", movie.traktId, movie),
+    trakt.getLastActivities().then((acts) => dbPut("meta", "movieActivities", acts)),
+  ]);
+  emitChange();
+}
+
+export async function setMovieOnWatchlist(movies: Map<number, MovieRec>, movie: MovieRec, onList: boolean): Promise<void> {
+  if (onList) await trakt.addMovieToWatchlist(movie.ids);
+  else await trakt.removeMovieFromWatchlist(movie.ids);
+  movie.onWatchlist = onList;
+  movie.listedAt = onList ? new Date().toISOString() : null;
+  movies.set(movie.traktId, movie);
+  await Promise.all([
+    dbPut("movies", movie.traktId, movie),
+    trakt.getLastActivities().then((acts) => dbPut("meta", "movieActivities", acts)),
+  ]);
+  emitChange();
 }
 
 /** Refresh a show's Trakt metadata (genres/airs/rating etc.) into the cache. */
