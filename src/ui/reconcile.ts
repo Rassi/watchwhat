@@ -4,7 +4,7 @@
  * missed, and push them.
  */
 
-import { el, toast } from "./components";
+import { dialog, el, toast } from "./components";
 import {
   addShowToWatchlist,
   lookupByTvdb,
@@ -12,6 +12,7 @@ import {
   lookupMovieByImdb,
   addMoviesToHistoryAt,
   addMoviesToWatchlist,
+  removeMoviesFromWatchlist,
   type TraktIds,
   type TraktShow,
 } from "../api/trakt";
@@ -245,6 +246,58 @@ async function applyTvtimeAddedDates(exportMovies: ExportMovie[]): Promise<numbe
   return applied;
 }
 
+/**
+ * Bake the recovered order into Trakt itself: remove all watchlist movies,
+ * then re-add oldest-first (~1/sec). Trakt assigns fresh listed_at stamps in
+ * that order, so every device sorts correctly with no local data.
+ */
+function bakeOrderButton(status: HTMLElement): HTMLElement {
+  const btn = el(
+    "button",
+    { class: "btn", title: "Rewrites the Trakt movie watchlist so the order syncs to all devices" },
+    "Write order to Trakt (all devices)",
+  );
+  btn.addEventListener("click", async () => {
+    const movies = await loadMovies();
+    const listed = [...movies.values()]
+      .filter((m) => m.onWatchlist && m.plays === 0)
+      .sort((a, b) => (a.tvtimeAddedAt ?? a.listedAt ?? "").localeCompare(b.tvtimeAddedAt ?? b.listedAt ?? ""));
+    if (listed.length === 0) {
+      toast("No watchlist movies to reorder");
+      return;
+    }
+    const choice = await dialog(
+      "Write order to Trakt?",
+      `All ${listed.length} watchlist movies are removed and re-added in TV Time order (takes about ${Math.ceil((listed.length * 1.2) / 60)} min). ` +
+        "Their added-dates on Trakt become today, but the order is preserved — and then every device sorts correctly without running Analyze.",
+      [
+        { label: "Write order", value: "yes", kind: "primary" },
+        { label: "Cancel", value: "no" },
+      ],
+    );
+    if (choice !== "yes") return;
+    btn.disabled = true;
+    try {
+      status.textContent = "Clearing watchlist…";
+      await removeMoviesFromWatchlist(listed.map((m) => m.ids));
+      for (let i = 0; i < listed.length; i++) {
+        status.textContent = `Re-adding ${i + 1}/${listed.length}: ${listed[i].title}`;
+        await addMoviesToWatchlist([listed[i].ids]);
+        await new Promise((r) => setTimeout(r, 1100)); // Trakt: 1 POST/sec
+      }
+      status.textContent = "Refreshing from Trakt…";
+      await syncMovies(true);
+      status.textContent = "";
+      toast("Watchlist order written to Trakt — all devices now agree");
+    } catch (e) {
+      status.textContent = "Order write interrupted — run it again to finish (safe to repeat).";
+      toast(e instanceof Error ? e.message : "Reorder failed", "error");
+      btn.disabled = false;
+    }
+  });
+  return btn;
+}
+
 function movieReconcileReport(
   status: HTMLElement,
   report: HTMLElement,
@@ -359,7 +412,11 @@ export function reconcileCard(): HTMLElement {
         const diffs = await analyzeMovies(movies, exportMovies, (m) => (status.textContent = m));
         const applied = await applyTvtimeAddedDates(exportMovies);
         movieReconcileReport(status, report, movies, diffs, exportMovies);
-        report.prepend(el("p", {}, `✔ TV Time added-dates stored for ${applied} movies.`));
+        report.prepend(el("p", {}, `✔ TV Time added-dates stored for ${applied} movies (this browser).`));
+        report.append(
+          el("p", {}, "To make the watchlist order follow to every device without re-running this:"),
+          bakeOrderButton(status),
+        );
         analyzeBtn.disabled = false;
         return;
       }

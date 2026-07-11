@@ -363,6 +363,10 @@ export async function addMoviesToWatchlist(ids: TraktIds[]): Promise<void> {
   await request("/sync/watchlist", { method: "POST", body: { movies: ids.map((i) => ({ ids: i })) } });
 }
 
+export async function removeMoviesFromWatchlist(ids: TraktIds[]): Promise<void> {
+  await request("/sync/watchlist/remove", { method: "POST", body: { movies: ids.map((i) => ({ ids: i })) } });
+}
+
 export interface MovieSearchResult {
   type: string;
   score: number;
