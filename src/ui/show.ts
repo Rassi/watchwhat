@@ -23,13 +23,17 @@ function epCode(season: number, number: number): string {
   return `S${pad(season)} | E${pad(number)}`;
 }
 
-/** "Today" / "Tomorrow" / "12 days" until an air date, or null if it has passed. */
-function daysUntilLabel(airDate: string): string | null {
+/** TV Time-style countdown: big number over a small "days" label. Null if the date passed. */
+function daysUntilBadge(airDate: string): HTMLElement | null {
   const days = Math.ceil((new Date(`${airDate}T00:00:00`).getTime() - Date.now()) / (24 * 3600 * 1000));
   if (days < 0) return null;
-  if (days === 0) return "Today";
-  if (days === 1) return "Tomorrow";
-  return `${days} days`;
+  const badge = el("span", { class: "days-until", title: `Airs ${airDate}` });
+  if (days === 0) {
+    badge.append(el("span", { class: "du-label" }, "Today"));
+  } else {
+    badge.append(el("span", { class: "du-num" }, String(days)), el("span", { class: "du-label" }, days === 1 ? "day" : "days"));
+  }
+  return badge;
 }
 
 export const showRoute: Route = {
@@ -366,16 +370,15 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       for (const member of episodesRec.cast) {
         const photo = posterUrl(member.profile, "w185");
         const card = el(
-          member.tmdbId ? "a" : "div",
-          member.tmdbId
-            ? {
-                class: "cast-card",
-                href: `https://www.themoviedb.org/person/${member.tmdbId}`,
-                target: "_blank",
-                rel: "noopener",
-                title: `${member.name} on TMDB`,
-              }
-            : { class: "cast-card" },
+          "a",
+          {
+            class: "cast-card",
+            // TMDB credits carry no per-person IMDb id; the name search lands right.
+            href: `https://www.imdb.com/find/?q=${encodeURIComponent(member.name)}&s=nm`,
+            target: "_blank",
+            rel: "noopener",
+            title: `${member.name} on IMDb`,
+          },
           photo
             ? (() => {
                 const img = el("img", { loading: "lazy", alt: member.name });
@@ -516,6 +519,8 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     });
 
     const headerBits: string[] = [];
+    const seasonCount = episodesRec.seasons.filter((s) => s.number > 0 && s.episodes.length > 0).length;
+    if (seasonCount > 0) headerBits.push(`${seasonCount} season${seasonCount === 1 ? "" : "s"}`);
     if (show.year) headerBits.push(String(show.year));
     if (show.network) headerBits.push(show.network);
     if (show.status) headerBits.push(show.status);
@@ -594,7 +599,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
           });
 
           const still = stillUrl(e.still, "w185");
-          const countdown = !aired && e.airDate ? daysUntilLabel(e.airDate) : null;
+          const countdown = !aired && e.airDate ? daysUntilBadge(e.airDate) : null;
           const row = el(
             "div",
             { class: `episode-row ${aired ? "" : "unaired"}` },
@@ -607,7 +612,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
               : null,
             el("span", { class: "ep-num" }, epCode(season.number, e.number)),
             el("span", { class: "ep-title" }, e.title ?? ""),
-            countdown ? el("span", { class: "days-until", title: `Airs ${e.airDate}` }, countdown) : check,
+            countdown ?? check,
           );
           if (e.overview || e.airDate) {
             row.classList.add("expandable");

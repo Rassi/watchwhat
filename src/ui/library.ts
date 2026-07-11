@@ -66,7 +66,7 @@ export const libraryRoute: Route = {
       content.replaceChildren();
       burgerMenu.replaceChildren();
       sectionAnchors.clear();
-      for (const bucket of ["watching", "upToDate", "finished", "stopped", "notStarted"] as Bucket[]) {
+      for (const bucket of ["watching", "notStarted", "upToDate", "finished", "stopped"] as Bucket[]) {
         const shows = buckets.get(bucket);
         if (!shows?.length) continue;
         shows.sort((a, b) => a.title.localeCompare(b.title));
