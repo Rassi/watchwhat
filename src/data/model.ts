@@ -95,6 +95,8 @@ export interface EpisodesRec {
   tmdbMergedAt?: number;
   /** Main cast from TMDB aggregate credits. */
   cast?: CastMemberRec[];
+  /** Watch providers by country (JustWatch data via TMDB). */
+  providers?: Record<string, { link: string | null; providers: { name: string; logo: string | null; kind: string }[] }>;
   seasons: {
     number: number;
     episodes: EpisodeInfo[];

@@ -7,6 +7,10 @@ export interface AppSettings {
   /** Days without watching before a show moves to "Haven't watched for a while". */
   staleDays: number;
   theme: "auto" | "dark" | "light";
+  /** Comma-separated streaming services the user subscribes to (highlighted in Where to watch). */
+  myServices: string;
+  /** Comma-separated ISO country codes for Where to watch. */
+  watchCountries: string;
 }
 
 const SETTINGS_KEY = "watchwhat.settings";
@@ -19,6 +23,8 @@ const defaults: AppSettings = {
   tmdbApiKey: "",
   staleDays: 30,
   theme: "auto",
+  myServices: "Disney+, Netflix, Prime, Hulu, Paramount+, Channel 4, BBC, HBO Max, Filmstriben, Apple TV+",
+  watchCountries: "DK, US, GB",
 };
 
 function readJson<T>(key: string): T | null {

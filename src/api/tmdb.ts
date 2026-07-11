@@ -47,9 +47,24 @@ export interface TmdbCastMember {
   profile: string | null; // TMDB image path
 }
 
+export interface TmdbProvider {
+  name: string;
+  logo: string | null;
+  /** "stream" (subscription) | "free" | "ads" */
+  kind: "stream" | "free" | "ads";
+}
+
+export interface TmdbCountryProviders {
+  /** JustWatch attribution link for this show+country (required by TMDB/JustWatch terms). */
+  link: string | null;
+  providers: TmdbProvider[];
+}
+
 export interface TmdbShowExtras {
   episodesBySeason: Map<number, TmdbEpisode[]>;
   cast: TmdbCastMember[];
+  /** Watch providers by ISO country code (JustWatch data via TMDB). */
+  providersByCountry: Record<string, TmdbCountryProviders>;
 }
 
 interface TmdbCreditsCast {
@@ -68,12 +83,12 @@ interface TmdbCreditsCast {
  */
 export async function fetchShowExtras(tmdbId: number, seasonNumbers: number[]): Promise<TmdbShowExtras> {
   const { tmdbApiKey } = getSettings();
-  const out: TmdbShowExtras = { episodesBySeason: new Map(), cast: [] };
+  const out: TmdbShowExtras = { episodesBySeason: new Map(), cast: [], providersByCountry: {} };
   if (!tmdbApiKey) return out;
 
-  // TMDB allows at most 20 appended sub-requests per call — credits counts too.
+  // TMDB allows at most 20 appended sub-requests per call — credits/providers count too.
   const groups: string[][] = [];
-  let current: string[] = ["aggregate_credits"];
+  let current: string[] = ["aggregate_credits", "watch/providers"];
   for (const n of seasonNumbers) {
     if (current.length >= 20) {
       groups.push(current);
@@ -88,8 +103,15 @@ export async function fetchShowExtras(tmdbId: number, seasonNumbers: number[]): 
       `${API}/tv/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=${appends.join(",")}`,
     );
     if (!res.ok) continue;
+    interface RawProviderEntry {
+      provider_name: string;
+      logo_path: string | null;
+    }
     const data = (await res.json()) as Record<string, unknown> & {
       aggregate_credits?: { cast?: TmdbCreditsCast[] };
+      "watch/providers"?: {
+        results?: Record<string, { link?: string; flatrate?: RawProviderEntry[]; free?: RawProviderEntry[]; ads?: RawProviderEntry[] }>;
+      };
     };
     for (const append of appends) {
       if (!append.startsWith("season/")) continue;
@@ -101,6 +123,16 @@ export async function fetchShowExtras(tmdbId: number, seasonNumbers: number[]): 
       out.cast = data.aggregate_credits.cast
         .slice(0, 15)
         .map((c) => ({ tmdbId: c.id, name: c.name, character: c.roles?.[0]?.character ?? c.character ?? null, profile: c.profile_path }));
+    }
+    if (data["watch/providers"]?.results) {
+      for (const [country, entry] of Object.entries(data["watch/providers"].results)) {
+        const providers: TmdbProvider[] = [
+          ...(entry.flatrate ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "stream" })),
+          ...(entry.free ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "free" })),
+          ...(entry.ads ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "ads" })),
+        ];
+        if (providers.length > 0) out.providersByCountry[country] = { link: entry.link ?? null, providers };
+      }
     }
   }
   return out;

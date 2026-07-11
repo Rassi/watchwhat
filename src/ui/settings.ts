@@ -138,12 +138,25 @@ export const settingsRoute: Route = {
       applyTheme();
     });
 
+    const servicesInput = textInput(settings.myServices, "Netflix, Disney+, …");
+    servicesInput.addEventListener("change", () => {
+      saveSettings({ myServices: servicesInput.value });
+      toast("Streaming services saved");
+    });
+    const countriesInput = textInput(settings.watchCountries, "DK, US, GB");
+    countriesInput.addEventListener("change", () => {
+      saveSettings({ watchCountries: countriesInput.value });
+      toast("Where-to-watch countries saved");
+    });
+
     const prefsCard = el(
       "div",
       { class: "card" },
       el("h2", {}, "Preferences"),
       field('Days before a show counts as "not watched for a while"', staleInput),
       el("div", { class: "field" }, el("label", {}, "Theme"), themeSelect),
+      field("My streaming services (comma-separated — highlighted under Where to watch)", servicesInput),
+      field("Where-to-watch countries (ISO codes, comma-separated)", countriesInput),
     );
 
     // --- Data ---

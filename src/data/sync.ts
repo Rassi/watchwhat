@@ -257,6 +257,7 @@ async function mergeTmdbEpisodes(show: ShowRec, rec: EpisodesRec): Promise<boole
     }
   }
   rec.cast = extras.cast;
+  rec.providers = extras.providersByCountry;
   rec.tmdbMergedAt = Date.now();
   return true;
 }
@@ -270,7 +271,10 @@ export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
     // Cached from before a TMDB key was configured (or before cast/ratings/
     // person-ids were collected) — enrich it now.
     const needsMerge =
-      !cached.tmdbMergedAt || cached.cast === undefined || cached.cast.some((c) => c.tmdbId === undefined);
+      !cached.tmdbMergedAt ||
+      cached.cast === undefined ||
+      cached.cast.some((c) => c.tmdbId === undefined) ||
+      cached.providers === undefined;
     if (needsMerge && (await mergeTmdbEpisodes(show, cached))) {
       await dbPut("episodes", show.traktId, cached);
     }

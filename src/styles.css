@@ -1014,3 +1014,64 @@ a.cast-card {
   flex-wrap: wrap;
   gap: 10px;
 }
+
+/* ---------- where to watch ---------- */
+.wtw-country {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.wtw-country + .wtw-country {
+  border-top: 1px solid var(--border);
+}
+
+.wtw-flag {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.wtw-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+}
+
+.provider-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--control-bg);
+  border: 1px solid transparent;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 12px 4px 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.provider-chip img {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.provider-chip.have {
+  background: color-mix(in srgb, var(--accent) 25%, var(--bg-raised));
+  border-color: var(--accent);
+}
+
+.wtw-none {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 28px;
+}
+
+.wtw-attrib {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
