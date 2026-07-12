@@ -247,79 +247,59 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     const ratedSeasons = episodesRec.seasons.filter((s) => s.number > 0 && s.episodes.some((e) => (e.rating ?? 0) > 0));
     if (ratedSeasons.length === 0) return null;
     if (!ratedSeasons.some((s) => s.number === ratingsSeason)) ratingsSeason = ratedSeasons[0].number;
-    const season = ratedSeasons.find((s) => s.number === ratingsSeason)!;
-    const points = season.episodes.filter((e) => (e.rating ?? 0) > 0);
 
-    const W = 640;
-    const H = 200;
-    const padLeft = 30;
-    const padBottom = 24;
-    const padTop = 12;
-    const plotW = W - padLeft - 10;
+    // Build each season's SVG at the real pixel width so text stays readable
+    // on phones (a scaled viewBox shrinks the axis legends into illegibility).
+    const app = document.getElementById("app")!;
+    const W = Math.max(300, Math.min(852, app.clientWidth - 56)); // card inner width
+    const H = 220;
+    const padLeft = 26;
+    const padBottom = 26;
+    const padTop = 10;
+    const plotW = W - padLeft - 12;
     const plotH = H - padTop - padBottom;
-    const x = (i: number) => padLeft + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
-    const y = (rating: number) => padTop + (1 - rating / 10) * plotH;
 
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-    svg.setAttribute("class", "ratings-svg");
-    const add = (tag: string, attrs: Record<string, string>, text?: string) => {
-      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
-      for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-      if (text) node.textContent = text;
-      svg.append(node);
-      return node;
-    };
-    for (const grid of [2, 4, 6, 8, 10]) {
-      add("line", { x1: String(padLeft), y1: String(y(grid)), x2: String(W - 10), y2: String(y(grid)), class: "grid" });
-      add("text", { x: String(padLeft - 6), y: String(y(grid) + 3), "text-anchor": "end", class: "axis" }, String(grid));
-    }
-    if (points.length > 1) {
-      add("polyline", {
-        points: points.map((e, i) => `${x(i)},${y(e.rating!)}`).join(" "),
-        class: "rating-line",
-      });
-    }
-    points.forEach((e, i) => {
-      add("circle", { cx: String(x(i)), cy: String(y(e.rating!)), r: "3.5", class: "rating-dot" });
-      add("text", { x: String(x(i)), y: String(H - 8), "text-anchor": "middle", class: "axis" }, String(e.number));
-    });
+    const buildSeasonSvg = (season: (typeof ratedSeasons)[number]): SVGSVGElement => {
+      const points = season.episodes.filter((e) => (e.rating ?? 0) > 0);
+      const x = (i: number) => padLeft + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+      const y = (rating: number) => padTop + (1 - rating / 10) * plotH;
 
-    // hover/touch: nearest-point tooltip
-    const marker = add("circle", { r: "6", class: "rating-dot-active", display: "none" });
-    const tip = el("div", { class: "chart-tip" });
-    tip.style.display = "none";
-    const chartWrap = el("div", { class: "chart-wrap" });
-    chartWrap.append(svg, tip);
-    const showTip = (clientX: number): void => {
-      const rect = svg.getBoundingClientRect();
-      const vx = ((clientX - rect.left) / rect.width) * W;
-      let best = 0;
-      let bestDist = Infinity;
-      points.forEach((_, i) => {
-        const d = Math.abs(x(i) - vx);
-        if (d < bestDist) {
-          bestDist = d;
-          best = i;
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("width", String(W));
+      svg.setAttribute("height", String(H));
+      svg.setAttribute("class", "ratings-svg");
+      const add = (tag: string, attrs: Record<string, string>, text?: string) => {
+        const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+        for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+        if (text) node.textContent = text;
+        svg.append(node);
+        return node;
+      };
+      for (const grid of [2, 4, 6, 8, 10]) {
+        add("line", { x1: String(padLeft), y1: String(y(grid)), x2: String(W - 12), y2: String(y(grid)), class: "grid" });
+        add("text", { x: String(padLeft - 6), y: String(y(grid) + 4), "text-anchor": "end", class: "axis" }, String(grid));
+      }
+      if (points.length > 1) {
+        add("polyline", { points: points.map((e, i) => `${x(i)},${y(e.rating!)}`).join(" "), class: "rating-line" });
+      }
+      // Thin the episode-number labels when they'd collide.
+      const labelEvery = Math.ceil(points.length / Math.floor(plotW / 26));
+      points.forEach((e, i) => {
+        add("circle", { cx: String(x(i)), cy: String(y(e.rating!)), r: "3.5", class: "rating-dot" });
+        if (i % labelEvery === 0 || i === points.length - 1) {
+          add("text", { x: String(x(i)), y: String(H - 8), "text-anchor": "middle", class: "axis" }, String(e.number));
         }
       });
-      const e = points[best];
-      marker.setAttribute("cx", String(x(best)));
-      marker.setAttribute("cy", String(y(e.rating!)));
-      marker.removeAttribute("display");
-      tip.textContent = `E${e.number}${e.title ? ` ${e.title}` : ""} · ★ ${e.rating!.toFixed(1)}`;
-      tip.style.display = "block";
-      const left = (x(best) / W) * rect.width;
-      tip.style.left = `${Math.min(Math.max(left, 60), rect.width - 60)}px`;
-      tip.style.top = `${(y(e.rating!) / H) * rect.height - 36}px`;
+      return svg;
     };
-    svg.style.touchAction = "pan-y"; // horizontal drags scrub the chart, vertical still scrolls
-    svg.addEventListener("pointerdown", (ev) => showTip(ev.clientX));
-    svg.addEventListener("pointermove", (ev) => showTip(ev.clientX));
-    chartWrap.addEventListener("pointerleave", () => {
-      tip.style.display = "none";
-      marker.setAttribute("display", "none");
-    });
+
+    // Swipe horizontally through seasons (snap pages), TV Time style.
+    const scroller = el("div", { class: "ratings-scroller" });
+    for (const season of ratedSeasons) {
+      const page = el("div", { class: "ratings-page" });
+      page.append(buildSeasonSvg(season));
+      scroller.append(page);
+    }
 
     const select = el("select", { class: "season-select" });
     for (const s of ratedSeasons) {
@@ -327,16 +307,29 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       if (s.number === ratingsSeason) opt.setAttribute("selected", "");
       select.append(opt);
     }
+    const indexOfSeason = (n: number): number => Math.max(0, ratedSeasons.findIndex((s) => s.number === n));
     select.addEventListener("change", () => {
       ratingsSeason = Number(select.value);
-      renderContent();
+      scroller.scrollTo({ left: indexOfSeason(ratingsSeason) * scroller.clientWidth, behavior: "smooth" });
+    });
+    scroller.addEventListener("scroll", () => {
+      const index = Math.round(scroller.scrollLeft / Math.max(1, scroller.clientWidth));
+      const season = ratedSeasons[Math.min(index, ratedSeasons.length - 1)];
+      if (season && season.number !== ratingsSeason) {
+        ratingsSeason = season.number;
+        select.value = String(season.number);
+      }
+    });
+    // Jump to the remembered season once the card is laid out.
+    requestAnimationFrame(() => {
+      scroller.scrollTo({ left: indexOfSeason(ratingsSeason) * scroller.clientWidth });
     });
 
     return el(
       "div",
       { class: "card" },
       el("div", { class: "card-head" }, el("h2", {}, "Episode ratings"), select),
-      chartWrap,
+      scroller,
     );
   }
 

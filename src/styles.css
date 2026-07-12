@@ -826,11 +826,6 @@ button {
   font-size: 13px;
 }
 
-.ratings-svg {
-  width: 100%;
-  height: auto;
-}
-
 .ratings-svg .grid {
   stroke: var(--border);
   stroke-width: 1;
@@ -838,7 +833,7 @@ button {
 
 .ratings-svg .axis {
   fill: var(--text-dim);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .ratings-svg .rating-line {
@@ -907,32 +902,24 @@ button {
   white-space: nowrap;
 }
 
-/* ---------- ratings chart tooltip ---------- */
-.chart-wrap {
-  position: relative;
+/* ---------- ratings chart: swipeable season pages ---------- */
+.ratings-scroller {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
 
-.chart-tip {
-  position: absolute;
-  transform: translateX(-50%);
-  background: var(--toast-bg);
-  color: #f2f2f5;
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  white-space: nowrap;
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  z-index: 3;
+.ratings-scroller::-webkit-scrollbar {
+  display: none;
 }
 
-.ratings-svg .rating-dot-active {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 2.5;
+.ratings-page {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  display: flex;
+  justify-content: center;
 }
 
 /* ---------- episode countdown ---------- */
