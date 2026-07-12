@@ -6,6 +6,7 @@ import { isAuthenticated, isConfigured } from "../data/settings";
 import { ensureImages, ensureProgress, loadLibrary } from "../data/sync";
 import type { Library, ShowRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
+import { homeTabs } from "./hometabs";
 
 type Bucket = "watching" | "upToDate" | "finished" | "stopped" | "notStarted";
 
@@ -32,8 +33,10 @@ function bucketOf(lib: Library, show: ShowRec): Bucket | null {
 
 export const libraryRoute: Route = {
   name: "library",
-  title: "Library · WatchWhat",
+  tab: "home",
+  title: "All shows · WatchWhat",
   async render(container) {
+    container.append(homeTabs("library"));
     if (!isConfigured() || !isAuthenticated()) {
       container.append(el("div", { class: "empty-note" }, "Connect to Trakt in Settings first."));
       return;
