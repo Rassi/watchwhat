@@ -446,6 +446,7 @@ export async function ensureMovieDetails(
     // Bulk refreshes leave watched movies alone — their details are fetched
     // once and only re-fetched when the movie page itself is opened.
     if (opts?.skipWatchedRefresh && movie.plays > 0) return false;
+    if (movie.digitalRelease === undefined) return true; // backfill new field
     return Date.now() - movie.tmdbFetchedAt > maxAge;
   });
   if (stale.length === 0) return;
@@ -460,6 +461,7 @@ export async function ensureMovieDetails(
     if (!movie.overview && extras.overview) movie.overview = extras.overview;
     movie.cast = extras.cast;
     movie.providers = extras.providersByCountry;
+    movie.digitalRelease = extras.digitalRelease;
     movie.tmdbFetchedAt = Date.now();
     await dbPut("movies", traktId, movie);
     if (++pendingNotify >= 8) {

@@ -28,6 +28,8 @@ export interface TmdbMovieExtras {
   overview: string | null;
   cast: TmdbCastMember[];
   providersByCountry: Record<string, TmdbCountryProviders>;
+  /** Earliest announced digital/streaming release (user's countries preferred). */
+  digitalRelease: { date: string; country: string } | null;
 }
 
 /** Poster path only — for movie search results. */
@@ -44,7 +46,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
   const { tmdbApiKey } = getSettings();
   if (!tmdbApiKey) return null;
   const res = await fetch(
-    `${API}/movie/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=credits,watch/providers`,
+    `${API}/movie/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=credits,watch/providers,release_dates`,
   );
   if (!res.ok) return null;
   interface RawProviderEntry {
@@ -59,7 +61,22 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
     "watch/providers"?: {
       results?: Record<string, { link?: string; flatrate?: RawProviderEntry[]; free?: RawProviderEntry[]; ads?: RawProviderEntry[] }>;
     };
+    release_dates?: { results?: { iso_3166_1: string; release_dates?: { release_date: string; type: number }[] }[] };
   };
+
+  // Digital (type 4) release dates: prefer the user's countries, else earliest anywhere.
+  const userCountries = getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase());
+  let bestUser: { date: string; country: string } | null = null;
+  let bestGlobal: { date: string; country: string } | null = null;
+  for (const region of data.release_dates?.results ?? []) {
+    for (const rel of region.release_dates ?? []) {
+      if (rel.type !== 4 || !rel.release_date) continue;
+      const candidate = { date: rel.release_date, country: region.iso_3166_1 };
+      if (userCountries.includes(candidate.country) && (!bestUser || candidate.date < bestUser.date)) bestUser = candidate;
+      if (!bestGlobal || candidate.date < bestGlobal.date) bestGlobal = candidate;
+    }
+  }
+
   const out: TmdbMovieExtras = {
     poster: data.poster_path,
     backdrop: data.backdrop_path,
@@ -68,6 +85,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
       .slice(0, 15)
       .map((c) => ({ tmdbId: c.id, name: c.name, character: c.character ?? null, profile: c.profile_path })),
     providersByCountry: {},
+    digitalRelease: bestUser ?? bestGlobal,
   };
   for (const [country, entry] of Object.entries(data["watch/providers"]?.results ?? {})) {
     const providers: TmdbProvider[] = [

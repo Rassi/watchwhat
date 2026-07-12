@@ -131,6 +131,8 @@ export interface MovieRec {
   genres?: string[];
   released?: string | null;
   trailer?: string | null;
+  /** Earliest announced digital/streaming release from TMDB (null = none announced). */
+  digitalRelease?: { date: string; country: string } | null;
   // TMDB
   poster?: string | null;
   backdrop?: string | null;

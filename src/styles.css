@@ -846,6 +846,11 @@ button {
   fill: var(--accent);
 }
 
+.digital-release {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .list-picker {
   display: flex;
   justify-content: center;

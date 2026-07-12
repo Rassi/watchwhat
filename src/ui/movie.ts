@@ -173,6 +173,13 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
       el("p", { class: "about-overview" }, movie.overview || "No description available."),
       movie.released ? el("p", { class: "about-facts" }, `Released ${movie.released}`) : null,
       (() => {
+        if (movie.plays > 0 || !movie.digitalRelease) return null;
+        const date = new Date(movie.digitalRelease.date);
+        const label = date.getTime() > Date.now() ? "Streaming expected" : "Digital release";
+        const formatted = date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+        return el("p", { class: "about-facts digital-release" }, `${label}: ${formatted} (${movie.digitalRelease.country})`);
+      })(),
+      (() => {
         const names = [
           ...(movie.onWatchlist ? ["Watchlist"] : []),
           ...(movie.customLists ?? []).map((id) => movieLists.find((l) => l.traktId === id)?.name ?? `List ${id}`),
