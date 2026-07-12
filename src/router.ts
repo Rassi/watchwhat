@@ -30,6 +30,11 @@ async function dispatch(): Promise<void> {
   if (currentHash) scrollPositions.set(currentHash, window.scrollY);
   currentHash = location.hash || "#/";
 
+  // Back/forward lands on a history entry we stamped earlier; fresh link
+  // clicks create an unstamped entry. Only traversal restores scroll.
+  const isTraversal = (history.state as { stamped?: boolean } | null)?.stamped === true;
+  if (!isTraversal) history.replaceState({ stamped: true }, "");
+
   const { name, params } = parseHash();
   const route = routes.get(name) ?? routes.get("home")!;
   document.querySelectorAll<HTMLAnchorElement>("#tabbar a").forEach((a) => {
@@ -38,7 +43,7 @@ async function dispatch(): Promise<void> {
   document.title = route.title ?? "WatchWhat";
   container.replaceChildren();
   await route.render(container, params);
-  window.scrollTo(0, scrollPositions.get(currentHash) ?? 0);
+  window.scrollTo(0, isTraversal ? (scrollPositions.get(currentHash) ?? 0) : 0);
 }
 
 export function startRouter(appContainer: HTMLElement): void {
