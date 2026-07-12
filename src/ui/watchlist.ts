@@ -26,6 +26,25 @@ function rowData(lib: Library, watched: WatchedRec): RowData | null {
   return { show, watched, progress, aired, completed };
 }
 
+const NEW_SEASON_GRACE_DAYS = 90;
+
+/**
+ * A whole new season awaits after completing everything before it (e.g. a
+ * Netflix season drop). Like TV Time, these stay in Watch Next — but only
+ * while the premiere is reasonably fresh; months-old untouched seasons are
+ * backlog and age out to the stale section like everything else.
+ */
+function isUntouchedNewSeason(row: RowData): boolean {
+  const progress = row.progress;
+  const next = progress?.nextEpisode;
+  if (!progress || !next || next.number !== 1 || next.season < 2 || !next.firstAired) return false;
+  const premiereAge = Date.now() - new Date(next.firstAired).getTime();
+  if (premiereAge < 0 || premiereAge > NEW_SEASON_GRACE_DAYS * 24 * 3600 * 1000) return false;
+  return progress.seasons
+    .filter((s) => s.number > 0 && s.number < next.season)
+    .every((s) => s.completed >= s.aired);
+}
+
 function isNewBadge(row: RowData): boolean {
   // "NEW" = the newest aired episode is unwatched (there's fresh content) and
   // the next unwatched episode aired recently — covers both "caught up and a
@@ -97,7 +116,10 @@ export const watchlistRoute: Route = {
 
       // Shows with fresh episodes surface in Watch Next (badged, first) even
       // if they haven't been watched lately — like TV Time did with Silo.
-      const watchNext = started.filter((r) => new Date(r.watched.lastWatchedAt).getTime() >= cutoff || isNewBadge(r));
+      // Unstarted new seasons stay in Watch Next indefinitely (un-badged).
+      const watchNext = started.filter(
+        (r) => new Date(r.watched.lastWatchedAt).getTime() >= cutoff || isNewBadge(r) || isUntouchedNewSeason(r),
+      );
       const stale = started.filter((r) => !watchNext.includes(r));
       watchNext.sort((a, b) => Number(isNewBadge(b)) - Number(isNewBadge(a)));
 
