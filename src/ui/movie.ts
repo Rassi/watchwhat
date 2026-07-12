@@ -2,7 +2,7 @@
 
 import type { Route } from "../router";
 import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
-import { ensureMovieDetails, loadMovies, setMovieOnWatchlist, setMovieWatched, syncMovies } from "../data/sync";
+import { ensureMovieDetails, loadMovies, refreshMovieSummary, setMovieOnWatchlist, setMovieWatched, syncMovies } from "../data/sync";
 import type { MovieRec } from "../data/model";
 import { getMovieSummary } from "../api/trakt";
 import { backdropUrl } from "../api/tmdb";
@@ -46,6 +46,8 @@ export const movieRoute: Route = {
         movies.set(traktId, movie);
       }
       document.title = `${movie.title} · WatchWhat`;
+      // Cached before the trailer field existed — refresh Trakt metadata once.
+      if (movie.trailer === undefined) movie = (await refreshMovieSummary(movies, traktId)) ?? movie;
       await ensureMovieDetails(movies, [traktId]);
       renderPage(body, movies, movie);
     } catch (e) {
@@ -144,7 +146,9 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
     const actions = el("div", { class: "card" }, el("div", { class: "manage-buttons" }, watchedBtn, listBtn));
 
     // About
-    const extLinks: [string, string][] = [["Trakt", `https://trakt.tv/movies/${movie.ids.slug ?? movie.traktId}`]];
+    const extLinks: [string, string][] = [];
+    if (movie.trailer) extLinks.push(["▶ Trailer", movie.trailer]);
+    extLinks.push(["Trakt", `https://trakt.tv/movies/${movie.ids.slug ?? movie.traktId}`]);
     if (movie.ids.imdb) extLinks.push(["IMDb", `https://www.imdb.com/title/${movie.ids.imdb}/`]);
     if (movie.ids.tmdb) extLinks.push(["TMDB", `https://www.themoviedb.org/movie/${movie.ids.tmdb}`]);
     const about = el(
@@ -157,7 +161,13 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
       el(
         "div",
         { class: "ext-links" },
-        ...extLinks.map(([label, href]) => el("a", { class: "ext-link", href, target: "_blank", rel: "noopener" }, `${label} ↗`)),
+        ...extLinks.map(([label, href]) =>
+          el(
+            "a",
+            { class: `ext-link ${label.startsWith("▶") ? "trailer" : ""}`, href, target: "_blank", rel: "noopener" },
+            label.startsWith("▶") ? label : `${label} ↗`,
+          ),
+        ),
       ),
     );
 

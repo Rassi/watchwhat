@@ -17,6 +17,8 @@ export interface ShowRec {
   /** Trakt community rating 0..10 */
   rating?: number | null;
   firstAired?: string | null;
+  /** YouTube trailer URL from Trakt (null = none; undefined = not fetched yet) */
+  trailer?: string | null;
   poster?: string | null;
   backdrop?: string | null;
   imagesFetchedAt?: number;
@@ -126,6 +128,7 @@ export interface MovieRec {
   rating?: number | null;
   genres?: string[];
   released?: string | null;
+  trailer?: string | null;
   // TMDB
   poster?: string | null;
   backdrop?: string | null;

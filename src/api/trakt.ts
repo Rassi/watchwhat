@@ -37,6 +37,7 @@ export interface TraktShow {
   runtime?: number | null;
   airs?: { day: string | null; time: string | null; timezone: string | null };
   rating?: number | null;
+  trailer?: string | null;
 }
 
 /**
@@ -74,6 +75,7 @@ export interface TraktMovie {
   rating?: number | null;
   genres?: string[];
   released?: string | null;
+  trailer?: string | null;
 }
 
 export interface WatchedMovie {

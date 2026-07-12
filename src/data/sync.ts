@@ -40,6 +40,7 @@ function toShowRec(show: trakt.TraktShow, existing?: ShowRec): ShowRec {
     airs: show.airs ? { day: show.airs.day, time: show.airs.time } : existing?.airs,
     rating: show.rating ?? existing?.rating,
     firstAired: show.first_aired ?? existing?.firstAired,
+    trailer: show.trailer !== undefined ? show.trailer : existing?.trailer,
     poster: existing?.poster,
     backdrop: existing?.backdrop,
     imagesFetchedAt: existing?.imagesFetchedAt,
@@ -323,6 +324,7 @@ function toMovieRec(movie: trakt.TraktMovie, existing: MovieRec | undefined, sta
     rating: movie.rating ?? existing?.rating,
     genres: movie.genres ?? existing?.genres,
     released: movie.released ?? existing?.released,
+    trailer: movie.trailer !== undefined ? movie.trailer : existing?.trailer,
     poster: existing?.poster,
     backdrop: existing?.backdrop,
     cast: existing?.cast,
@@ -433,6 +435,27 @@ export async function setMovieOnWatchlist(movies: Map<number, MovieRec>, movie: 
     trakt.getLastActivities().then((acts) => dbPut("meta", "movieActivities", acts)),
   ]);
   emitChange();
+}
+
+/** Refresh a movie's Trakt metadata (trailer/genres etc.) into the cache. */
+export async function refreshMovieSummary(movies: Map<number, MovieRec>, traktId: number): Promise<MovieRec | undefined> {
+  const existing = movies.get(traktId);
+  if (!existing) return undefined;
+  try {
+    const summary = await trakt.getMovieSummary(traktId);
+    const rec = toMovieRec(summary, existing, {
+      plays: existing.plays,
+      lastWatchedAt: existing.lastWatchedAt,
+      onWatchlist: existing.onWatchlist,
+      listedAt: existing.listedAt,
+      tvtimeAddedAt: existing.tvtimeAddedAt,
+    });
+    movies.set(traktId, rec);
+    await dbPut("movies", traktId, rec);
+    return rec;
+  } catch {
+    return existing;
+  }
 }
 
 /** Refresh a show's Trakt metadata (genres/airs/rating etc.) into the cache. */

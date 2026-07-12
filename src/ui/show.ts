@@ -88,7 +88,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     episodesRec.seasons.find((s) => s.number > 0 && s.episodes.some((e) => (e.rating ?? 0) > 0))?.number ?? 1;
 
   // Older cached shows may predate the metadata fields — backfill once.
-  if (show.genres === undefined || !show.overview) {
+  if (show.genres === undefined || show.trailer === undefined || !show.overview) {
     void refreshShowSummary(lib, show.traktId).then((rec) => {
       if (rec) {
         show = rec;
@@ -350,6 +350,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     if (show.status) facts.push(show.status);
 
     const extLinks: [string, string][] = [];
+    if (show.trailer) extLinks.push(["▶ Trailer", show.trailer]);
     extLinks.push(["Trakt", `https://trakt.tv/shows/${show.ids.slug ?? show.traktId}`]);
     if (show.ids.imdb) extLinks.push(["IMDb", `https://www.imdb.com/title/${show.ids.imdb}/`]);
     if (show.ids.tmdb) extLinks.push(["TMDB", `https://www.themoviedb.org/tv/${show.ids.tmdb}`]);
@@ -357,7 +358,13 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     const linkRow = el(
       "div",
       { class: "ext-links" },
-      ...extLinks.map(([label, href]) => el("a", { class: "ext-link", href, target: "_blank", rel: "noopener" }, `${label} ↗`)),
+      ...extLinks.map(([label, href]) =>
+        el(
+          "a",
+          { class: `ext-link ${label.startsWith("▶") ? "trailer" : ""}`, href, target: "_blank", rel: "noopener" },
+          label.startsWith("▶") ? label : `${label} ↗`,
+        ),
+      ),
     );
 
     wrap.append(
