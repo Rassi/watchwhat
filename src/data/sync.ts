@@ -13,7 +13,7 @@
 import * as trakt from "../api/trakt";
 import { fetchMovieExtras, fetchShowExtras, fetchShowImages } from "../api/tmdb";
 import { dbBulkPut, dbClear, dbGet, dbGetAll, dbPut } from "./db";
-import type { EpisodesRec, Library, MovieRec, ProgressRec, ShowRec, WatchedRec, WatchlistEntry } from "./model";
+import type { EpisodesRec, Library, MovieListRec, MovieRec, ProgressRec, ShowRec, WatchedRec, WatchlistEntry } from "./model";
 import { getSettings, isAuthenticated } from "./settings";
 
 export const dataEvents = new EventTarget();
@@ -366,6 +366,10 @@ export async function loadMovies(): Promise<Map<number, MovieRec>> {
   return new Map(movies.map((m) => [m.traktId, m]));
 }
 
+export async function loadMovieLists(): Promise<MovieListRec[]> {
+  return (await dbGet<MovieListRec[]>("meta", "movieLists")) ?? [];
+}
+
 /** Pull movies from Trakt if changed remotely (gated on last_activities like shows). */
 export async function syncMovies(force = false): Promise<boolean> {
   if (!isAuthenticated()) return false;
@@ -377,10 +381,15 @@ export async function syncMovies(force = false): Promise<boolean> {
     !prev ||
     prev.movies.watched_at !== acts.movies.watched_at ||
     prev.movies.watchlisted_at !== acts.movies.watchlisted_at ||
-    prev.watchlist.updated_at !== acts.watchlist.updated_at;
+    prev.watchlist.updated_at !== acts.watchlist.updated_at ||
+    prev.lists?.updated_at !== acts.lists?.updated_at;
   if (!changed) return false;
 
-  const [watched, watchlist] = await Promise.all([trakt.getWatchedMovies(), trakt.getWatchlistMovies()]);
+  const [watched, watchlist, lists] = await Promise.all([
+    trakt.getWatchedMovies(),
+    trakt.getWatchlistMovies(),
+    trakt.getMyLists(),
+  ]);
   const existing = await loadMovies();
 
   const entries = new Map<number, MovieRec>();
@@ -398,8 +407,25 @@ export async function syncMovies(force = false): Promise<boolean> {
     entries.set(id, rec);
   }
 
+  // Custom personal lists: fold their movies in and record membership.
+  for (const list of lists) {
+    const items = await trakt.getListMovies(list.ids.trakt);
+    for (const item of items) {
+      const id = item.movie.ids.trakt;
+      const rec = entries.get(id) ?? toMovieRec(item.movie, existing.get(id), {});
+      rec.listedAt ??= item.listed_at;
+      (rec.customLists ??= []).push(list.ids.trakt);
+      entries.set(id, rec);
+    }
+  }
+
   await dbClear("movies");
   await dbBulkPut("movies", [...entries.entries()]);
+  await dbPut(
+    "meta",
+    "movieLists",
+    lists.map((l): MovieListRec => ({ traktId: l.ids.trakt, name: l.name, slug: l.ids.slug })),
+  );
   await dbPut("meta", "movieActivities", acts);
   emitChange();
   return true;

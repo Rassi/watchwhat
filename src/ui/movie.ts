@@ -2,7 +2,16 @@
 
 import type { Route } from "../router";
 import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
-import { ensureMovieDetails, loadMovies, refreshMovieSummary, setMovieOnWatchlist, setMovieWatched, syncMovies } from "../data/sync";
+import {
+  ensureMovieDetails,
+  loadMovieLists,
+  loadMovies,
+  refreshMovieSummary,
+  setMovieOnWatchlist,
+  setMovieWatched,
+  syncMovies,
+} from "../data/sync";
+import type { MovieListRec } from "../data/model";
 import type { MovieRec } from "../data/model";
 import { getMovieSummary } from "../api/trakt";
 import { backdropUrl } from "../api/tmdb";
@@ -49,14 +58,14 @@ export const movieRoute: Route = {
       // Cached before the trailer field existed — refresh Trakt metadata once.
       if (movie.trailer === undefined) movie = (await refreshMovieSummary(movies, traktId)) ?? movie;
       await ensureMovieDetails(movies, [traktId]);
-      renderPage(body, movies, movie);
+      renderPage(body, movies, movie, await loadMovieLists());
     } catch (e) {
       body.replaceChildren(el("div", { class: "empty-note" }, e instanceof Error ? e.message : "Could not load this movie."));
     }
   },
 };
 
-function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: MovieRec): void {
+function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: MovieRec, movieLists: MovieListRec[]): void {
   function renderContent(): void {
     const back = el("a", { class: "back-link", href: "#/movies" }, "‹");
     back.addEventListener("click", (e) => {
@@ -163,6 +172,13 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
       movie.rating ? el("p", { class: "about-rating" }, `★ ${movie.rating.toFixed(1)}/10`) : null,
       el("p", { class: "about-overview" }, movie.overview || "No description available."),
       movie.released ? el("p", { class: "about-facts" }, `Released ${movie.released}`) : null,
+      (() => {
+        const names = [
+          ...(movie.onWatchlist ? ["Watchlist"] : []),
+          ...(movie.customLists ?? []).map((id) => movieLists.find((l) => l.traktId === id)?.name ?? `List ${id}`),
+        ];
+        return names.length > 0 ? el("p", { class: "about-facts" }, `On lists: ${names.join(" · ")}`) : null;
+      })(),
       el(
         "div",
         { class: "ext-links" },

@@ -63,6 +63,13 @@ export interface LastActivities {
   shows: { rated_at: string; watchlisted_at: string; hidden_at?: string };
   movies: { watched_at: string; watchlisted_at: string; rated_at?: string };
   watchlist: { updated_at: string };
+  lists?: { updated_at: string; liked_at?: string };
+}
+
+export interface TraktList {
+  name: string;
+  ids: { trakt: number; slug: string };
+  item_count?: number;
 }
 
 export interface TraktMovie {
@@ -367,6 +374,15 @@ export async function addMoviesToWatchlist(ids: TraktIds[]): Promise<void> {
 
 export async function removeMoviesFromWatchlist(ids: TraktIds[]): Promise<void> {
   await request("/sync/watchlist/remove", { method: "POST", body: { movies: ids.map((i) => ({ ids: i })) } });
+}
+
+/** The user's custom personal lists. */
+export async function getMyLists(): Promise<TraktList[]> {
+  return (await request<TraktList[]>("/users/me/lists")).data;
+}
+
+export async function getListMovies(listId: number): Promise<MovieWatchlistItem[]> {
+  return getAllPages<MovieWatchlistItem>(`/users/me/lists/${listId}/items/movies`, { extended: "full" });
 }
 
 export interface MovieSearchResult {

@@ -122,6 +122,8 @@ export interface MovieRec {
   listedAt: string | null;
   /** Original TV Time added date (from the export) — Trakt's listed_at was flattened by the import. */
   tvtimeAddedAt?: string;
+  /** Trakt ids of custom personal lists containing this movie. */
+  customLists?: number[];
   // Trakt ?extended=full
   overview?: string;
   runtime?: number | null;
@@ -135,6 +137,12 @@ export interface MovieRec {
   cast?: CastMemberRec[];
   providers?: Record<string, { link: string | null; providers: { name: string; logo: string | null; kind: string }[] }>;
   tmdbFetchedAt?: number;
+}
+
+export interface MovieListRec {
+  traktId: number;
+  name: string;
+  slug: string;
 }
 
 /** Everything the screens need, loaded from IndexedDB in one go. */

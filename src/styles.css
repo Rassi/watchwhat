@@ -846,6 +846,17 @@ button {
   fill: var(--accent);
 }
 
+.list-picker {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.list-select {
+  min-width: 200px;
+  text-align: center;
+}
+
 /* ---------- upcoming ---------- */
 .date-header {
   font-weight: 700;
