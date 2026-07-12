@@ -75,6 +75,8 @@ export interface PosterCardOpts {
   progress?: number | null;
   badge?: string | null;
   subtitle?: string | null;
+  /** Show a small ▶ chip (top-right): available for streaming. */
+  streamable?: boolean;
 }
 
 export function posterCard(opts: PosterCardOpts): HTMLElement {
@@ -87,6 +89,7 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
     card.append(el("div", { class: "poster placeholder" }, el("span", {}, opts.title)));
   }
   if (opts.badge) card.append(el("span", { class: "badge" }, opts.badge));
+  if (opts.streamable) card.append(el("span", { class: "stream-badge", title: "Available for streaming" }, "▶"));
   if (opts.progress != null) {
     const bar = el("div", { class: "progress-track" });
     const fill = el("div", { class: "progress-fill" });

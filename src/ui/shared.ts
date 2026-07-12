@@ -76,6 +76,13 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
   );
 }
 
+/** Streamable on some service in one of the user's configured countries? */
+export function isStreamable(providers: ProvidersRecord | undefined): boolean {
+  if (!providers) return false;
+  const countries = getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+  return countries.some((cc) => (providers[cc]?.providers.length ?? 0) > 0);
+}
+
 export function castStripCard(cast: CastMemberRec[] | undefined): HTMLElement | null {
   if (!cast?.length) return null;
   const strip = el("div", { class: "cast-strip" });

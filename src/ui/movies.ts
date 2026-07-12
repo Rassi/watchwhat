@@ -7,6 +7,7 @@ import { isAuthenticated, isConfigured } from "../data/settings";
 import { ensureMovieDetails, loadMovieLists, loadMovies, syncMovies } from "../data/sync";
 import type { MovieListRec, MovieRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
+import { isStreamable } from "./shared";
 
 const ACTIVE_LIST_KEY = "watchwhat.activeMovieList"; // "watchlist" or a list trakt id
 
@@ -42,6 +43,7 @@ export const moviesRoute: Route = {
         posterUrl: posterUrl(movie.poster),
         progress: null,
         badge,
+        streamable: isStreamable(movie.providers),
         // Keep the title as subtitle so in-page text search finds movies.
         subtitle: `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
       });
