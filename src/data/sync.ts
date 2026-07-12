@@ -219,7 +219,7 @@ export async function ensureProgress(
   if (stale.length === 0) return;
 
   let pendingNotify = 0;
-  await mapWithConcurrency(stale, 4, async (traktId) => {
+  await mapWithConcurrency(stale, 2, async (traktId) => {
     try {
       const rec = toProgressRec(traktId, await trakt.getShowProgress(traktId));
       lib.progress.set(traktId, rec);

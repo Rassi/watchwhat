@@ -145,9 +145,18 @@ interface RequestOpts {
   isRetry?: boolean;
 }
 
+/** While Trakt has us rate-limited, fail fast instead of hammering. */
+let cooldownUntil = 0;
+
+function cooldownError(): TraktError {
+  const seconds = Math.max(1, Math.ceil((cooldownUntil - Date.now()) / 1000));
+  return new TraktError(429, `Trakt rate limit reached — try again in ${seconds}s`);
+}
+
 async function request<T>(path: string, opts: RequestOpts = {}): Promise<{ data: T; headers: Headers }> {
   const settings = getSettings();
   if (!settings.traktClientId) throw new TraktError(0, "Trakt API credentials not configured");
+  if (Date.now() < cooldownUntil) throw cooldownError();
 
   const url = new URL(BASE + path);
   for (const [k, v] of Object.entries(opts.query ?? {})) url.searchParams.set(k, String(v));
@@ -163,20 +172,32 @@ async function request<T>(path: string, opts: RequestOpts = {}): Promise<{ data:
     headers["Authorization"] = `Bearer ${tokens.accessToken}`;
   }
 
-  const res = await fetch(url, {
-    method: opts.method ?? "GET",
-    headers,
-    body: opts.body != null ? JSON.stringify(opts.body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: opts.method ?? "GET",
+      headers,
+      body: opts.body != null ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch {
+    // Trakt's 429/5xx responses lack CORS headers, so the browser masks them
+    // as opaque network errors. Back off briefly either way.
+    cooldownUntil = Math.max(cooldownUntil, Date.now() + 30_000);
+    throw new TraktError(0, "Trakt unreachable (offline or rate limited) — backing off for 30s");
+  }
 
   if (res.status === 401 && opts.auth !== false && !opts.isRetry) {
     await refreshTokens();
     return request<T>(path, { ...opts, isRetry: true });
   }
-  if (res.status === 429 && !opts.isRetry) {
-    const wait = Number(res.headers.get("Retry-After") ?? "2");
-    await sleep((wait + 1) * 1000);
-    return request<T>(path, { ...opts, isRetry: true });
+  if (res.status === 429) {
+    const wait = Number(res.headers.get("Retry-After") ?? "10");
+    if (!opts.isRetry && wait <= 10) {
+      await sleep((wait + 1) * 1000);
+      return request<T>(path, { ...opts, isRetry: true });
+    }
+    cooldownUntil = Math.max(cooldownUntil, Date.now() + wait * 1000);
+    throw cooldownError();
   }
   if (!res.ok) {
     throw new TraktError(res.status, `Trakt ${opts.method ?? "GET"} ${path} failed: ${res.status}`);
@@ -304,8 +325,15 @@ export function logout(): void {
 
 // ---------- endpoints ----------
 
+// Every screen and mutation checks last_activities — de-duplicate bursts.
+let lastActivitiesCache: { at: number; promise: Promise<LastActivities> } | null = null;
+
 export async function getLastActivities(): Promise<LastActivities> {
-  return (await request<LastActivities>("/sync/last_activities")).data;
+  if (lastActivitiesCache && Date.now() - lastActivitiesCache.at < 5000) return lastActivitiesCache.promise;
+  const promise = request<LastActivities>("/sync/last_activities").then((r) => r.data);
+  lastActivitiesCache = { at: Date.now(), promise };
+  promise.catch(() => (lastActivitiesCache = null));
+  return promise;
 }
 
 /** Fetch every page of a paginated collection endpoint. */
