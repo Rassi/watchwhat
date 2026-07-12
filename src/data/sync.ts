@@ -12,6 +12,7 @@
 
 import * as trakt from "../api/trakt";
 import { fetchMovieExtras, fetchShowExtras, fetchShowImages } from "../api/tmdb";
+import { fetchOmdbRatings } from "../api/omdb";
 import { dbBulkPut, dbClear, dbGet, dbGetAll, dbPut } from "./db";
 import type { EpisodesRec, Library, MovieListRec, MovieRec, ProgressRec, ShowRec, WatchedRec, WatchlistEntry } from "./model";
 import { getSettings, isAuthenticated } from "./settings";
@@ -41,6 +42,7 @@ function toShowRec(show: trakt.TraktShow, existing?: ShowRec): ShowRec {
     rating: show.rating ?? existing?.rating,
     firstAired: show.first_aired ?? existing?.firstAired,
     trailer: show.trailer !== undefined ? show.trailer : existing?.trailer,
+    extRatings: existing?.extRatings,
     poster: existing?.poster,
     backdrop: existing?.backdrop,
     imagesFetchedAt: existing?.imagesFetchedAt,
@@ -352,6 +354,7 @@ function toMovieRec(movie: trakt.TraktMovie, existing: MovieRec | undefined, sta
     genres: movie.genres ?? existing?.genres,
     released: movie.released ?? existing?.released,
     trailer: movie.trailer !== undefined ? movie.trailer : existing?.trailer,
+    extRatings: existing?.extRatings,
     poster: existing?.poster,
     backdrop: existing?.backdrop,
     cast: existing?.cast,
@@ -499,6 +502,31 @@ export async function setMovieOnWatchlist(movies: Map<number, MovieRec>, movie: 
     }),
   ]);
   emitChange();
+}
+
+const EXT_RATINGS_TTL = 7 * 24 * 3600 * 1000;
+
+/** IMDb/Rotten Tomatoes ratings via OMDb, fetched on page open (7-day cache). Returns true if updated. */
+export async function ensureShowExtRatings(lib: Library, show: ShowRec): Promise<boolean> {
+  if (!getSettings().omdbApiKey || !show.ids.imdb) return false;
+  if (show.extRatings && Date.now() - show.extRatings.fetchedAt < EXT_RATINGS_TTL) return false;
+  const ratings = await fetchOmdbRatings(show.ids.imdb);
+  if (!ratings) return false;
+  show.extRatings = { ...ratings, fetchedAt: Date.now() };
+  lib.shows.set(show.traktId, show);
+  await dbPut("shows", show.traktId, show);
+  return true;
+}
+
+export async function ensureMovieExtRatings(movies: Map<number, MovieRec>, movie: MovieRec): Promise<boolean> {
+  if (!getSettings().omdbApiKey || !movie.ids.imdb) return false;
+  if (movie.extRatings && Date.now() - movie.extRatings.fetchedAt < EXT_RATINGS_TTL) return false;
+  const ratings = await fetchOmdbRatings(movie.ids.imdb);
+  if (!ratings) return false;
+  movie.extRatings = { ...ratings, fetchedAt: Date.now() };
+  movies.set(movie.traktId, movie);
+  await dbPut("movies", movie.traktId, movie);
+  return true;
 }
 
 /** Toggle a movie on/off one of the user's custom lists. */

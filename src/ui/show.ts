@@ -8,6 +8,7 @@ import {
   ensureEpisodes,
   ensureImages,
   ensureProgress,
+  ensureShowExtRatings,
   episodeWatchedAt,
   isEpisodeWatched,
   loadLibrary,
@@ -97,6 +98,10 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       }
     });
   }
+
+  void ensureShowExtRatings(lib, show).then((updated) => {
+    if (updated) renderContent();
+  });
   const progress0 = lib.progress.get(show.traktId);
   const firstOpen = progress0?.nextEpisode?.season ?? progress0?.seasons.find((s) => s.completed < s.aired)?.number;
   if (firstOpen != null) expanded.add(firstOpen);
@@ -374,7 +379,14 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
         { class: "card" },
         el("h2", {}, "Show info"),
         el("p", { class: "about-meta" }, meta.join(" • ")),
-        show.rating ? el("p", { class: "about-rating" }, `★ ${show.rating.toFixed(1)}/10`) : null,
+        (() => {
+          const bits = [
+            show.rating ? `★ ${show.rating.toFixed(1)} Trakt` : null,
+            show.extRatings?.imdb ? `IMDb ${show.extRatings.imdb}` : null,
+            show.extRatings?.rottenTomatoes ? `🍅 ${show.extRatings.rottenTomatoes}` : null,
+          ].filter(Boolean);
+          return bits.length > 0 ? el("p", { class: "about-rating" }, bits.join("  ·  ")) : null;
+        })(),
         el("p", { class: "about-overview" }, show.overview || "No description available."),
         el("p", { class: "about-facts" }, facts.join("  ·  ")),
         linkRow,

@@ -4,6 +4,8 @@ export interface AppSettings {
   traktClientId: string;
   traktClientSecret: string;
   tmdbApiKey: string;
+  /** OMDb key for IMDb/Rotten Tomatoes ratings (optional). */
+  omdbApiKey: string;
   /** Days without watching before a show moves to "Haven't watched for a while". */
   staleDays: number;
   theme: "auto" | "dark" | "light";
@@ -21,6 +23,7 @@ const defaults: AppSettings = {
   traktClientId: "",
   traktClientSecret: "",
   tmdbApiKey: "",
+  omdbApiKey: "",
   staleDays: 30,
   theme: "auto",
   myServices: "Disney+, Netflix, Prime, Hulu, Paramount+, Channel 4, BBC, HBO Max, Filmstriben, Apple TV+",

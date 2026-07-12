@@ -19,6 +19,8 @@ export interface ShowRec {
   firstAired?: string | null;
   /** YouTube trailer URL from Trakt (null = none; undefined = not fetched yet) */
   trailer?: string | null;
+  /** IMDb / Rotten Tomatoes ratings from OMDb. */
+  extRatings?: { imdb: string | null; rottenTomatoes: string | null; fetchedAt: number };
   poster?: string | null;
   backdrop?: string | null;
   imagesFetchedAt?: number;
@@ -131,6 +133,8 @@ export interface MovieRec {
   genres?: string[];
   released?: string | null;
   trailer?: string | null;
+  /** IMDb / Rotten Tomatoes ratings from OMDb. */
+  extRatings?: { imdb: string | null; rottenTomatoes: string | null; fetchedAt: number };
   /** Earliest announced digital/streaming release from TMDB (null = none announced). */
   digitalRelease?: { date: string; country: string } | null;
   // TMDB

@@ -4,6 +4,7 @@ import type { Route } from "../router";
 import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
 import {
   ensureMovieDetails,
+  ensureMovieExtRatings,
   loadMovieLists,
   loadMovies,
   refreshMovieSummary,
@@ -59,6 +60,7 @@ export const movieRoute: Route = {
       // Cached before the trailer field existed — refresh Trakt metadata once.
       if (movie.trailer === undefined) movie = (await refreshMovieSummary(movies, traktId)) ?? movie;
       await ensureMovieDetails(movies, [traktId]);
+      await ensureMovieExtRatings(movies, movie).catch(() => false);
       renderPage(body, movies, movie, await loadMovieLists());
     } catch (e) {
       body.replaceChildren(el("div", { class: "empty-note" }, e instanceof Error ? e.message : "Could not load this movie."));
@@ -174,7 +176,14 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
       "div",
       { class: "card" },
       el("h2", {}, "About"),
-      movie.rating ? el("p", { class: "about-rating" }, `★ ${movie.rating.toFixed(1)}/10`) : null,
+      (() => {
+        const bits = [
+          movie.rating ? `★ ${movie.rating.toFixed(1)} Trakt` : null,
+          movie.extRatings?.imdb ? `IMDb ${movie.extRatings.imdb}` : null,
+          movie.extRatings?.rottenTomatoes ? `🍅 ${movie.extRatings.rottenTomatoes}` : null,
+        ].filter(Boolean);
+        return bits.length > 0 ? el("p", { class: "about-rating" }, bits.join("  ·  ")) : null;
+      })(),
       el("p", { class: "about-overview" }, movie.overview || "No description available."),
       movie.released ? el("p", { class: "about-facts" }, `Released ${movie.released}`) : null,
       (() => {

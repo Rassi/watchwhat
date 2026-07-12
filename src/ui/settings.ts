@@ -118,6 +118,20 @@ export const settingsRoute: Route = {
       `(the "API Key (v3 auth)" value).`;
     const tmdbCard = el("div", { class: "card" }, el("h2", {}, "TMDB (images)"), tmdbHelp, field("API key", tmdbKey), saveTmdbBtn);
 
+    // --- OMDb (optional ratings) ---
+    const omdbKey = textInput(settings.omdbApiKey, "OMDb API key");
+    const saveOmdbBtn = el("button", { class: "btn primary" }, "Save");
+    saveOmdbBtn.addEventListener("click", () => {
+      saveSettings({ omdbApiKey: omdbKey.value.trim() });
+      toast("OMDb key saved");
+    });
+    const omdbHelp = el("p", {});
+    omdbHelp.innerHTML =
+      `Optional: adds IMDb and Rotten Tomatoes ratings to About pages. Get a free key (1,000 requests/day) at ` +
+      `<a href="https://www.omdbapi.com/apikey.aspx" target="_blank" rel="noopener"><b>omdbapi.com/apikey.aspx</b></a>. ` +
+      `Ratings are fetched once per title per week, only when you open its page.`;
+    const omdbCard = el("div", { class: "card" }, el("h2", {}, "OMDb (IMDb & Rotten Tomatoes ratings)"), omdbHelp, field("API key", omdbKey), saveOmdbBtn);
+
     // --- Preferences ---
     const staleInput = el("input", { type: "number", min: "7", max: "365" });
     staleInput.value = String(settings.staleDays);
@@ -173,6 +187,6 @@ export const settingsRoute: Route = {
       clearBtn,
     );
 
-    container.append(traktCard, connectCard, tmdbCard, prefsCard, reconcileCard(), dataCard);
+    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, reconcileCard(), dataCard);
   },
 };
