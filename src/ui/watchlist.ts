@@ -126,6 +126,7 @@ export const watchlistRoute: Route = {
       const startedIds = new Set([...lib.watched.entries()].filter(([, w]) => w.plays > 0).map(([id]) => id));
       const notStarted = lib.watchlist
         .filter((e) => !startedIds.has(e.traktId) && !lib.hidden.has(e.traktId))
+        .sort((a, b) => (b.listedAt ?? "").localeCompare(a.listedAt ?? "")) // newest additions first
         .map((e) => lib.shows.get(e.traktId))
         .filter((s): s is ShowRec => s !== undefined);
 

@@ -480,7 +480,7 @@ export async function setMovieWatched(movies: Map<number, MovieRec>, movie: Movi
   movies.set(movie.traktId, movie);
   await Promise.all([
     dbPut("movies", movie.traktId, movie),
-    trakt.getLastActivities().then((acts) => dbPut("meta", "movieActivities", acts)),
+    adoptBaseline("movieActivities", (b, a) => (b.movies.watched_at = a.movies.watched_at)),
   ]);
   emitChange();
 }
@@ -493,7 +493,10 @@ export async function setMovieOnWatchlist(movies: Map<number, MovieRec>, movie: 
   movies.set(movie.traktId, movie);
   await Promise.all([
     dbPut("movies", movie.traktId, movie),
-    trakt.getLastActivities().then((acts) => dbPut("meta", "movieActivities", acts)),
+    adoptBaseline("movieActivities", (b, a) => {
+      b.movies.watchlisted_at = a.movies.watchlisted_at;
+      b.watchlist.updated_at = a.watchlist.updated_at;
+    }),
   ]);
   emitChange();
 }
@@ -513,7 +516,7 @@ export async function setMovieOnCustomList(
   movies.set(movie.traktId, movie);
   await Promise.all([
     dbPut("movies", movie.traktId, movie),
-    trakt.getLastActivities().then((acts) => dbPut("meta", "movieActivities", acts)),
+    adoptBaseline("movieActivities", (b, a) => (b.lists = a.lists)),
   ]);
   emitChange();
 }
@@ -554,6 +557,23 @@ export async function refreshShowSummary(lib: Library, traktId: number): Promise
   } catch {
     return lib.shows.get(traktId);
   }
+}
+
+/**
+ * After a local mutation, record only the activity fields that mutation
+ * touched into the stored baseline. Adopting the whole snapshot would swallow
+ * unrelated remote changes (e.g. a show added on trakt.tv minutes earlier)
+ * and the next sync would wrongly think there's nothing new.
+ */
+async function adoptBaseline(
+  key: "lastActivities" | "movieActivities",
+  merge: (baseline: trakt.LastActivities, acts: trakt.LastActivities) => void,
+): Promise<void> {
+  const acts = await trakt.getLastActivities();
+  const baseline = await dbGet<trakt.LastActivities>("meta", key);
+  if (!baseline) return; // no baseline yet — the next sync does a full pull anyway
+  merge(baseline, acts);
+  await dbPut("meta", key, baseline);
 }
 
 // ---------- mutations ----------
@@ -636,9 +656,8 @@ export async function setEpisodesWatched(
     const watchedRec = lib.watched.get(showTraktId);
     if (watchedRec && rec.lastWatchedAt) watchedRec.lastWatchedAt = rec.lastWatchedAt;
     await persistShowState(lib, showTraktId);
-    // Adopt the new server state as our baseline so the next app open doesn't full-resync.
-    const acts = await trakt.getLastActivities();
-    await dbPut("meta", "lastActivities", acts);
+    // Adopt only the episode activity as baseline so the next app open doesn't full-resync.
+    await adoptBaseline("lastActivities", (b, a) => (b.episodes.watched_at = a.episodes.watched_at));
     emitChange();
   } catch {
     // Refresh failed; cache is optimistic but close enough. Next sync fixes it.
@@ -653,7 +672,10 @@ export async function addToWatchlist(lib: Library, show: trakt.TraktShow): Promi
   await Promise.all([
     dbPut("shows", rec.traktId, rec),
     dbPut("meta", "watchlist", lib.watchlist),
-    dbPut("meta", "lastActivities", await trakt.getLastActivities()),
+    adoptBaseline("lastActivities", (b, a) => {
+      b.watchlist.updated_at = a.watchlist.updated_at;
+      b.shows.watchlisted_at = a.shows.watchlisted_at;
+    }),
   ]);
   emitChange();
 }
@@ -668,7 +690,7 @@ export async function setShowHidden(lib: Library, traktId: number, hidden: boole
   else lib.hidden.delete(traktId);
   await Promise.all([
     dbPut("meta", "hidden", [...lib.hidden]),
-    dbPut("meta", "lastActivities", await trakt.getLastActivities()),
+    adoptBaseline("lastActivities", (b, a) => (b.shows.hidden_at = a.shows.hidden_at)),
   ]);
   emitChange();
 }
@@ -680,7 +702,10 @@ export async function removeFromWatchlist(lib: Library, showTraktId: number): Pr
   lib.watchlist = lib.watchlist.filter((e) => e.traktId !== showTraktId);
   await Promise.all([
     dbPut("meta", "watchlist", lib.watchlist),
-    dbPut("meta", "lastActivities", await trakt.getLastActivities()),
+    adoptBaseline("lastActivities", (b, a) => {
+      b.watchlist.updated_at = a.watchlist.updated_at;
+      b.shows.watchlisted_at = a.shows.watchlisted_at;
+    }),
   ]);
   emitChange();
 }
