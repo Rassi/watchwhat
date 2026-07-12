@@ -148,7 +148,7 @@ export const watchlistRoute: Route = {
         ...lib.watchlist.map((e) => e.traktId),
       ];
       const startedVisible = visible.filter((id) => (lib.watched.get(id)?.plays ?? 0) > 0);
-      void ensureProgress(lib, startedVisible, renderContent);
+      void ensureProgress(lib, startedVisible, renderContent, { skipFinishedTtl: true });
       void ensureImages(lib, visible, renderContent);
     };
 

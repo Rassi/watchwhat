@@ -106,7 +106,7 @@ export const libraryRoute: Route = {
     renderContent();
 
     const started = [...lib.watched.entries()].filter(([, w]) => w.plays > 0).map(([id]) => id);
-    void ensureProgress(lib, started, renderContent);
+    void ensureProgress(lib, started, renderContent, { skipFinishedTtl: true });
     void ensureImages(lib, [...lib.shows.keys()], renderContent);
   },
 };

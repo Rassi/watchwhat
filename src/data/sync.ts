@@ -171,7 +171,7 @@ function progressTtlMs(show: ShowRec | undefined): number {
   return ended ? 7 * 24 * 3600 * 1000 : 12 * 3600 * 1000;
 }
 
-function progressIsStale(lib: Library, traktId: number): boolean {
+function progressIsStale(lib: Library, traktId: number, skipFinishedTtl = false): boolean {
   const progress = lib.progress.get(traktId);
   if (!progress) return true;
   const watched = lib.watched.get(traktId);
@@ -182,6 +182,14 @@ function progressIsStale(lib: Library, traktId: number): boolean {
     !progress.seasons.some((s) => s.episodes.some((e) => e.watchedAt !== undefined))
   ) {
     return true;
+  }
+  // Bulk refreshes skip ended shows the user completed: their progress can't
+  // change except through watching (caught by the mismatch check above) or a
+  // revival (which flips status via the metadata sync, ending the exemption).
+  if (skipFinishedTtl) {
+    const show = lib.shows.get(traktId);
+    const ended = show?.status === "ended" || show?.status === "canceled";
+    if (ended && progress.aired > 0 && progress.completed >= progress.aired) return false;
   }
   return Date.now() - progress.fetchedAt > progressTtlMs(lib.shows.get(traktId));
 }
@@ -201,8 +209,13 @@ async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
  * Fetches in the background with limited concurrency; `onUpdate` fires after
  * each batch of updates so the UI can re-render progressively.
  */
-export async function ensureProgress(lib: Library, traktIds: number[], onUpdate?: () => void): Promise<void> {
-  const stale = traktIds.filter((id) => progressIsStale(lib, id));
+export async function ensureProgress(
+  lib: Library,
+  traktIds: number[],
+  onUpdate?: () => void,
+  opts?: { skipFinishedTtl?: boolean },
+): Promise<void> {
+  const stale = traktIds.filter((id) => progressIsStale(lib, id, opts?.skipFinishedTtl));
   if (stale.length === 0) return;
 
   let pendingNotify = 0;
@@ -397,11 +410,17 @@ export async function ensureMovieDetails(
   movies: Map<number, MovieRec>,
   traktIds: number[],
   onUpdate?: () => void,
+  opts?: { skipWatchedRefresh?: boolean },
 ): Promise<void> {
   const maxAge = 7 * 24 * 3600 * 1000;
   const stale = traktIds.filter((id) => {
     const movie = movies.get(id);
-    return movie?.ids.tmdb && (movie.tmdbFetchedAt == null || Date.now() - movie.tmdbFetchedAt > maxAge);
+    if (!movie?.ids.tmdb) return false;
+    if (movie.tmdbFetchedAt == null) return true;
+    // Bulk refreshes leave watched movies alone — their details are fetched
+    // once and only re-fetched when the movie page itself is opened.
+    if (opts?.skipWatchedRefresh && movie.plays > 0) return false;
+    return Date.now() - movie.tmdbFetchedAt > maxAge;
   });
   if (stale.length === 0) return;
 

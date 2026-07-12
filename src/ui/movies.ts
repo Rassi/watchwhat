@@ -58,7 +58,7 @@ export const moviesRoute: Route = {
     };
 
     const kickLazyLoads = (): void => {
-      void ensureMovieDetails(movies, [...movies.keys()], renderContent);
+      void ensureMovieDetails(movies, [...movies.keys()], renderContent, { skipWatchedRefresh: true });
     };
 
     renderContent();
