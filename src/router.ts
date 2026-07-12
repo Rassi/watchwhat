@@ -11,6 +11,11 @@ export interface Route {
 const routes = new Map<string, Route>();
 let container: HTMLElement;
 
+// Per-page scroll memory so going back (e.g. movie -> movies list) returns
+// to where you were. Keyed by full hash, session-only.
+const scrollPositions = new Map<string, number>();
+let currentHash = "";
+
 export function registerRoute(route: Route): void {
   routes.set(route.name, route);
 }
@@ -22,6 +27,9 @@ function parseHash(): { name: string; params: string[] } {
 }
 
 async function dispatch(): Promise<void> {
+  if (currentHash) scrollPositions.set(currentHash, window.scrollY);
+  currentHash = location.hash || "#/";
+
   const { name, params } = parseHash();
   const route = routes.get(name) ?? routes.get("home")!;
   document.querySelectorAll<HTMLAnchorElement>("#tabbar a").forEach((a) => {
@@ -29,12 +37,13 @@ async function dispatch(): Promise<void> {
   });
   document.title = route.title ?? "WatchWhat";
   container.replaceChildren();
-  container.scrollTop = 0;
   await route.render(container, params);
+  window.scrollTo(0, scrollPositions.get(currentHash) ?? 0);
 }
 
 export function startRouter(appContainer: HTMLElement): void {
   container = appContainer;
+  history.scrollRestoration = "manual"; // we restore positions ourselves
   window.addEventListener("hashchange", () => void dispatch());
   void dispatch();
 }
