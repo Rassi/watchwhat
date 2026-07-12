@@ -1,5 +1,5 @@
 import type { Route } from "../router";
-import { dialog, el, toast } from "./components";
+import { dialog, el, toast, withSyncIndicator } from "./components";
 import { searchShows, searchMovies, type TraktMovie, type TraktShow } from "../api/trakt";
 import { fetchMoviePoster, fetchShowImages, posterUrl } from "../api/tmdb";
 import { addToWatchlist, loadLibrary, loadMovies, removeFromWatchlist, setMovieOnWatchlist } from "../data/sync";
@@ -88,10 +88,10 @@ export const searchRoute: Route = {
               refreshAction();
               return;
             }
-            await removeFromWatchlist(lib, show.ids.trakt);
+            await withSyncIndicator(removeFromWatchlist(lib, show.ids.trakt));
             toast(`Removed "${show.title}" from your list`);
           } else {
-            await addToWatchlist(lib, show);
+            await withSyncIndicator(addToWatchlist(lib, show));
             toast(`Added "${show.title}" — it'll appear under Haven't Started`);
           }
         } catch (err) {
@@ -176,10 +176,10 @@ export const searchRoute: Route = {
               refreshAction();
               return;
             }
-            await setMovieOnWatchlist(movies, existing, false);
+            await withSyncIndicator(setMovieOnWatchlist(movies, existing, false));
             toast(`Removed "${movie.title}" from your watchlist`);
           } else {
-            await setMovieOnWatchlist(movies, existing ?? toMovieRec(movie), true);
+            await withSyncIndicator(setMovieOnWatchlist(movies, existing ?? toMovieRec(movie), true));
             toast(`Added "${movie.title}" to your movie watchlist`);
           }
         } catch (err) {

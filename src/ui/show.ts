@@ -1,5 +1,5 @@
 import type { Route } from "../router";
-import { dialog, el, spinner, toast } from "./components";
+import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
 import { addNeverMarkPrevious, getNeverMarkPrevious } from "../data/settings";
 import { castStripCard, whereToWatchCard } from "./shared";
 import {
@@ -130,10 +130,21 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
   };
 
   const mutate = async (episodes: EpisodeRef[], watched: boolean): Promise<void> => {
+    // The local cache is updated synchronously inside setEpisodesWatched, so the
+    // checkmarks can flip immediately; Trakt confirms in the background.
+    const op = setEpisodesWatched(lib, show.traktId, episodes, watched);
+    rerender();
     try {
-      await setEpisodesWatched(lib, show.traktId, episodes, watched);
+      await withSyncIndicator(op);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Update failed — Trakt rejected the change", "error");
+      // The cache was rebuilt from Trakt on failure — reload it so the UI rolls back.
+      const fresh = await loadLibrary();
+      lib.shows = fresh.shows;
+      lib.watched = fresh.watched;
+      lib.progress = fresh.progress;
+      lib.watchlist = fresh.watchlist;
+      lib.hidden = fresh.hidden;
     }
     rerender();
   };

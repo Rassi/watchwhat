@@ -98,6 +98,24 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
   return card;
 }
 
+let busyCount = 0;
+let busyEl: HTMLElement | null = null;
+
+/** Show a small "Syncing…" pill while `promise` is in flight (stacks safely). */
+export async function withSyncIndicator<T>(promise: Promise<T>): Promise<T> {
+  if (!busyEl) {
+    busyEl = el("div", { class: "sync-indicator" }, el("div", { class: "spinner small" }), el("span", {}, "Syncing…"));
+    document.body.append(busyEl);
+  }
+  busyCount++;
+  busyEl.classList.add("visible");
+  try {
+    return await promise;
+  } finally {
+    if (--busyCount === 0) busyEl.classList.remove("visible");
+  }
+}
+
 export function spinner(label = "Loading…"): HTMLElement {
   return el("div", { class: "spinner-wrap" }, el("div", { class: "spinner" }), el("div", { class: "spinner-label" }, label));
 }

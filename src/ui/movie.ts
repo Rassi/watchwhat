@@ -1,7 +1,7 @@
 /** Movie detail page: artwork, mark watched, watchlist, where to watch, cast. */
 
 import type { Route } from "../router";
-import { dialog, el, spinner, toast } from "./components";
+import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
 import { ensureMovieDetails, loadMovies, setMovieOnWatchlist, setMovieWatched, syncMovies } from "../data/sync";
 import type { MovieRec } from "../data/model";
 import { getMovieSummary } from "../api/trakt";
@@ -101,11 +101,11 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
             { label: "Cancel", value: "no" },
           ]);
           if (choice === "yes") {
-            await setMovieWatched(movies, movie, false);
+            await withSyncIndicator(setMovieWatched(movies, movie, false));
             toast(`Unmarked "${movie.title}"`);
           }
         } else {
-          await setMovieWatched(movies, movie, true);
+          await withSyncIndicator(setMovieWatched(movies, movie, true));
           toast(`Marked "${movie.title}" as watched`);
         }
       } catch (e) {
@@ -128,11 +128,11 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
             { label: "Cancel", value: "no" },
           ]);
           if (choice === "yes") {
-            await setMovieOnWatchlist(movies, movie, false);
+            await withSyncIndicator(setMovieOnWatchlist(movies, movie, false));
             toast(`Removed "${movie.title}" from your watchlist`);
           }
         } else {
-          await setMovieOnWatchlist(movies, movie, true);
+          await withSyncIndicator(setMovieOnWatchlist(movies, movie, true));
           toast(`Added "${movie.title}" to your watchlist`);
         }
       } catch (e) {
