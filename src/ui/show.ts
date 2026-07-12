@@ -8,6 +8,7 @@ import {
   ensureEpisodes,
   ensureImages,
   ensureProgress,
+  episodeWatchedAt,
   isEpisodeWatched,
   loadLibrary,
   refreshShowSummary,
@@ -619,11 +620,17 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
           }
           seasonBox.append(row);
           if (expandedEpisodes.has(epKey)) {
+            const watchedAt = watched ? episodeWatchedAt(lib, show.traktId, season.number, e.number) : null;
+            const watchedLine = watchedAt
+              ? `Watched ${new Date(watchedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
+              : null;
             seasonBox.append(
               el(
                 "div",
                 { class: "ep-overview" },
-                e.airDate ? el("div", { class: "ep-airdate" }, `Aired ${e.airDate}`) : null,
+                e.airDate || watchedLine
+                  ? el("div", { class: "ep-airdate" }, [e.airDate ? `Aired ${e.airDate}` : null, watchedLine].filter(Boolean).join("  ·  "))
+                  : null,
                 e.overview ?? "No description available.",
               ),
             );

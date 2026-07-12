@@ -20,19 +20,14 @@ export const moviesRoute: Route = {
     const grids = el("div", {});
     container.append(grids);
 
-    const watchedDate = (movie: MovieRec): string | null =>
-      movie.lastWatchedAt
-        ? new Date(movie.lastWatchedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
-        : null;
-
     const card = (movie: MovieRec): HTMLElement =>
       posterCard({
         title: movie.title,
         href: `#/movie/${movie.traktId}`,
         posterUrl: posterUrl(movie.poster),
         progress: null,
-        // Watched movies show when they were watched; unwatched show title/year.
-        subtitle: movie.plays > 0 && watchedDate(movie) ? `Watched ${watchedDate(movie)}` : `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
+        // Keep the title as subtitle so in-page text search finds movies.
+        subtitle: `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
       });
 
     const renderContent = (): void => {

@@ -71,7 +71,7 @@ function toProgressRec(traktId: number, p: trakt.ShowProgress): ProgressRec {
       number: s.number,
       aired: s.aired,
       completed: s.completed,
-      episodes: s.episodes.map((e) => ({ number: e.number, completed: e.completed })),
+      episodes: s.episodes.map((e) => ({ number: e.number, completed: e.completed, watchedAt: e.last_watched_at ?? null })),
     })),
     nextEpisode: nextEp
       ? {
@@ -90,6 +90,13 @@ export function isEpisodeWatched(lib: Library, showTraktId: number, season: numb
   const progress = lib.progress.get(showTraktId);
   const s = progress?.seasons.find((x) => x.number === season);
   return s?.episodes.find((e) => e.number === episode)?.completed ?? false;
+}
+
+/** When an episode was (last) watched, if known. */
+export function episodeWatchedAt(lib: Library, showTraktId: number, season: number, episode: number): string | null {
+  const progress = lib.progress.get(showTraktId);
+  const s = progress?.seasons.find((x) => x.number === season);
+  return s?.episodes.find((e) => e.number === episode)?.watchedAt ?? null;
 }
 
 // ---------- library load & sync ----------
@@ -169,6 +176,13 @@ function progressIsStale(lib: Library, traktId: number): boolean {
   if (!progress) return true;
   const watched = lib.watched.get(traktId);
   if (watched && watched.lastWatchedAt !== progress.lastWatchedAt) return true;
+  // Cached before per-episode watchedAt was recorded — refresh started shows once.
+  if (
+    (watched?.plays ?? 0) > 0 &&
+    !progress.seasons.some((s) => s.episodes.some((e) => e.watchedAt !== undefined))
+  ) {
+    return true;
+  }
   return Date.now() - progress.fetchedAt > progressTtlMs(lib.shows.get(traktId));
 }
 
@@ -503,6 +517,7 @@ function applyLocalWatch(lib: Library, showTraktId: number, episodes: EpisodeRef
       const entry = season?.episodes.find((e) => e.number === ep.number);
       if (season && entry && entry.completed !== watched) {
         entry.completed = watched;
+        entry.watchedAt = watched ? nowIso : null;
         season.completed += watched ? 1 : -1;
         if (ep.season > 0) progress.completed += watched ? 1 : -1; // totals exclude specials
       }

@@ -68,7 +68,7 @@ export interface ProgressRec {
     number: number;
     aired: number;
     completed: number;
-    episodes: { number: number; completed: boolean }[];
+    episodes: { number: number; completed: boolean; watchedAt?: string | null }[];
   }[];
   nextEpisode: NextEpisodeRec | null;
 }
