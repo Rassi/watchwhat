@@ -69,7 +69,12 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
     if (movie.year) bits.push(String(movie.year));
     if (movie.runtime) bits.push(`${movie.runtime} min`);
     if (movie.genres?.length) bits.push(movie.genres.slice(0, 3).join(", "));
-    if (movie.plays > 0) bits.push(`watched${movie.plays > 1 ? ` ${movie.plays}×` : ""}`);
+    if (movie.plays > 0) {
+      const when = movie.lastWatchedAt
+        ? ` ${new Date(movie.lastWatchedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
+        : "";
+      bits.push(`watched${when}${movie.plays > 1 ? ` (${movie.plays}×)` : ""}`);
+    }
 
     const header = el(
       "div",
