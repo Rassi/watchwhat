@@ -7,6 +7,7 @@ import {
   loadMovieLists,
   loadMovies,
   refreshMovieSummary,
+  setMovieOnCustomList,
   setMovieOnWatchlist,
   setMovieWatched,
   syncMovies,
@@ -130,34 +131,38 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
       renderContent();
     });
 
-    const listBtn = el(
-      "button",
-      { class: `btn ${movie.onWatchlist ? "danger" : ""}` },
-      movie.onWatchlist ? "Remove from watchlist" : "+ Watchlist",
-    );
-    listBtn.addEventListener("click", async () => {
-      listBtn.disabled = true;
-      try {
-        if (movie.onWatchlist) {
-          const choice = await dialog(`Remove "${movie.title}"?`, "It will be removed from your movie watchlist.", [
-            { label: "Remove", value: "yes", kind: "danger" },
-            { label: "Cancel", value: "no" },
-          ]);
-          if (choice === "yes") {
-            await withSyncIndicator(setMovieOnWatchlist(movies, movie, false));
-            toast(`Removed "${movie.title}" from your watchlist`);
-          }
-        } else {
-          await withSyncIndicator(setMovieOnWatchlist(movies, movie, true));
-          toast(`Added "${movie.title}" to your watchlist`);
+    // Lists ▾ dropdown: toggle the watchlist and each custom list on/off.
+    const onListCount = (movie.onWatchlist ? 1 : 0) + (movie.customLists?.length ?? 0);
+    const listsWrap = el("div", { class: "lists-dropdown" });
+    const listsBtn = el("button", { class: "btn" }, `Lists${onListCount > 0 ? ` (${onListCount})` : ""} ▾`);
+    const menu = el("div", { class: "burger-menu" });
+    const toggleRow = (label: string, on: boolean, action: () => Promise<void>): HTMLElement => {
+      const row = el("button", { class: `burger-item ${on ? "on" : ""}` }, `${on ? "✓" : "○"}  ${label}`);
+      row.addEventListener("click", async () => {
+        listsWrap.classList.remove("open");
+        try {
+          await withSyncIndicator(action());
+          toast(on ? `Removed from ${label}` : `Added to ${label}`);
+        } catch (e) {
+          toast(e instanceof Error ? e.message : "Update failed", "error");
         }
-      } catch (e) {
-        toast(e instanceof Error ? e.message : "Update failed", "error");
-      }
-      renderContent();
+        renderContent();
+      });
+      return row;
+    };
+    menu.append(toggleRow("Watchlist", movie.onWatchlist, () => setMovieOnWatchlist(movies, movie, !movie.onWatchlist)));
+    for (const list of movieLists) {
+      const on = movie.customLists?.includes(list.traktId) ?? false;
+      menu.append(toggleRow(list.name, on, () => setMovieOnCustomList(movies, movie, list.traktId, !on)));
+    }
+    listsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      listsWrap.classList.toggle("open");
     });
+    body.addEventListener("click", () => listsWrap.classList.remove("open"));
+    listsWrap.append(listsBtn, menu);
 
-    const actions = el("div", { class: "card" }, el("div", { class: "manage-buttons" }, watchedBtn, listBtn));
+    const actions = el("div", { class: "card" }, el("div", { class: "manage-buttons" }, watchedBtn, listsWrap));
 
     // About
     const extLinks: [string, string][] = [];

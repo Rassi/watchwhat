@@ -846,6 +846,27 @@ button {
   fill: var(--accent);
 }
 
+/* Lists dropdown on the movie page */
+.lists-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.lists-dropdown .burger-menu {
+  top: 46px;
+  left: 0;
+  right: auto;
+}
+
+.lists-dropdown.open .burger-menu {
+  display: block;
+}
+
+.burger-item.on {
+  color: var(--green);
+  font-weight: 600;
+}
+
 .digital-release {
   color: var(--accent);
   font-weight: 600;

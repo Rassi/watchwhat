@@ -498,6 +498,26 @@ export async function setMovieOnWatchlist(movies: Map<number, MovieRec>, movie: 
   emitChange();
 }
 
+/** Toggle a movie on/off one of the user's custom lists. */
+export async function setMovieOnCustomList(
+  movies: Map<number, MovieRec>,
+  movie: MovieRec,
+  listId: number,
+  on: boolean,
+): Promise<void> {
+  if (on) await trakt.addMovieToList(listId, movie.ids);
+  else await trakt.removeMovieFromList(listId, movie.ids);
+  movie.customLists = on
+    ? [...(movie.customLists ?? []), listId]
+    : (movie.customLists ?? []).filter((id) => id !== listId);
+  movies.set(movie.traktId, movie);
+  await Promise.all([
+    dbPut("movies", movie.traktId, movie),
+    trakt.getLastActivities().then((acts) => dbPut("meta", "movieActivities", acts)),
+  ]);
+  emitChange();
+}
+
 /** Refresh a movie's Trakt metadata (trailer/genres etc.) into the cache. */
 export async function refreshMovieSummary(movies: Map<number, MovieRec>, traktId: number): Promise<MovieRec | undefined> {
   const existing = movies.get(traktId);

@@ -409,6 +409,14 @@ export async function getMyLists(): Promise<TraktList[]> {
   return (await request<TraktList[]>("/users/me/lists")).data;
 }
 
+export async function addMovieToList(listId: number, ids: TraktIds): Promise<void> {
+  await request(`/users/me/lists/${listId}/items`, { method: "POST", body: { movies: [{ ids }] } });
+}
+
+export async function removeMovieFromList(listId: number, ids: TraktIds): Promise<void> {
+  await request(`/users/me/lists/${listId}/items/remove`, { method: "POST", body: { movies: [{ ids }] } });
+}
+
 export async function getListMovies(listId: number): Promise<MovieWatchlistItem[]> {
   return getAllPages<MovieWatchlistItem>(`/users/me/lists/${listId}/items/movies`, { extended: "full" });
 }
