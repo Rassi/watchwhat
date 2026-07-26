@@ -99,8 +99,20 @@ button {
 /* ---------- sections & poster grid ---------- */
 .section-header {
   display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 6px;
   margin: 20px 0 12px;
+}
+
+.info-dot {
+  background: none;
+  border: 0;
+  padding: 4px; /* keeps the tap target usable without enlarging the glyph */
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-dim);
+  cursor: pointer;
 }
 
 .pill {
@@ -454,6 +466,10 @@ button {
   margin-bottom: 10px;
 }
 
+.card p.field-help {
+  margin: -4px 0 14px;
+}
+
 .field label {
   display: block;
   font-size: 12px;
@@ -635,6 +651,18 @@ button {
   margin: 0 0 16px;
   font-size: 14px;
   color: #444;
+}
+
+.info-list {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #444;
+}
+
+.info-list li + li {
+  margin-top: 8px;
 }
 
 .modal-buttons {

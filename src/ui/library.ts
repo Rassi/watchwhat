@@ -18,6 +18,30 @@ const LABELS: Record<Bucket, string> = {
   notStarted: "Haven't started",
 };
 
+/** What lands in each group — the rules are cache-derived and not self-evident. */
+const INFO: Record<Bucket, string[]> = {
+  watching: [
+    "Shows you've watched at least one episode of, with episodes still left to watch.",
+    "A show stays here no matter how long ago you last watched it — this tab is your whole library, not a to-watch queue.",
+  ],
+  upToDate: [
+    "Shows you've watched every aired episode of, and that are still running.",
+    "As soon as a new episode airs, the show moves back to Watching.",
+  ],
+  finished: [
+    "Shows you've watched every aired episode of, and that have ended or been cancelled on Trakt.",
+    "Nothing more is coming, so these stay here.",
+  ],
+  stopped: [
+    'Shows you hid with "Stop tracking" — the equivalent of removing a show in TV Time.',
+    "They're kept out of Watch next and the other groups, but not deleted from Trakt.",
+  ],
+  notStarted: [
+    "Shows on your Trakt watchlist that you haven't watched a single episode of yet.",
+    "Watching one episode moves the show to Watching.",
+  ],
+};
+
 function bucketOf(lib: Library, show: ShowRec): Bucket | null {
   if (lib.hidden.has(show.traktId)) return "stopped";
   const watched = lib.watched.get(show.traktId);
@@ -73,7 +97,7 @@ export const libraryRoute: Route = {
         const shows = buckets.get(bucket);
         if (!shows?.length) continue;
         shows.sort((a, b) => a.title.localeCompare(b.title));
-        const anchor = sectionHeader(`${LABELS[bucket]} (${shows.length})`);
+        const anchor = sectionHeader(`${LABELS[bucket]} (${shows.length})`, { title: LABELS[bucket], points: INFO[bucket] });
         sectionAnchors.set(bucket, anchor);
         const item = el("button", { class: "burger-item" }, `${LABELS[bucket]} (${shows.length})`);
         item.addEventListener("click", () => {

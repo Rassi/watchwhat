@@ -34,7 +34,7 @@ export interface DialogChoice {
 }
 
 /** Modal dialog; resolves with the chosen value, or null when dismissed via backdrop. */
-export function dialog(title: string, body: string, choices: DialogChoice[]): Promise<string | null> {
+export function dialog(title: string, body: string | Node | null, choices: DialogChoice[]): Promise<string | null> {
   return new Promise((resolve) => {
     const backdrop = el("div", { class: "modal-backdrop" });
     const buttons = el("div", { class: "modal-buttons" });
@@ -42,7 +42,7 @@ export function dialog(title: string, body: string, choices: DialogChoice[]): Pr
       "div",
       { class: "modal" },
       el("h3", {}, title),
-      body ? el("p", {}, body) : null,
+      body ? (typeof body === "string" ? el("p", {}, body) : body) : null,
       buttons,
     );
     const close = (value: string | null) => {
@@ -62,9 +62,27 @@ export function dialog(title: string, body: string, choices: DialogChoice[]): Pr
   });
 }
 
-/** Section header pill, like TV Time's "WATCH NEXT". */
-export function sectionHeader(text: string): HTMLElement {
-  return el("div", { class: "section-header" }, el("span", { class: "pill" }, text.toUpperCase()));
+/**
+ * Section header pill, like TV Time's "WATCH NEXT". `info` explains what lands
+ * in the section: the grouping rules are non-obvious, and the question comes up
+ * while looking at the section, not while in Settings.
+ */
+export function sectionHeader(text: string, info?: { title: string; points: string[] }): HTMLElement {
+  const header = el("div", { class: "section-header" }, el("span", { class: "pill" }, text.toUpperCase()));
+  if (info) header.append(infoButton(info.title, info.points));
+  return header;
+}
+
+/** Small ⓘ that opens a modal listing `points`. */
+export function infoButton(title: string, points: string[]): HTMLElement {
+  const button = el("button", { class: "info-dot", title: `What's in "${title}"?`, "aria-label": `What's in "${title}"?` }, "ⓘ");
+  button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const list = el("ul", { class: "info-list" }, ...points.map((p) => el("li", {}, p)));
+    void dialog(title, list, [{ label: "Got it", value: "ok", kind: "primary" }]);
+  });
+  return button;
 }
 
 export interface PosterCardOpts {

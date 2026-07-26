@@ -168,6 +168,11 @@ export const settingsRoute: Route = {
       { class: "card" },
       el("h2", {}, "Preferences"),
       field('Days before a show counts as "not watched for a while"', staleInput),
+      el(
+        "p",
+        { class: "field-help" },
+        'Controls when a show drops out of Watch next. Shows with a new episode waiting stay regardless. Tap the ⓘ next to any section heading to see exactly what lands in it.',
+      ),
       el("div", { class: "field" }, el("label", {}, "Theme"), themeSelect),
       field("My streaming services (comma-separated — highlighted under Where to watch)", servicesInput),
       field("Where-to-watch countries (ISO codes, comma-separated)", countriesInput),

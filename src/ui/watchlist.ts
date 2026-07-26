@@ -132,15 +132,44 @@ export const watchlistRoute: Route = {
 
       grids.replaceChildren();
 
+      const days = getSettings().staleDays;
       if (watchNext.length > 0) {
-        grids.append(sectionHeader("Watch next"), el("div", { class: "poster-grid" }, ...watchNext.map(card)));
+        grids.append(
+          sectionHeader("Watch next", {
+            title: "Watch next",
+            points: [
+              `Shows you've watched an episode of in the last ${days} days.`,
+              `Shows marked NEW: the most recent episode is unwatched and aired within the last 30 days. These sort to the front.`,
+              `Shows where a whole new season is waiting and you've finished everything before it — kept here for ${NEW_SEASON_GRACE_DAYS} days after the season premiered, then treated as backlog.`,
+              `The "${days} days" cutoff is yours to change, under Settings → Preferences.`,
+            ],
+          }),
+          el("div", { class: "poster-grid" }, ...watchNext.map(card)),
+        );
       }
       if (stale.length > 0) {
-        grids.append(sectionHeader("Haven't watched for a while"), el("div", { class: "poster-grid" }, ...stale.map(card)));
+        grids.append(
+          sectionHeader("Haven't watched for a while", {
+            title: "Haven't watched for a while",
+            points: [
+              `Shows you've started but haven't watched an episode of in over ${days} days, and that have no fresh episode waiting.`,
+              "Most recently watched first, so where you left off is at the top.",
+              "A show returns to Watch next the moment you watch an episode, or when a new episode airs.",
+            ],
+          }),
+          el("div", { class: "poster-grid" }, ...stale.map(card)),
+        );
       }
       if (notStarted.length > 0) {
         grids.append(
-          sectionHeader("Haven't started"),
+          sectionHeader("Haven't started", {
+            title: "Haven't started",
+            points: [
+              "Shows on your Trakt watchlist that you haven't watched a single episode of yet.",
+              "Newest addition first.",
+              "Watching one episode moves the show up into Watch next.",
+            ],
+          }),
           el(
             "div",
             { class: "poster-grid" },
