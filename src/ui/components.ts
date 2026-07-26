@@ -79,12 +79,53 @@ export interface PosterCardOpts {
   streamable?: boolean;
 }
 
+/**
+ * Live <img> nodes keyed by URL, reused across re-renders. A fresh <img> makes
+ * the browser re-decode even an HTTP-cached image, so the poster sits on its
+ * grey background for a frame; grids rebuild dozens of times while a bulk TMDB
+ * refresh streams in, and that reads as flickering. Moving the same node into
+ * the new card keeps the pixels on screen.
+ */
+const posterImgs = new Map<string, HTMLImageElement>();
+const POSTER_IMG_LIMIT = 500;
+
+/** One node can only be in one place, so the same URL twice in a single render
+ * pass has to fall back to a throwaway <img> for the duplicate. */
+const claimed = new Set<string>();
+let claimResetQueued = false;
+
+function posterImg(src: string, alt: string): HTMLImageElement {
+  if (!claimResetQueued) {
+    claimResetQueued = true;
+    // A render pass is synchronous, so this clears between passes.
+    queueMicrotask(() => {
+      claimed.clear();
+      claimResetQueued = false;
+    });
+  }
+
+  const cached = posterImgs.get(src);
+  if (cached && !claimed.has(src)) {
+    claimed.add(src);
+    return cached;
+  }
+
+  const img = el("img", { class: "poster", loading: "lazy", alt });
+  img.src = src;
+  if (cached) return img; // duplicate within this pass — not cached
+  if (posterImgs.size >= POSTER_IMG_LIMIT) {
+    const oldest = posterImgs.keys().next().value;
+    if (oldest !== undefined) posterImgs.delete(oldest);
+  }
+  posterImgs.set(src, img);
+  claimed.add(src);
+  return img;
+}
+
 export function posterCard(opts: PosterCardOpts): HTMLElement {
   const card = el("a", { class: "poster-card", href: opts.href });
   if (opts.posterUrl) {
-    const img = el("img", { class: "poster", loading: "lazy", alt: opts.title });
-    img.src = opts.posterUrl;
-    card.append(img);
+    card.append(posterImg(opts.posterUrl, opts.title));
   } else {
     card.append(el("div", { class: "poster placeholder" }, el("span", {}, opts.title)));
   }
