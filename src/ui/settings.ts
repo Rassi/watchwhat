@@ -4,6 +4,7 @@ import { getSettings, saveSettings, isAuthenticated, isConfigured } from "../dat
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
 import { reconcileCard } from "./reconcile";
 import { applyTheme } from "../theme";
+import { hardReload } from "./refresh";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -192,6 +193,23 @@ export const settingsRoute: Route = {
       clearBtn,
     );
 
-    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, reconcileCard(), dataCard);
+    // --- App version ---
+    const reloadBtn = el("button", { class: "btn" }, "Reload app");
+    reloadBtn.addEventListener("click", () => hardReload());
+    const versionCard = el(
+      "div",
+      { class: "card" },
+      el("h2", {}, "App version"),
+      el("p", {}, `Build ${__BUILD_STAMP__}`),
+      el(
+        "p",
+        {},
+        "Reload fetches the latest deployed build. Handy on an iPhone home-screen app, which has no reload button — " +
+          "you can also pull down from the top of any list to do the same.",
+      ),
+      reloadBtn,
+    );
+
+    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, reconcileCard(), dataCard, versionCard);
   },
 };
