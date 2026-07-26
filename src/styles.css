@@ -592,6 +592,35 @@ button {
   overflow: hidden;
 }
 
+/* ---------- pull to refresh ---------- */
+.pull-refresh {
+  position: fixed;
+  top: calc(-40px + env(safe-area-inset-top));
+  left: 50%;
+  width: 170px;
+  margin-left: -85px;
+  padding: 8px 0;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 30;
+  transition: opacity 0.15s;
+}
+
+.pull-refresh.visible {
+  opacity: 1;
+}
+
+.pull-refresh.ready {
+  color: var(--text);
+}
+
 /* ---------- toasts & modal ---------- */
 #toasts {
   position: fixed;

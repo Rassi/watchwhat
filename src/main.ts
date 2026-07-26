@@ -10,8 +10,11 @@ import { searchRoute } from "./ui/search";
 import { settingsRoute } from "./ui/settings";
 import { applyTheme } from "./theme";
 import { ensureUnlocked } from "./gate";
+import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
 
 applyTheme();
+stripReloadParam();
+installPullToRefresh();
 await ensureUnlocked();
 
 registerRoute(watchlistRoute);
