@@ -207,6 +207,29 @@ async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
 }
 
 /**
+ * Batches `onUpdate` calls from a bulk fetch: the first result repaints
+ * immediately, then at most one repaint per 300ms, plus a final one when the
+ * batch ends. Views rebuild their whole grid per update, so notifying every few
+ * items made a big refresh (a week-stale library) janky on a phone.
+ */
+function batchNotify(onUpdate?: () => void): { tick: () => void; done: () => void } {
+  let pending = 0;
+  let lastAt = 0;
+  return {
+    tick: () => {
+      pending++;
+      if (Date.now() - lastAt < 300) return;
+      lastAt = Date.now();
+      pending = 0;
+      onUpdate?.();
+    },
+    done: () => {
+      if (pending > 0) onUpdate?.();
+    },
+  };
+}
+
+/**
  * Ensure progress records exist and are fresh for the given shows.
  * Fetches in the background with limited concurrency; `onUpdate` fires after
  * each batch of updates so the UI can re-render progressively.
@@ -220,21 +243,18 @@ export async function ensureProgress(
   const stale = traktIds.filter((id) => progressIsStale(lib, id, opts?.skipFinishedTtl));
   if (stale.length === 0) return;
 
-  let pendingNotify = 0;
+  const notify = batchNotify(onUpdate);
   await mapWithConcurrency(stale, 2, async (traktId) => {
     try {
       const rec = toProgressRec(traktId, await trakt.getShowProgress(traktId));
       lib.progress.set(traktId, rec);
       await dbPut("progress", traktId, rec);
-      if (++pendingNotify >= 5) {
-        pendingNotify = 0;
-        onUpdate?.();
-      }
+      notify.tick();
     } catch {
       // Leave stale/missing; next render tries again.
     }
   });
-  if (pendingNotify > 0) onUpdate?.();
+  notify.done();
 }
 
 /** Ensure TMDB artwork paths for the given shows (30-day TTL). */
@@ -247,7 +267,7 @@ export async function ensureImages(lib: Library, traktIds: number[], onUpdate?: 
   });
   if (missing.length === 0) return;
 
-  let pendingNotify = 0;
+  const notify = batchNotify(onUpdate);
   await mapWithConcurrency(missing, 4, async (traktId) => {
     const show = lib.shows.get(traktId)!;
     const images = await fetchShowImages(show.ids.tmdb!);
@@ -257,12 +277,9 @@ export async function ensureImages(lib: Library, traktIds: number[], onUpdate?: 
     if (!show.overview && images.overview) show.overview = images.overview;
     show.imagesFetchedAt = Date.now();
     await dbPut("shows", traktId, show);
-    if (++pendingNotify >= 8) {
-      pendingNotify = 0;
-      onUpdate?.();
-    }
+    notify.tick();
   });
-  if (pendingNotify > 0) onUpdate?.();
+  notify.done();
 }
 
 /** Merge TMDB stills/overviews/air dates/ratings + cast into an episodes record (best effort). */
@@ -454,7 +471,7 @@ export async function ensureMovieDetails(
   });
   if (stale.length === 0) return;
 
-  let pendingNotify = 0;
+  const notify = batchNotify(onUpdate);
   await mapWithConcurrency(stale, 4, async (traktId) => {
     const movie = movies.get(traktId)!;
     const extras = await fetchMovieExtras(movie.ids.tmdb!);
@@ -467,12 +484,9 @@ export async function ensureMovieDetails(
     movie.digitalRelease = extras.digitalRelease;
     movie.tmdbFetchedAt = Date.now();
     await dbPut("movies", traktId, movie);
-    if (++pendingNotify >= 8) {
-      pendingNotify = 0;
-      onUpdate?.();
-    }
+    notify.tick();
   });
-  if (pendingNotify > 0) onUpdate?.();
+  notify.done();
 }
 
 export async function setMovieWatched(movies: Map<number, MovieRec>, movie: MovieRec, watched: boolean): Promise<void> {
