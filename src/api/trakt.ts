@@ -37,6 +37,8 @@ export interface TraktShow {
   runtime?: number | null;
   airs?: { day: string | null; time: string | null; timezone: string | null };
   rating?: number | null;
+  /** Number of users who rated it — the only popularity signal search returns. */
+  votes?: number;
   trailer?: string | null;
 }
 
@@ -80,6 +82,8 @@ export interface TraktMovie {
   overview?: string;
   runtime?: number | null;
   rating?: number | null;
+  /** Number of users who rated it — the only popularity signal search returns. */
+  votes?: number;
   genres?: string[];
   released?: string | null;
   trailer?: string | null;
@@ -447,12 +451,30 @@ export interface MovieSearchResult {
   movie: TraktMovie;
 }
 
+/** A hit from a multi-type search: `type` says which of the two is populated. */
+export interface CombinedSearchResult {
+  type: "movie" | "show";
+  score: number;
+  movie?: TraktMovie;
+  show?: TraktShow;
+}
+
+/**
+ * Trakt orders search hits purely by text relevance and hands out identical
+ * scores constantly, which leaves the order among equals arbitrary. Break those
+ * ties by rating votes so the better-known title comes first. Deliberately does
+ * not reorder across different scores — that would sink an exact match below a
+ * popular partial one.
+ */
+function sortByRelevance<T extends { score: number }>(items: T[], votesOf: (item: T) => number | undefined): T[] {
+  return [...items].sort((a, b) => b.score - a.score || (votesOf(b) ?? 0) - (votesOf(a) ?? 0));
+}
+
 export async function searchMovies(query: string): Promise<MovieSearchResult[]> {
-  return (
-    await request<MovieSearchResult[]>("/search/movie", {
-      query: { query, extended: "full", limit: 30 },
-    })
-  ).data;
+  const { data } = await request<MovieSearchResult[]>("/search/movie", {
+    query: { query, extended: "full", limit: 30 },
+  });
+  return sortByRelevance(data, (r) => r.movie.votes);
 }
 
 export async function getMovieSummary(movieId: number): Promise<TraktMovie> {
@@ -515,11 +537,21 @@ export async function removeShowFromWatchlist(ids: TraktIds): Promise<void> {
 }
 
 export async function searchShows(query: string): Promise<SearchResult[]> {
-  return (
-    await request<SearchResult[]>("/search/show", {
-      query: { query, extended: "full", limit: 30 },
-    })
-  ).data;
+  const { data } = await request<SearchResult[]>("/search/show", {
+    query: { query, extended: "full", limit: 30 },
+  });
+  return sortByRelevance(data, (r) => r.show.votes);
+}
+
+/**
+ * Movies and shows in one request. Trakt takes comma-separated types and tags
+ * each hit with `type`, so the two kinds come back interleaved by relevance.
+ */
+export async function searchAll(query: string): Promise<CombinedSearchResult[]> {
+  const { data } = await request<CombinedSearchResult[]>("/search/movie,show", {
+    query: { query, extended: "full", limit: 30 },
+  });
+  return sortByRelevance(data, (r) => (r.type === "movie" ? r.movie?.votes : r.show?.votes));
 }
 
 /** "Stop tracking": hide a show from progress (TV Time's remove-show equivalent). */
