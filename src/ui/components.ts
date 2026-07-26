@@ -107,6 +107,10 @@ function posterImg(src: string, alt: string): HTMLImageElement {
   const cached = posterImgs.get(src);
   if (cached && !claimed.has(src)) {
     claimed.add(src);
+    // Re-insert so eviction below is least-recently-used, not insertion order:
+    // a long list plus a Search detour shouldn't evict what's still on screen.
+    posterImgs.delete(src);
+    posterImgs.set(src, cached);
     return cached;
   }
 
@@ -114,8 +118,8 @@ function posterImg(src: string, alt: string): HTMLImageElement {
   img.src = src;
   if (cached) return img; // duplicate within this pass — not cached
   if (posterImgs.size >= POSTER_IMG_LIMIT) {
-    const oldest = posterImgs.keys().next().value;
-    if (oldest !== undefined) posterImgs.delete(oldest);
+    const lru = posterImgs.keys().next().value; // Map iterates in insertion order
+    if (lru !== undefined) posterImgs.delete(lru);
   }
   posterImgs.set(src, img);
   claimed.add(src);
