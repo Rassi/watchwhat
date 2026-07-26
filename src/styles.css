@@ -553,6 +553,20 @@ button {
   font-size: 15px;
 }
 
+/* MOVIE / SHOW label, only in combined results */
+.search-row .info .type-chip {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
 .search-row .info .o {
   font-size: 12px;
   color: var(--text-dim);

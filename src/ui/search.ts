@@ -1,6 +1,6 @@
 import type { Route } from "../router";
 import { dialog, el, toast, withSyncIndicator } from "./components";
-import { searchShows, searchMovies, type TraktMovie, type TraktShow } from "../api/trakt";
+import { searchAll, searchShows, searchMovies, type TraktMovie, type TraktShow } from "../api/trakt";
 import { fetchMoviePoster, fetchShowImages, posterUrl } from "../api/tmdb";
 import { addToWatchlist, loadLibrary, loadMovies, removeFromWatchlist, setMovieOnWatchlist } from "../data/sync";
 import { isAuthenticated, isConfigured } from "../data/settings";
@@ -17,13 +17,20 @@ export const searchRoute: Route = {
 
     const lib = await loadLibrary();
     const movies = await loadMovies();
-    let mode: "show" | "movie" = "show";
+    type Mode = "all" | "show" | "movie";
+    let mode: Mode = "all";
 
-    const input = el("input", { type: "search", placeholder: "Search TV shows…", autofocus: "true" });
+    const placeholders: Record<Mode, string> = {
+      all: "Search movies & TV shows…",
+      show: "Search TV shows…",
+      movie: "Search movies…",
+    };
+
+    const input = el("input", { type: "search", placeholder: placeholders[mode], autofocus: "true" });
     const results = el("div", {});
 
     const modeTabs = el("div", { class: "home-tabs" });
-    const makeModeTab = (label: string, value: "show" | "movie"): HTMLElement => {
+    const makeModeTab = (label: string, value: Mode): HTMLElement => {
       const tab = el("a", { class: `home-tab ${mode === value ? "active" : ""}`, href: "#/search" }, label);
       tab.addEventListener("click", (e) => {
         e.preventDefault();
@@ -31,13 +38,13 @@ export const searchRoute: Route = {
         mode = value;
         modeTabs.querySelectorAll(".home-tab").forEach((t) => t.classList.remove("active"));
         tab.classList.add("active");
-        input.placeholder = mode === "show" ? "Search TV shows…" : "Search movies…";
+        input.placeholder = placeholders[mode];
         runSearch();
         input.focus();
       });
       return tab;
     };
-    modeTabs.append(makeModeTab("SHOWS", "show"), makeModeTab("MOVIES", "movie"));
+    modeTabs.append(makeModeTab("ALL", "all"), makeModeTab("SHOWS", "show"), makeModeTab("MOVIES", "movie"));
 
     container.append(modeTabs, el("div", { class: "search-bar" }, input), results);
     input.focus();
@@ -49,7 +56,12 @@ export const searchRoute: Route = {
     const inWatchlist = (traktId: number): boolean => lib.watchlist.some((e) => e.traktId === traktId);
     const isStarted = (traktId: number): boolean => (lib.watched.get(traktId)?.plays ?? 0) > 0;
 
-    function showRow(show: TraktShow): HTMLElement {
+    /** In combined results the two kinds sit side by side, so label them. */
+    function typeChip(label: "SHOW" | "MOVIE"): HTMLElement {
+      return el("span", { class: "type-chip" }, label);
+    }
+
+    function showRow(show: TraktShow, withType = false): HTMLElement {
       const img = el("img", { class: "mini-placeholder", loading: "lazy", alt: "" }) as HTMLImageElement;
       const cached = lib.shows.get(show.ids.trakt)?.poster;
       if (cached) img.src = posterUrl(cached, "w154")!;
@@ -100,16 +112,13 @@ export const searchRoute: Route = {
         refreshAction();
       });
 
+      const title = el("div", { class: "t" }, `${show.title}${show.year ? ` (${show.year})` : ""}`);
+      if (withType) title.append(typeChip("SHOW"));
       const rowEl = el(
         "div",
         { class: "search-row" },
         img,
-        el(
-          "div",
-          { class: "info" },
-          el("div", { class: "t" }, `${show.title}${show.year ? ` (${show.year})` : ""}`),
-          el("div", { class: "o" }, show.overview ?? ""),
-        ),
+        el("div", { class: "info" }, title, el("div", { class: "o" }, show.overview ?? "")),
         action,
       );
       rowEl.addEventListener("click", () => (location.hash = `#/show/${show.ids.trakt}`));
@@ -135,7 +144,7 @@ export const searchRoute: Route = {
       };
     }
 
-    function movieRow(movie: TraktMovie): HTMLElement {
+    function movieRow(movie: TraktMovie, withType = false): HTMLElement {
       const img = el("img", { class: "mini-placeholder", loading: "lazy", alt: "" }) as HTMLImageElement;
       const cached = movies.get(movie.ids.trakt)?.poster;
       if (cached) img.src = posterUrl(cached, "w154")!;
@@ -188,16 +197,13 @@ export const searchRoute: Route = {
         refreshAction();
       });
 
+      const title = el("div", { class: "t" }, `${movie.title}${movie.year ? ` (${movie.year})` : ""}`);
+      if (withType) title.append(typeChip("MOVIE"));
       const rowEl = el(
         "div",
         { class: "search-row" },
         img,
-        el(
-          "div",
-          { class: "info" },
-          el("div", { class: "t" }, `${movie.title}${movie.year ? ` (${movie.year})` : ""}`),
-          el("div", { class: "o" }, movie.overview ?? ""),
-        ),
+        el("div", { class: "info" }, title, el("div", { class: "o" }, movie.overview ?? "")),
         action,
       );
       rowEl.addEventListener("click", () => (location.hash = `#/movie/${movie.ids.trakt}`));
@@ -215,9 +221,17 @@ export const searchRoute: Route = {
       debounce = window.setTimeout(async () => {
         const seq = ++requestSeq;
         try {
-          if (mode === "show") {
-            const found = await searchShows(query);
+          if (mode === "all") {
+            const found = await searchAll(query);
             if (seq !== requestSeq) return; // a newer search superseded this one
+            const rows = found
+              .map((r) => (r.type === "movie" ? (r.movie ? movieRow(r.movie, true) : null) : r.show ? showRow(r.show, true) : null))
+              .filter((row): row is HTMLElement => row !== null);
+            results.replaceChildren(...rows);
+            if (rows.length === 0) results.append(el("div", { class: "empty-note" }, "Nothing found."));
+          } else if (mode === "show") {
+            const found = await searchShows(query);
+            if (seq !== requestSeq) return;
             results.replaceChildren(...found.map((r) => showRow(r.show)));
             if (found.length === 0) results.append(el("div", { class: "empty-note" }, "No shows found."));
           } else {
