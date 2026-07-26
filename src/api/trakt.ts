@@ -288,7 +288,21 @@ export async function pollForDeviceToken(code: DeviceCode, signal?: AbortSignal)
   throw new TraktError(410, "Code expired — try again");
 }
 
-export async function refreshTokens(): Promise<Tokens> {
+let refreshInFlight: Promise<Tokens> | null = null;
+
+/**
+ * Trakt rotates the refresh token on every use, so two refreshes racing would
+ * send an already-consumed token and the loser would look like an expired
+ * session. Opening the app fires many requests at once, so share one refresh.
+ */
+export function refreshTokens(): Promise<Tokens> {
+  refreshInFlight ??= doRefreshTokens().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+async function doRefreshTokens(): Promise<Tokens> {
   const { traktClientId, traktClientSecret } = getSettings();
   const tokens = getTokens();
   if (!tokens) throw new TraktError(401, "Not logged in to Trakt");
@@ -305,8 +319,14 @@ export async function refreshTokens(): Promise<Tokens> {
     }),
   });
   if (!res.ok) {
-    clearTokens();
-    throw new TraktError(res.status, "Trakt session expired — please log in again");
+    // Only a rejected grant means the session is really gone. 5xx, rate limits
+    // and the like are transient — keep the tokens so a retry can succeed.
+    if (res.status === 400 || res.status === 401) {
+      // Don't wipe tokens another refresh stored while this one was in flight.
+      if (getTokens()?.refreshToken === tokens.refreshToken) clearTokens();
+      throw new TraktError(res.status, "Trakt session expired — please log in again");
+    }
+    throw new TraktError(res.status, `Trakt token refresh failed: ${res.status}`);
   }
   return storeTokenResponse((await res.json()) as TokenResponse);
 }
