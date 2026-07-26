@@ -36,13 +36,13 @@ export const moviesRoute: Route = {
     const content = el("div", {});
     container.append(content);
 
-    const card = (movie: MovieRec, badge: string | null = null): HTMLElement =>
+    const card = (movie: MovieRec): HTMLElement =>
       posterCard({
         title: movie.title,
         href: `#/movie/${movie.traktId}`,
         posterUrl: posterUrl(movie.poster),
         progress: null,
-        badge,
+        badge: null,
         streamable: isStreamable(movie.providers),
         // Keep the title as subtitle so in-page text search finds movies.
         subtitle: `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
@@ -80,7 +80,9 @@ export const moviesRoute: Route = {
         };
         select.append(optionFor("watchlist", "Watchlist", all.filter((m) => m.onWatchlist && m.plays === 0).length));
         for (const list of lists) {
-          select.append(optionFor(String(list.traktId), list.name, all.filter((m) => m.customLists?.includes(list.traktId)).length));
+          select.append(
+            optionFor(String(list.traktId), list.name, all.filter((m) => m.customLists?.includes(list.traktId) && m.plays === 0).length),
+          );
         }
         select.addEventListener("change", () => {
           sessionStorage.setItem(ACTIVE_LIST_KEY, select.value);
@@ -103,17 +105,25 @@ export const moviesRoute: Route = {
           );
         }
       } else {
-        // Custom lists show everything on them; watched items get a check badge.
-        const items = all
-          .filter((m) => m.customLists?.includes(activeList.traktId))
-          .sort((a, b) => addedAt(b).localeCompare(addedAt(a)));
+        // Custom lists hide watched movies (same rule as the watchlist); the movie
+        // stays on the Trakt list, so unmarking it brings it back here.
+        const onList = all.filter((m) => m.customLists?.includes(activeList.traktId));
+        const items = onList.filter((m) => m.plays === 0).sort((a, b) => addedAt(b).localeCompare(addedAt(a)));
         if (items.length > 0) {
           content.append(
             sectionHeader(`${activeList.name} (${items.length})`),
-            el("div", { class: "poster-grid" }, ...items.map((m) => card(m, m.plays > 0 ? "✓" : null))),
+            el("div", { class: "poster-grid" }, ...items.map((m) => card(m))),
           );
         } else {
-          content.append(el("div", { class: "empty-note" }, `"${activeList.name}" has no movies yet — add them on trakt.tv.`));
+          content.append(
+            el(
+              "div",
+              { class: "empty-note" },
+              onList.length > 0
+                ? `You've watched everything on "${activeList.name}".`
+                : `"${activeList.name}" has no movies yet — add them on trakt.tv.`,
+            ),
+          );
         }
       }
     };
