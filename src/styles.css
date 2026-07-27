@@ -360,6 +360,24 @@ button {
   background: var(--track);
 }
 
+/* A run of seasons with nothing left to decide, folded into one row. */
+.season-band {
+  background: none;
+  border: 1px dashed var(--border);
+}
+
+.season-band .season-head h2 {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.season-band .band-note {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 .episode-row {
   display: flex;
   align-items: center;

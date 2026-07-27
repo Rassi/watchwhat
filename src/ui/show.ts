@@ -82,9 +82,14 @@ export const showRoute: Route = {
   },
 };
 
+type SeasonEntry = EpisodesRec["seasons"][number];
+type BandKind = "watched" | "fresh";
+type Band = { band: BandKind; seasons: SeasonEntry[] };
+
 function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec: EpisodesRec): void {
   const expanded = new Set<number>();
   const expandedEpisodes = new Set<string>(); // "season:number" rows showing their description
+  const unfolded = new Set<number>(); // seasons pulled out of a collapsed band
   let activeTab: "about" | "episodes" = "episodes";
   let ratingsSeason =
     episodesRec.seasons.find((s) => s.number > 0 && s.episodes.some((e) => (e.rating ?? 0) > 0))?.number ?? 1;
@@ -103,8 +108,16 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
     if (updated) renderContent();
   });
   const progress0 = lib.progress.get(show.traktId);
-  const firstOpen = progress0?.nextEpisode?.season ?? progress0?.seasons.find((s) => s.completed < s.aired)?.number;
+  // Skip specials when guessing where you're up to — on a show you haven't started they
+  // sort first, and opening the page onto 80-odd specials helps nobody.
+  const firstOpen =
+    progress0?.nextEpisode?.season ?? progress0?.seasons.find((s) => s.number > 0 && s.completed < s.aired)?.number;
   if (firstOpen != null) expanded.add(firstOpen);
+  // The season you'd watch next never folds away, so a show you haven't started can't
+  // collapse into nothing but bands. Without progress that's simply the first season.
+  const numbered = episodesRec.seasons.filter((s) => s.number > 0 && s.episodes.length > 0).map((s) => s.number);
+  const startHere = firstOpen || (numbered.length > 0 ? Math.min(...numbered) : null);
+  if (startHere != null) unfolded.add(startHere);
 
   const rerender = (): void => renderContent();
 
@@ -229,6 +242,84 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       );
     }
   };
+
+  // ---------- folding long season lists ----------
+
+  /**
+   * Shows like Location, Location, Location run to 45 seasons, most of which hold no
+   * decision: they're either finished or never started. Contiguous runs of those fold
+   * into one band row so the seasons you're actually part-way through stay in reach.
+   */
+  const FOLD_MIN_SEASONS = 8; // short shows always list every season
+  const FOLD_MIN_RUN = 3; // folding one or two rows away isn't worth the extra tap
+
+  const seasonTally = (season: SeasonEntry): { aired: number; seen: number } => {
+    const aired = season.episodes.filter((e) => isAired(season.number, e.number));
+    return { aired: aired.length, seen: aired.filter((e) => isWatched(season.number, e.number)).length };
+  };
+
+  /** null for anything still in play — part-watched, unaired, specials, or manually unfolded. */
+  const settledKind = (season: SeasonEntry): BandKind | null => {
+    if (season.number === 0 || unfolded.has(season.number)) return null;
+    const { aired, seen } = seasonTally(season);
+    if (aired === 0) return null;
+    return seen === aired ? "watched" : seen === 0 ? "fresh" : null;
+  };
+
+  const seasonGroups = (ordered: SeasonEntry[]): (SeasonEntry | Band)[] => {
+    const seasons = ordered.filter((s) => s.episodes.length > 0);
+    const canFold = seasons.filter((s) => s.number !== 0).length >= FOLD_MIN_SEASONS;
+
+    const groups: (SeasonEntry | Band)[] = [];
+    for (const season of seasons) {
+      const kind = canFold ? settledKind(season) : null;
+      const last = groups[groups.length - 1];
+      // Keep watched and untouched runs apart — a mixed band couldn't say anything useful.
+      if (kind && last && "band" in last && last.band === kind) last.seasons.push(season);
+      else if (kind) groups.push({ band: kind, seasons: [season] });
+      else groups.push(season);
+    }
+    return groups.flatMap((g) => ("band" in g && g.seasons.length < FOLD_MIN_RUN ? g.seasons : [g]));
+  };
+
+  function renderBand({ band, seasons }: Band): HTMLElement {
+    const totals = seasons.reduce(
+      (acc, s) => {
+        const { aired, seen } = seasonTally(s);
+        return { aired: acc.aired + aired, seen: acc.seen + seen };
+      },
+      { aired: 0, seen: 0 },
+    );
+    const first = seasons[0].number;
+    const last = seasons[seasons.length - 1].number;
+
+    const bar = el("div", { class: "season-bar" });
+    const barFill = el("div", { class: `progress-fill ${band === "watched" ? "complete" : ""}` });
+    barFill.style.height = "100%";
+    barFill.style.width = band === "watched" ? "100%" : "0%";
+    bar.append(barFill);
+
+    const box = el(
+      "div",
+      { class: `season season-band ${band}` },
+      el(
+        "div",
+        { class: "season-head" },
+        el("h2", {}, `Seasons ${first}–${last} ⌄`),
+        el("span", { class: "band-note" }, band === "watched" ? "all watched" : "not started"),
+        el("span", { class: "count" }, `${totals.seen}/${totals.aired}`),
+      ),
+      bar,
+    );
+    box.title = `Show seasons ${first}–${last}`;
+    box.addEventListener("click", () => {
+      // Unfold by season number rather than by range, so marking something watched
+      // inside the band can't silently re-fold the rows out from under you.
+      for (const s of seasons) unfolded.add(s.number);
+      renderContent();
+    });
+    return box;
+  }
 
   // ---------- rendering ----------
 
@@ -562,8 +653,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       return a.number - b.number;
     });
 
-    for (const season of ordered) {
-      if (season.episodes.length === 0) continue;
+    const renderSeason = (season: SeasonEntry): HTMLElement => {
       const label = season.number === 0 ? "Specials" : `Season ${season.number}`;
       const airedEps = season.episodes.filter((e) => isAired(season.number, e.number));
       const watchedInSeason = airedEps.filter((e) => isWatched(season.number, e.number)).length;
@@ -649,7 +739,11 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
           }
         }
       }
-      seasonsWrap.append(seasonBox);
+      return seasonBox;
+    };
+
+    for (const group of seasonGroups(ordered)) {
+      seasonsWrap.append("band" in group ? renderBand(group) : renderSeason(group));
     }
 
     const tabBar = el("div", { class: "show-tabs" });
