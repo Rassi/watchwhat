@@ -76,7 +76,7 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
               })()
             : null,
           p.name,
-          rent ? el("span", { class: "chip-rent", title: "Costs extra — rent or buy" }, "▶$") : null,
+          rent ? el("span", { class: "chip-rent", title: "Costs extra — rent or buy" }, "$") : null,
         );
         chips.append(chip);
       }
