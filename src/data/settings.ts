@@ -28,7 +28,8 @@ const defaults: AppSettings = {
   theme: "auto",
   // Free-to-air services are left out on purpose: TMDB reports them as free/ads, so they are
   // marked from the data. Listing them here would only claim you pay for them.
-  myServices: "Disney+, Netflix, Prime, Hulu, Paramount+, HBO Max, Apple TV+",
+  // "@US/DK" limits an account to the countries it can actually play in; see myServiceMatcher.
+  myServices: "Disney+@US/DK, Netflix@US/DK, Prime, Hulu, Paramount+@US/DK, HBO Max@US/DK, Apple TV+",
   watchCountries: "DK, US, GB",
 };
 
