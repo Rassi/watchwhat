@@ -712,6 +712,44 @@ button {
   margin-top: 8px;
 }
 
+/* Current-vs-default table in the "Reset preferences?" dialog. */
+.reset-diff {
+  margin: 0 0 16px;
+  font-size: 13px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.reset-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  overflow-wrap: anywhere;
+}
+
+.reset-row.head {
+  border-top: 0;
+  font-weight: 700;
+  color: #444;
+}
+
+.reset-label {
+  font-weight: 600;
+  color: #111;
+}
+
+.reset-from {
+  color: #444;
+  text-decoration: line-through;
+}
+
+.reset-to {
+  color: #111;
+  font-weight: 600;
+}
+
 .modal-buttons {
   display: flex;
   flex-wrap: wrap;

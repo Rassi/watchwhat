@@ -1,6 +1,13 @@
 import type { Route } from "../router";
-import { el, toast } from "./components";
-import { getSettings, saveSettings, isAuthenticated, isConfigured } from "../data/settings";
+import { el, toast, dialog } from "./components";
+import {
+  getSettings,
+  saveSettings,
+  isAuthenticated,
+  isConfigured,
+  changedPreferences,
+  resetPreferences,
+} from "../data/settings";
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
 import { applyTheme } from "../theme";
 import { hardReload } from "./refresh";
@@ -163,6 +170,39 @@ export const settingsRoute: Route = {
       toast("Where-to-watch countries saved");
     });
 
+    // Anything left at its default keeps following the default as the app ships new ones,
+    // so it's worth showing which preferences this device has pinned by hand.
+    const changed = changedPreferences();
+    const resetBtn = el("button", { class: "btn danger" }, "Reset preferences to defaults");
+    resetBtn.addEventListener("click", async () => {
+      const rows = changedPreferences().map((c) =>
+        el(
+          "div",
+          { class: "reset-row" },
+          el("span", { class: "reset-label" }, c.label),
+          el("span", { class: "reset-from" }, c.current),
+          el("span", { class: "reset-to" }, c.fallback),
+        ),
+      );
+      const body = el(
+        "div",
+        {},
+        el("p", {}, "These preferences would change. Your Trakt and TMDB credentials are not touched."),
+        el("div", { class: "reset-diff" }, el("div", { class: "reset-row head" }, el("span", {}, "Setting"), el("span", {}, "Now"), el("span", {}, "Default")), ...rows),
+      );
+      const choice = await dialog("Reset preferences?", body, [
+        { label: "Cancel", value: "cancel", kind: "plain" },
+        { label: "Reset", value: "reset", kind: "danger" },
+      ]);
+      if (choice !== "reset") return;
+      resetPreferences();
+      applyTheme();
+      container.replaceChildren();
+      settingsRoute.render(container, []);
+      toast("Preferences reset to defaults");
+    });
+    if (changed.length === 0) resetBtn.setAttribute("disabled", "");
+
     const prefsCard = el(
       "div",
       { class: "card" },
@@ -176,6 +216,14 @@ export const settingsRoute: Route = {
       el("div", { class: "field" }, el("label", {}, "Theme"), themeSelect),
       field("My streaming services (comma-separated — highlighted under Where to watch)", servicesInput),
       field("Where-to-watch countries (ISO codes, comma-separated)", countriesInput),
+      el(
+        "p",
+        { class: "field-help" },
+        changed.length === 0
+          ? "All preferences are on their defaults, so they update automatically when the app ships new ones."
+          : `Changed by you: ${changed.map((c) => c.label).join(", ")}. These stay put when the app's defaults change.`,
+      ),
+      resetBtn,
     );
 
     // --- Data ---
