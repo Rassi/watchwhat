@@ -330,6 +330,12 @@ export const settingsRoute: Route = {
       ),
       prefField("Theme", themeSelect, "theme"),
       prefField("My streaming services (comma-separated — highlighted under Where to watch)", servicesInput, "myServices"),
+      el(
+        "p",
+        { class: "field-help" },
+        'A subscription only counts in the countries it works in: write "Netflix@DK/US" to limit one. ' +
+          "A plain name counts everywhere. Free-to-air services don't belong here — they're detected automatically.",
+      ),
       prefField("Where-to-watch countries (ISO codes, comma-separated)", countriesInput, "watchCountries"),
       el(
         "p",

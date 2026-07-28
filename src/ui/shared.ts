@@ -22,12 +22,28 @@ function watchCountries(): string[] {
   return getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
 }
 
-/** Tests a provider name against the user's own services. */
-function myServiceMatcher(): (name: string) => boolean {
-  const mine = getSettings().myServices.split(",").map(normalizeService).filter(Boolean);
-  return (name: string): boolean => {
+/**
+ * Tests a provider name against the user's own services, in a given country. A subscription
+ * is not worldwide — a Netflix account in one country is no help in another — so an entry may
+ * be limited with "Netflix@DK/US". A bare entry counts everywhere.
+ */
+function myServiceMatcher(): (name: string, country: string) => boolean {
+  const mine = getSettings()
+    .myServices.split(",")
+    .map((raw) => {
+      const [namePart, countryPart] = raw.split("@");
+      const name = normalizeService(namePart);
+      const countries = (countryPart ?? "").split("/").map((c) => c.trim().toUpperCase()).filter(Boolean);
+      return { name, countries: countries.length > 0 ? countries : null };
+    })
+    .filter((m) => m.name !== "");
+  return (name: string, country: string): boolean => {
     const normalized = normalizeService(name);
-    return mine.some((m) => normalized.includes(m) || m.includes(normalized));
+    return mine.some(
+      (m) =>
+        (normalized.includes(m.name) || m.name.includes(normalized)) &&
+        (m.countries === null || m.countries.includes(country)),
+    );
   };
 }
 
@@ -56,7 +72,7 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
       // then per-title rentals.
       const rank = (p: { name: string; kind: string }): number => {
         if (p.kind === "rent") return 3;
-        if (haveIt(p.name)) return 0;
+        if (haveIt(p.name, cc)) return 0;
         return p.kind === "free" || p.kind === "ads" ? 1 : 2;
       };
       const list = [...seen.values()].sort((a, b) => rank(a) - rank(b));
@@ -68,7 +84,7 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
         const chip = el(
           "a",
           {
-            class: `provider-chip ${rent ? "rent" : haveIt(p.name) ? "have" : free ? "free" : ""}`,
+            class: `provider-chip ${rent ? "rent" : haveIt(p.name, cc) ? "have" : free ? "free" : ""}`,
             href: entry.link ?? "#",
             target: "_blank",
             rel: "noopener",
@@ -134,7 +150,7 @@ export function watchBadge(providers: ProvidersRecord | undefined): WatchBadge |
   for (const cc of watchCountries()) {
     for (const p of providers[cc]?.providers ?? []) {
       if (p.kind === "rent") rent = true;
-      else if (haveIt(p.name)) return "mine";
+      else if (haveIt(p.name, cc)) return "mine";
       else if (p.kind === "free" || p.kind === "ads") free = true;
       else stream = true;
     }
