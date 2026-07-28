@@ -185,8 +185,13 @@ button {
   padding-left: 2px; /* optically center the ▶ */
 }
 
-/* On a service you pay for — the one worth spotting from across the grid. */
+/* Costs you nothing extra: green for a service you already pay for, yellow for free to all. */
 .poster-card .stream-badge.mine {
+  background: var(--green);
+  color: #fff;
+}
+
+.poster-card .stream-badge.free {
   background: var(--accent);
   color: #000;
 }
@@ -1340,23 +1345,24 @@ a.cast-card {
   object-fit: cover;
 }
 
+/* Green: already covered by something you pay for. */
 .provider-chip.have {
-  background: color-mix(in srgb, var(--accent) 25%, var(--bg-raised));
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--green) 25%, var(--bg-raised));
+  border-color: var(--green);
 }
 
-/* Free to anyone — no subscription, no rental. Worth spotting in a long row. */
+/* Yellow: free to anyone — no subscription, no rental. */
 .provider-chip.free {
-  background: color-mix(in srgb, #12a150 18%, var(--bg-raised));
-  border-color: color-mix(in srgb, #12a150 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 25%, var(--bg-raised));
+  border-color: var(--accent);
 }
 
 .chip-free {
   margin-left: 5px;
   padding: 1px 5px;
   border-radius: 4px;
-  background: #12a150;
-  color: #fff;
+  background: var(--accent);
+  color: #000;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.3px;

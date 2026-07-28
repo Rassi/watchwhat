@@ -94,10 +94,11 @@ export interface PosterCardOpts {
   badge?: string | null;
   subtitle?: string | null;
   /**
-   * Small chip (top-right): "mine" is a ▶ in accent for a service you pay for, "stream" the
-   * same in grey for anywhere else, "rent" a ▶$ for titles that only come at extra cost.
+   * Small chip (top-right), coloured by what it would cost you: "mine" a green ▶ for a
+   * service you pay for, "free" a yellow ▶ for free to anyone, "stream" a grey ▶ for a
+   * subscription you don't have, "rent" a grey $ for paying per title.
    */
-  watch?: "mine" | "stream" | "rent" | null;
+  watch?: "mine" | "free" | "stream" | "rent" | null;
 }
 
 /**
@@ -159,9 +160,11 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
     const label =
       opts.watch === "mine"
         ? "On one of your streaming services"
-        : opts.watch === "rent"
-          ? "Available to rent or buy"
-          : "Available for streaming";
+        : opts.watch === "free"
+          ? "Free to watch, possibly with ads"
+          : opts.watch === "rent"
+            ? "Available to rent or buy"
+            : "Available for streaming";
     // Rent shows the coin alone: one clean shape per state beats a play mark with something
     // bolted onto it, and the badge's position already implies "you can watch this".
     card.append(el("span", { class: `stream-badge ${opts.watch}`, title: label }, opts.watch === "rent" ? "$" : "▶"));

@@ -114,26 +114,32 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
   );
 }
 
-/** "mine" = on a service you pay for, "stream" = included somewhere else, "rent" = costs extra. */
-export type WatchBadge = "mine" | "stream" | "rent";
+/**
+ * "mine" = on a service you pay for, "free" = free to anyone (possibly with ads),
+ * "stream" = needs a subscription you don't have, "rent" = costs extra per title.
+ */
+export type WatchBadge = "mine" | "free" | "stream" | "rent";
 
 /**
- * Best badge for a poster, in the order you'd care about it. Rent only wins when nothing
- * streams it, so paying per title is never suggested over something already included.
+ * Best badge for a poster, ranked the same way the chips are: by what it would cost you.
+ * Rent only wins when nothing streams it, so paying per title is never suggested over
+ * something already included.
  */
 export function watchBadge(providers: ProvidersRecord | undefined): WatchBadge | null {
   if (!providers) return null;
   const haveIt = myServiceMatcher();
+  let free = false;
   let stream = false;
   let rent = false;
   for (const cc of watchCountries()) {
     for (const p of providers[cc]?.providers ?? []) {
       if (p.kind === "rent") rent = true;
       else if (haveIt(p.name)) return "mine";
+      else if (p.kind === "free" || p.kind === "ads") free = true;
       else stream = true;
     }
   }
-  return stream ? "stream" : rent ? "rent" : null;
+  return free ? "free" : stream ? "stream" : rent ? "rent" : null;
 }
 
 export function castStripCard(cast: CastMemberRec[] | undefined): HTMLElement | null {
