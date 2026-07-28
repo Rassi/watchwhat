@@ -162,9 +162,9 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
         : opts.watch === "rent"
           ? "Available to rent or buy"
           : "Available for streaming";
-    // Always the same play mark; "rent" adds a coin via CSS rather than a second glyph inline,
-    // which at this size just reads as two symbols colliding.
-    card.append(el("span", { class: `stream-badge ${opts.watch}`, title: label }, "▶"));
+    // Rent shows the coin alone: one clean shape per state beats a play mark with something
+    // bolted onto it, and the badge's position already implies "you can watch this".
+    card.append(el("span", { class: `stream-badge ${opts.watch}`, title: label }, opts.watch === "rent" ? "$" : "▶"));
   }
   if (opts.progress != null) {
     const bar = el("div", { class: "progress-track" });

@@ -191,26 +191,11 @@ button {
   color: #000;
 }
 
-/*
- * Rent keeps the same play mark and gains a coin notched at the corner. Overlaying a "$" on
- * the triangle, or setting the two side by side, turns to mud at 22px — a separate small
- * shape stays legible, and the ring keeps it off whatever poster is behind it.
- */
-.poster-card .stream-badge.rent::after {
-  content: "$";
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: #fff;
-  color: #111;
-  font-size: 9px;
+/* Rent is a coin on its own — same circle, one glyph, no optical nudge for a triangle. */
+.poster-card .stream-badge.rent {
+  padding-left: 0;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 13px;
-  text-align: center;
-  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.65);
 }
 
 .progress-track {
