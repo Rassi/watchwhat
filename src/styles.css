@@ -185,6 +185,22 @@ button {
   padding-left: 2px; /* optically center the ▶ */
 }
 
+/* On a service you pay for — the one worth spotting from across the grid. */
+.poster-card .stream-badge.mine {
+  background: var(--accent);
+  color: #000;
+}
+
+/* Costs extra, so it stays quiet and needs room for the second glyph. */
+.poster-card .stream-badge.rent {
+  width: auto;
+  min-width: 22px;
+  padding: 0 5px;
+  border-radius: 11px;
+  font-size: 9px;
+  letter-spacing: -0.5px;
+}
+
 .progress-track {
   height: 5px;
   background: var(--track);
@@ -1330,6 +1346,20 @@ a.cast-card {
 .provider-chip.have {
   background: color-mix(in srgb, var(--accent) 25%, var(--bg-raised));
   border-color: var(--accent);
+}
+
+/* Rent sits apart from anything a subscription already covers. */
+.provider-chip.rent {
+  border-style: dashed;
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+.chip-rent {
+  margin-left: 4px;
+  font-size: 10px;
+  letter-spacing: -0.5px;
+  opacity: 0.85;
 }
 
 .wtw-none {

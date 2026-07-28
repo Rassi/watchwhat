@@ -59,7 +59,10 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
     overview: string | null;
     credits?: { cast?: { id: number; name: string; character?: string | null; profile_path: string | null }[] };
     "watch/providers"?: {
-      results?: Record<string, { link?: string; flatrate?: RawProviderEntry[]; free?: RawProviderEntry[]; ads?: RawProviderEntry[] }>;
+      results?: Record<
+        string,
+        { link?: string; flatrate?: RawProviderEntry[]; free?: RawProviderEntry[]; ads?: RawProviderEntry[]; rent?: RawProviderEntry[] }
+      >;
     };
     release_dates?: { results?: { iso_3166_1: string; release_dates?: { release_date: string; type: number }[] }[] };
   };
@@ -92,6 +95,8 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
       ...(entry.flatrate ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "stream" })),
       ...(entry.free ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "free" })),
       ...(entry.ads ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "ads" })),
+      // Rent costs money, so it stays visually distinct from anything a subscription covers.
+      ...(entry.rent ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "rent" })),
     ];
     if (providers.length > 0) out.providersByCountry[country] = { link: entry.link ?? null, providers };
   }
@@ -126,8 +131,8 @@ export interface TmdbCastMember {
 export interface TmdbProvider {
   name: string;
   logo: string | null;
-  /** "stream" (subscription) | "free" | "ads" */
-  kind: "stream" | "free" | "ads";
+  /** "stream" (subscription) | "free" | "ads" | "rent" (paid per title) */
+  kind: "stream" | "free" | "ads" | "rent";
 }
 
 export interface TmdbCountryProviders {

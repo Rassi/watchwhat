@@ -18,15 +18,23 @@ function normalizeService(name: string): string {
     .replace(/[^a-z0-9+]/g, "");
 }
 
-export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLElement | null {
-  if (!providers) return null;
-  const settings = getSettings();
-  const countries = settings.watchCountries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
-  const mine = settings.myServices.split(",").map(normalizeService).filter(Boolean);
-  const haveIt = (name: string): boolean => {
+function watchCountries(): string[] {
+  return getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+}
+
+/** Tests a provider name against the user's own services. */
+function myServiceMatcher(): (name: string) => boolean {
+  const mine = getSettings().myServices.split(",").map(normalizeService).filter(Boolean);
+  return (name: string): boolean => {
     const normalized = normalizeService(name);
     return mine.some((m) => normalized.includes(m) || m.includes(normalized));
   };
+}
+
+export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLElement | null {
+  if (!providers) return null;
+  const countries = watchCountries();
+  const haveIt = myServiceMatcher();
   const flag = (cc: string): string =>
     cc.length === 2 ? String.fromCodePoint(...[...cc].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65)) : cc;
 
@@ -37,20 +45,28 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
     if (!entry) {
       chips.append(el("span", { class: "wtw-none" }, "Not streaming here"));
     } else {
-      // De-duplicate providers that appear under several kinds; sort "mine" first.
-      const seen = new Set<string>();
-      const list = entry.providers
-        .filter((p) => !seen.has(p.name) && seen.add(p.name))
-        .sort((a, b) => Number(haveIt(b.name)) - Number(haveIt(a.name)));
+      // De-duplicate providers that appear under several kinds, keeping the cheapest listing
+      // (a service offering both a subscription and a rental is not a rental). Then sort
+      // "mine" first and paid-per-title last.
+      const seen = new Map<string, { name: string; logo: string | null; kind: string }>();
+      for (const p of entry.providers) {
+        const existing = seen.get(p.name);
+        if (!existing || (existing.kind === "rent" && p.kind !== "rent")) seen.set(p.name, p);
+      }
+      const rank = (p: { name: string; kind: string }): number =>
+        haveIt(p.name) && p.kind !== "rent" ? 0 : p.kind === "rent" ? 2 : 1;
+      const list = [...seen.values()].sort((a, b) => rank(a) - rank(b));
       for (const p of list) {
+        const rent = p.kind === "rent";
+        const suffix = rent ? " (rent or buy)" : p.kind === "free" ? " (free)" : p.kind === "ads" ? " (with ads)" : "";
         const chip = el(
           "a",
           {
-            class: `provider-chip ${haveIt(p.name) ? "have" : ""}`,
+            class: `provider-chip ${rent ? "rent" : haveIt(p.name) ? "have" : ""}`,
             href: entry.link ?? "#",
             target: "_blank",
             rel: "noopener",
-            title: `${p.name}${p.kind === "free" ? " (free)" : p.kind === "ads" ? " (with ads)" : ""} — details on JustWatch`,
+            title: `${p.name}${suffix} — details on JustWatch`,
           },
           p.logo
             ? (() => {
@@ -60,6 +76,7 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
               })()
             : null,
           p.name,
+          rent ? el("span", { class: "chip-rent", title: "Costs extra — rent or buy" }, "▶$") : null,
         );
         chips.append(chip);
       }
@@ -76,11 +93,26 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
   );
 }
 
-/** Streamable on some service in one of the user's configured countries? */
-export function isStreamable(providers: ProvidersRecord | undefined): boolean {
-  if (!providers) return false;
-  const countries = getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
-  return countries.some((cc) => (providers[cc]?.providers.length ?? 0) > 0);
+/** "mine" = on a service you pay for, "stream" = included somewhere else, "rent" = costs extra. */
+export type WatchBadge = "mine" | "stream" | "rent";
+
+/**
+ * Best badge for a poster, in the order you'd care about it. Rent only wins when nothing
+ * streams it, so paying per title is never suggested over something already included.
+ */
+export function watchBadge(providers: ProvidersRecord | undefined): WatchBadge | null {
+  if (!providers) return null;
+  const haveIt = myServiceMatcher();
+  let stream = false;
+  let rent = false;
+  for (const cc of watchCountries()) {
+    for (const p of providers[cc]?.providers ?? []) {
+      if (p.kind === "rent") rent = true;
+      else if (haveIt(p.name)) return "mine";
+      else stream = true;
+    }
+  }
+  return stream ? "stream" : rent ? "rent" : null;
 }
 
 export function castStripCard(cast: CastMemberRec[] | undefined): HTMLElement | null {

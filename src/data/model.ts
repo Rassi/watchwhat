@@ -140,6 +140,8 @@ export interface MovieRec {
   backdrop?: string | null;
   cast?: CastMemberRec[];
   providers?: Record<string, { link: string | null; providers: { name: string; logo: string | null; kind: string }[] }>;
+  /** Which provider kinds the cached `providers` were fetched with; see PROVIDERS_VERSION. */
+  providersVersion?: number;
   tmdbFetchedAt?: number;
 }
 

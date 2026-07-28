@@ -93,8 +93,11 @@ export interface PosterCardOpts {
   progress?: number | null;
   badge?: string | null;
   subtitle?: string | null;
-  /** Show a small ▶ chip (top-right): available for streaming. */
-  streamable?: boolean;
+  /**
+   * Small chip (top-right): "mine" is a ▶ in accent for a service you pay for, "stream" the
+   * same in grey for anywhere else, "rent" a ▶$ for titles that only come at extra cost.
+   */
+  watch?: "mine" | "stream" | "rent" | null;
 }
 
 /**
@@ -152,7 +155,15 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
     card.append(el("div", { class: "poster placeholder" }, el("span", {}, opts.title)));
   }
   if (opts.badge) card.append(el("span", { class: "badge" }, opts.badge));
-  if (opts.streamable) card.append(el("span", { class: "stream-badge", title: "Available for streaming" }, "▶"));
+  if (opts.watch) {
+    const label =
+      opts.watch === "mine"
+        ? "On one of your streaming services"
+        : opts.watch === "rent"
+          ? "Available to rent or buy"
+          : "Available for streaming";
+    card.append(el("span", { class: `stream-badge ${opts.watch}`, title: label }, opts.watch === "rent" ? "▶$" : "▶"));
+  }
   if (opts.progress != null) {
     const bar = el("div", { class: "progress-track" });
     const fill = el("div", { class: "progress-fill" });

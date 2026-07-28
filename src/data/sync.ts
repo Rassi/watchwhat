@@ -450,6 +450,12 @@ export async function syncMovies(force = false): Promise<boolean> {
   return true;
 }
 
+/**
+ * Bump whenever a new provider kind starts being stored, so cached records fetched under the
+ * old shape refetch instead of silently missing it for up to a TTL. 2 added rent.
+ */
+const PROVIDERS_VERSION = 2;
+
 /** TMDB artwork/cast/providers for movies missing them (7-day TTL), limited concurrency. */
 export async function ensureMovieDetails(
   movies: Map<number, MovieRec>,
@@ -466,6 +472,7 @@ export async function ensureMovieDetails(
     // once and only re-fetched when the movie page itself is opened.
     if (opts?.skipWatchedRefresh && movie.plays > 0) return false;
     if (movie.digitalRelease === undefined) return true; // backfill new field
+    if (movie.providersVersion !== PROVIDERS_VERSION) return true; // cached before rent was kept
     return Date.now() - movie.tmdbFetchedAt > maxAge;
   });
   if (stale.length === 0) return;
@@ -480,6 +487,7 @@ export async function ensureMovieDetails(
     if (!movie.overview && extras.overview) movie.overview = extras.overview;
     movie.cast = extras.cast;
     movie.providers = extras.providersByCountry;
+    movie.providersVersion = PROVIDERS_VERSION;
     movie.digitalRelease = extras.digitalRelease;
     movie.tmdbFetchedAt = Date.now();
     await dbPut("movies", traktId, movie);
