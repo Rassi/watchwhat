@@ -1,13 +1,7 @@
 import type { Route } from "../router";
-import { el, toast, dialog } from "./components";
-import {
-  getSettings,
-  saveSettings,
-  isAuthenticated,
-  isConfigured,
-  changedPreferences,
-  resetPreferences,
-} from "../data/settings";
+import { el, toast } from "./components";
+import { getSettings, saveSettings, isAuthenticated, isConfigured, defaultSettings } from "../data/settings";
+import type { AppSettings } from "../data/settings";
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
 import { applyTheme } from "../theme";
 import { hardReload } from "./refresh";
@@ -140,102 +134,109 @@ export const settingsRoute: Route = {
     const omdbCard = el("div", { class: "card" }, el("h2", {}, "OMDb (IMDb & Rotten Tomatoes ratings)"), omdbHelp, field("API key", omdbKey), saveOmdbBtn);
 
     // --- Preferences ---
-    // Anything left on its default keeps following it as the app ships new ones, so name the
-    // ones this device has pinned by hand. Re-checked after every save: putting a field back
-    // to its default unpins it, and the line and button have to notice.
-    const prefsStatus = el("p", { class: "field-help" });
-    const resetBtn = el("button", { class: "btn danger" }, "Reset preferences to defaults");
-    const syncPrefsStatus = (): void => {
-      const changed = changedPreferences();
-      prefsStatus.textContent =
-        changed.length === 0
-          ? "All preferences are on their defaults, so they update automatically when the app ships new ones."
-          : `Changed by you: ${changed.map((c) => c.label).join(", ")}. These stay put when the app's defaults change.`;
-      resetBtn.toggleAttribute("disabled", changed.length === 0);
-    };
-
+    // Unlike the credential cards, these edit a draft: nothing is written until Save. Each
+    // field's Reset puts the shipped default back into the draft, and saving a value equal to
+    // the default unpins the field so it follows future defaults again.
     const staleInput = el("input", { type: "number", min: "7", max: "365" });
-    staleInput.value = String(settings.staleDays);
-    staleInput.addEventListener("change", () => {
-      const days = Math.max(7, Math.min(365, Number(staleInput.value) || 30));
-      staleInput.value = String(days);
-      saveSettings({ staleDays: days });
-      toast(`Shows move to "Haven't watched for a while" after ${days} days`);
-      syncPrefsStatus();
-    });
     const themeSelect = el("select", { class: "season-select" });
     for (const [value, label] of [["auto", "Auto (follow system)"], ["dark", "Dark"], ["light", "Light"]] as const) {
-      const opt = el("option", { value }, label);
-      if (settings.theme === value) opt.setAttribute("selected", "");
-      themeSelect.append(opt);
+      themeSelect.append(el("option", { value }, label));
     }
-    themeSelect.addEventListener("change", () => {
-      saveSettings({ theme: themeSelect.value as "auto" | "dark" | "light" });
-      applyTheme();
-      syncPrefsStatus();
+    const servicesInput = textInput("", "Netflix, Disney+, …");
+    const countriesInput = textInput("", "DK, US, GB");
+
+    // Each control's draft value, normalised exactly as it would be stored, so comparing
+    // against the saved value and the default is a plain equality check.
+    const clampDays = (v: string): number => Math.max(7, Math.min(365, Number(v) || defaultSettings.staleDays));
+    const prefs = [
+      {
+        key: "staleDays" as const,
+        draft: (): AppSettings["staleDays"] => clampDays(staleInput.value),
+        show: (v: AppSettings["staleDays"]) => (staleInput.value = String(v)),
+      },
+      {
+        key: "theme" as const,
+        draft: (): AppSettings["theme"] => themeSelect.value as AppSettings["theme"],
+        show: (v: AppSettings["theme"]) => (themeSelect.value = v),
+      },
+      {
+        key: "myServices" as const,
+        draft: (): string => servicesInput.value.trim(),
+        show: (v: string) => (servicesInput.value = v),
+      },
+      {
+        key: "watchCountries" as const,
+        draft: (): string => countriesInput.value.trim(),
+        show: (v: string) => (countriesInput.value = v),
+      },
+    ];
+
+    const saveBtn = el("button", { class: "btn primary" }, "Save preferences");
+    const resetBtns = new Map<string, HTMLButtonElement>();
+    for (const p of prefs) {
+      const btn = el("button", { class: "btn small", type: "button", title: "Restore the default" }, "Reset");
+      btn.addEventListener("click", () => {
+        (p.show as (v: unknown) => void)(defaultSettings[p.key]);
+        syncPrefButtons();
+      });
+      resetBtns.set(p.key, btn);
+    }
+
+    /** Reset lights up when a field differs from its default, Save when anything is unsaved. */
+    function syncPrefButtons(): void {
+      const saved = getSettings();
+      let dirty = false;
+      for (const p of prefs) {
+        const draft = p.draft();
+        resetBtns.get(p.key)!.toggleAttribute("disabled", draft === defaultSettings[p.key]);
+        if (draft !== saved[p.key]) dirty = true;
+      }
+      saveBtn.toggleAttribute("disabled", !dirty);
+    }
+
+    for (const p of prefs) (p.show as (v: unknown) => void)(settings[p.key]);
+    for (const input of [staleInput, servicesInput, countriesInput]) {
+      input.addEventListener("input", syncPrefButtons);
+    }
+    themeSelect.addEventListener("change", syncPrefButtons);
+    staleInput.addEventListener("change", () => {
+      staleInput.value = String(clampDays(staleInput.value));
+      syncPrefButtons();
     });
 
-    // Trimmed so that editing a field and putting it back matches the default exactly,
-    // which is what lets saveSettings drop the key again.
-    const servicesInput = textInput(settings.myServices, "Netflix, Disney+, …");
-    servicesInput.addEventListener("change", () => {
-      servicesInput.value = servicesInput.value.trim();
-      saveSettings({ myServices: servicesInput.value });
-      toast("Streaming services saved");
-      syncPrefsStatus();
-    });
-    const countriesInput = textInput(settings.watchCountries, "DK, US, GB");
-    countriesInput.addEventListener("change", () => {
-      countriesInput.value = countriesInput.value.trim();
-      saveSettings({ watchCountries: countriesInput.value });
-      toast("Where-to-watch countries saved");
-      syncPrefsStatus();
-    });
-
-    resetBtn.addEventListener("click", async () => {
-      const rows = changedPreferences().map((c) =>
-        el(
-          "div",
-          { class: "reset-row" },
-          el("span", { class: "reset-label" }, c.label),
-          el("span", { class: `reset-from${c.current === c.fallback ? " same" : ""}` }, c.current),
-          el("span", { class: "reset-to" }, c.fallback),
-        ),
-      );
-      const body = el(
-        "div",
-        {},
-        el("p", {}, "These preferences would change. Your Trakt and TMDB credentials are not touched."),
-        el("div", { class: "reset-diff" }, el("div", { class: "reset-row head" }, el("span", {}, "Setting"), el("span", {}, "Now"), el("span", {}, "Default")), ...rows),
-      );
-      const choice = await dialog("Reset preferences?", body, [
-        { label: "Cancel", value: "cancel", kind: "plain" },
-        { label: "Reset", value: "reset", kind: "danger" },
-      ]);
-      if (choice !== "reset") return;
-      resetPreferences();
+    saveBtn.addEventListener("click", () => {
+      const patch: Partial<AppSettings> = {};
+      for (const p of prefs) (patch as Record<string, unknown>)[p.key] = p.draft();
+      saveSettings(patch);
+      for (const p of prefs) (p.show as (v: unknown) => void)(patch[p.key]); // reflect trimming/clamping
       applyTheme();
-      container.replaceChildren();
-      settingsRoute.render(container, []);
-      toast("Preferences reset to defaults");
+      syncPrefButtons();
+      toast("Preferences saved");
     });
-    syncPrefsStatus();
+    syncPrefButtons();
+
+    const prefField = (labelText: string, input: HTMLElement, key: string): HTMLElement =>
+      el("div", { class: "field" }, el("label", {}, labelText), el("div", { class: "field-row" }, input, resetBtns.get(key)!));
 
     const prefsCard = el(
       "div",
       { class: "card" },
       el("h2", {}, "Preferences"),
-      field('Days before a show counts as "not watched for a while"', staleInput),
+      prefField('Days before a show counts as "not watched for a while"', staleInput, "staleDays"),
       el(
         "p",
         { class: "field-help" },
         'Controls when a show drops out of Watch next. Shows with a new episode waiting stay regardless. Tap the ⓘ next to any section heading to see exactly what lands in it.',
       ),
-      el("div", { class: "field" }, el("label", {}, "Theme"), themeSelect),
-      field("My streaming services (comma-separated — highlighted under Where to watch)", servicesInput),
-      field("Where-to-watch countries (ISO codes, comma-separated)", countriesInput),
-      prefsStatus,
-      resetBtn,
+      prefField("Theme", themeSelect, "theme"),
+      prefField("My streaming services (comma-separated — highlighted under Where to watch)", servicesInput, "myServices"),
+      prefField("Where-to-watch countries (ISO codes, comma-separated)", countriesInput, "watchCountries"),
+      el(
+        "p",
+        { class: "field-help" },
+        "Reset restores a field to its default. Fields left on their default follow along when the app ships new ones.",
+      ),
+      saveBtn,
     );
 
     // --- Data ---

@@ -71,39 +71,8 @@ export function saveSettings(patch: Partial<AppSettings>): AppSettings {
   return { ...defaults, ...(stored as Partial<AppSettings>) };
 }
 
-/** Settings the Reset button covers — preferences only, never credentials. */
-export const PREFERENCE_FIELDS: readonly { key: keyof AppSettings; label: string }[] = [
-  { key: "staleDays", label: '"Not watched for a while" cutoff (days)' },
-  { key: "theme", label: "Theme" },
-  { key: "myServices", label: "My streaming services" },
-  { key: "watchCountries", label: "Where-to-watch countries" },
-];
-
-export interface SettingChange {
-  label: string;
-  /** What you have now. */
-  current: string;
-  /** What it would fall back to. */
-  fallback: string;
-}
-
-/** Preferences explicitly set on this device, with the default each would revert to. */
-export function changedPreferences(): SettingChange[] {
-  const stored = readStored();
-  const settings = getSettings();
-  return PREFERENCE_FIELDS.filter((f) => f.key in stored).map((f) => ({
-    label: f.label,
-    current: String(settings[f.key]),
-    fallback: String(defaults[f.key]),
-  }));
-}
-
-/** Forgets explicit preference values so they follow the defaults again. Credentials untouched. */
-export function resetPreferences(): void {
-  const stored: Record<string, unknown> = { ...readStored() };
-  for (const f of PREFERENCE_FIELDS) delete stored[f.key];
-  writeStored(stored as Partial<AppSettings>);
-}
+/** What each per-field Reset in Settings restores, and what saveSettings unpins against. */
+export const defaultSettings: Readonly<AppSettings> = defaults;
 
 export function isConfigured(): boolean {
   const s = getSettings();
