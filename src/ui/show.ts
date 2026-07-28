@@ -323,12 +323,22 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
 
   // ---------- rendering ----------
 
-  /** Next unwatched aired episodes, in watch order (for the Continue tracking strip). */
+  /**
+   * Next unwatched aired episodes, in watch order (for the Continue tracking strip).
+   *
+   * Anchored to `firstOpen` — where Trakt says you're up to — rather than the earliest
+   * unwatched episode anywhere, so a show you dip into out of order (45 seasons of
+   * Location, Location, Location) offers the current season instead of S01E01. Marking
+   * an episode watched nulls `nextEpisode` until the next refetch, so the anchor is the
+   * one captured at page load; the strip then just advances as episodes get ticked off.
+   */
   const nextUnwatched = (limit: number): EpisodeInfo[] => {
     const out: EpisodeInfo[] = [];
-    for (const s of episodesRec.seasons) {
-      if (s.number === 0) continue;
-      for (const e of s.episodes) {
+    const seasons = [...episodesRec.seasons]
+      .filter((s) => s.number > 0 && (firstOpen == null || s.number >= firstOpen))
+      .sort((a, b) => a.number - b.number);
+    for (const s of seasons) {
+      for (const e of [...s.episodes].sort((a, b) => a.number - b.number)) {
         if (isAired(s.number, e.number) && !isWatched(s.number, e.number)) {
           out.push(e);
           if (out.length >= limit) return out;
