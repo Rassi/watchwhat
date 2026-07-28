@@ -16,6 +16,50 @@ function textInput(value: string, placeholder = ""): HTMLInputElement {
   return input;
 }
 
+function splitList(value: string): string[] {
+  return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Which entries a comma list would lose and gain. Comparing the two lists as whole strings
+ * is useless once they are eleven services long — the one that changed is impossible to spot.
+ */
+function listDiff(from: string, to: string): { removed: string[]; added: string[]; kept: number } {
+  const before = splitList(from);
+  const after = splitList(to);
+  const key = (s: string): string => s.toLowerCase();
+  const beforeKeys = new Set(before.map(key));
+  const afterKeys = new Set(after.map(key));
+  return {
+    removed: before.filter((s) => !afterKeys.has(key(s))),
+    added: after.filter((s) => !beforeKeys.has(key(s))),
+    kept: before.filter((s) => afterKeys.has(key(s))).length,
+  };
+}
+
+/** How a preference would change: entry-by-entry for lists, plainly for everything else. */
+function diffNode(isList: boolean, from: string, to: string): HTMLElement {
+  if (!isList) {
+    return el(
+      "div",
+      { class: "diff-scalar" },
+      el("span", { class: "diff-from" }, from),
+      el("span", { class: "diff-arrow" }, "→"),
+      el("span", { class: "diff-to" }, to),
+    );
+  }
+  const { removed, added, kept } = listDiff(from, to);
+  const chips = el("div", { class: "diff-chips" });
+  for (const item of removed) chips.append(el("span", { class: "diff-chip removed" }, item));
+  for (const item of added) chips.append(el("span", { class: "diff-chip added" }, item));
+  const parts = [
+    removed.length ? `${removed.length} removed` : "",
+    added.length ? `${added.length} added` : "",
+    kept ? `${kept} unchanged` : "",
+  ].filter(Boolean);
+  return el("div", {}, chips, el("p", { class: "diff-summary" }, parts.join(" · ")));
+}
+
 export const settingsRoute: Route = {
   name: "settings",
   title: "Settings · WatchWhat",
@@ -152,24 +196,28 @@ export const settingsRoute: Route = {
       {
         key: "staleDays" as const,
         label: '"Not watched for a while" cutoff (days)',
+        list: false,
         draft: (): AppSettings["staleDays"] => clampDays(staleInput.value),
         show: (v: AppSettings["staleDays"]) => (staleInput.value = String(v)),
       },
       {
         key: "theme" as const,
         label: "Theme",
+        list: false,
         draft: (): AppSettings["theme"] => themeSelect.value as AppSettings["theme"],
         show: (v: AppSettings["theme"]) => (themeSelect.value = v),
       },
       {
         key: "myServices" as const,
         label: "My streaming services",
+        list: true,
         draft: (): string => servicesInput.value.trim(),
         show: (v: string) => (servicesInput.value = v),
       },
       {
         key: "watchCountries" as const,
         label: "Where-to-watch countries",
+        list: true,
         draft: (): string => countriesInput.value.trim(),
         show: (v: string) => (countriesInput.value = v),
       },
@@ -178,9 +226,26 @@ export const settingsRoute: Route = {
     const saveBtn = el("button", { class: "btn primary" }, "Save preferences");
     const resetAllBtn = el("button", { class: "btn danger", type: "button" }, "Reset all");
     const resetBtns = new Map<string, HTMLButtonElement>();
+    // A list is worth confirming — you cannot eyeball which of eleven services you are about
+    // to drop. A cutoff or a theme is its own preview, so those reset on the spot.
     for (const p of prefs) {
       const btn = el("button", { class: "btn small", type: "button", title: "Restore the default" }, "Reset");
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
+        const from = String(p.draft());
+        const to = String(defaultSettings[p.key]);
+        if (p.list && from !== to) {
+          const body = el(
+            "div",
+            {},
+            el("p", {}, "The default list would replace what you have. Nothing is stored until you press Save."),
+            el("div", { class: "reset-diff" }, diffNode(true, from, to)),
+          );
+          const choice = await dialog(`Reset ${p.label.toLowerCase()}?`, body, [
+            { label: "Cancel", value: "cancel", kind: "plain" },
+            { label: "Reset", value: "reset", kind: "danger" },
+          ]);
+          if (choice !== "reset") return;
+        }
         (p.show as (v: unknown) => void)(defaultSettings[p.key]);
         syncPrefButtons();
       });
@@ -211,20 +276,14 @@ export const settingsRoute: Route = {
           "div",
           { class: "reset-row" },
           el("span", { class: "reset-label" }, p.label),
-          el("span", { class: "reset-from" }, String(p.draft())),
-          el("span", { class: "reset-to" }, String(defaultSettings[p.key])),
+          diffNode(p.list, String(p.draft()), String(defaultSettings[p.key])),
         ),
       );
       const body = el(
         "div",
         {},
         el("p", {}, "These fields go back to their defaults in the form. Nothing is stored until you press Save."),
-        el(
-          "div",
-          { class: "reset-diff" },
-          el("div", { class: "reset-row head" }, el("span", {}, "Setting"), el("span", {}, "Now"), el("span", {}, "Default")),
-          ...rows,
-        ),
+        el("div", { class: "reset-diff" }, ...rows),
       );
       const choice = await dialog("Reset all preferences?", body, [
         { label: "Cancel", value: "cancel", kind: "plain" },
