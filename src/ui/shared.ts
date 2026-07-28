@@ -46,23 +46,29 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
       chips.append(el("span", { class: "wtw-none" }, "Not streaming here"));
     } else {
       // De-duplicate providers that appear under several kinds, keeping the cheapest listing
-      // (a service offering both a subscription and a rental is not a rental). Then sort
-      // "mine" first and paid-per-title last.
+      // (a service offering both a subscription and a rental is not a rental).
       const seen = new Map<string, { name: string; logo: string | null; kind: string }>();
       for (const p of entry.providers) {
         const existing = seen.get(p.name);
         if (!existing || (existing.kind === "rent" && p.kind !== "rent")) seen.set(p.name, p);
       }
-      const rank = (p: { name: string; kind: string }): number =>
-        haveIt(p.name) && p.kind !== "rent" ? 0 : p.kind === "rent" ? 2 : 1;
+      // Cheapest first: yours, then free to anyone, then subscriptions you'd have to buy,
+      // then per-title rentals.
+      const rank = (p: { name: string; kind: string }): number => {
+        if (p.kind === "rent") return 3;
+        if (haveIt(p.name)) return 0;
+        return p.kind === "free" || p.kind === "ads" ? 1 : 2;
+      };
       const list = [...seen.values()].sort((a, b) => rank(a) - rank(b));
+      const rentChips: HTMLElement[] = [];
       for (const p of list) {
         const rent = p.kind === "rent";
-        const suffix = rent ? " (rent or buy)" : p.kind === "free" ? " (free)" : p.kind === "ads" ? " (with ads)" : "";
+        const free = !rent && (p.kind === "free" || p.kind === "ads");
+        const suffix = rent ? " (rent or buy)" : p.kind === "free" ? " (free)" : p.kind === "ads" ? " (free, with ads)" : "";
         const chip = el(
           "a",
           {
-            class: `provider-chip ${rent ? "rent" : haveIt(p.name) ? "have" : ""}`,
+            class: `provider-chip ${rent ? "rent" : haveIt(p.name) ? "have" : free ? "free" : ""}`,
             href: entry.link ?? "#",
             target: "_blank",
             rel: "noopener",
@@ -77,8 +83,23 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
             : null,
           p.name,
           rent ? el("span", { class: "chip-rent", title: "Costs extra — rent or buy" }, "$") : null,
+          free ? el("span", { class: "chip-free" }, p.kind === "ads" ? "FREE · ADS" : "FREE") : null,
         );
-        chips.append(chip);
+        if (rent) rentChips.push(chip);
+        else chips.append(chip);
+      }
+      // Rentals are the longest and least useful part of a row, so they fold away — unless
+      // renting is the only way to watch it here, when hiding them would empty the row.
+      if (rentChips.length > 0 && chips.childElementCount > 0) {
+        const group = el("span", { class: "wtw-rent-group hidden" }, ...rentChips);
+        const toggle = el("button", { class: "wtw-more", type: "button" }, `+${rentChips.length} to rent`);
+        toggle.addEventListener("click", () => {
+          const hidden = group.classList.toggle("hidden");
+          toggle.textContent = hidden ? `+${rentChips.length} to rent` : "Hide rentals";
+        });
+        chips.append(group, toggle);
+      } else {
+        chips.append(...rentChips);
       }
     }
     rows.push(el("div", { class: "wtw-country" }, el("span", { class: "wtw-flag", title: cc }, flag(cc)), chips));

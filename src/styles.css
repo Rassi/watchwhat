@@ -1345,11 +1345,48 @@ a.cast-card {
   border-color: var(--accent);
 }
 
+/* Free to anyone — no subscription, no rental. Worth spotting in a long row. */
+.provider-chip.free {
+  background: color-mix(in srgb, #12a150 18%, var(--bg-raised));
+  border-color: color-mix(in srgb, #12a150 55%, transparent);
+}
+
+.chip-free {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #12a150;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
 /* Rent sits apart from anything a subscription already covers. */
 .provider-chip.rent {
   border-style: dashed;
   border-color: var(--border);
   color: var(--text-dim);
+}
+
+/* Contents so the chips flow in the row's flex layout, not as one nested box. */
+.wtw-rent-group {
+  display: contents;
+}
+
+.wtw-rent-group.hidden {
+  display: none;
+}
+
+.wtw-more {
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 /* The same coin, at chip scale. */
