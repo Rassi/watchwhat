@@ -140,6 +140,20 @@ export const settingsRoute: Route = {
     const omdbCard = el("div", { class: "card" }, el("h2", {}, "OMDb (IMDb & Rotten Tomatoes ratings)"), omdbHelp, field("API key", omdbKey), saveOmdbBtn);
 
     // --- Preferences ---
+    // Anything left on its default keeps following it as the app ships new ones, so name the
+    // ones this device has pinned by hand. Re-checked after every save: putting a field back
+    // to its default unpins it, and the line and button have to notice.
+    const prefsStatus = el("p", { class: "field-help" });
+    const resetBtn = el("button", { class: "btn danger" }, "Reset preferences to defaults");
+    const syncPrefsStatus = (): void => {
+      const changed = changedPreferences();
+      prefsStatus.textContent =
+        changed.length === 0
+          ? "All preferences are on their defaults, so they update automatically when the app ships new ones."
+          : `Changed by you: ${changed.map((c) => c.label).join(", ")}. These stay put when the app's defaults change.`;
+      resetBtn.toggleAttribute("disabled", changed.length === 0);
+    };
+
     const staleInput = el("input", { type: "number", min: "7", max: "365" });
     staleInput.value = String(settings.staleDays);
     staleInput.addEventListener("change", () => {
@@ -147,6 +161,7 @@ export const settingsRoute: Route = {
       staleInput.value = String(days);
       saveSettings({ staleDays: days });
       toast(`Shows move to "Haven't watched for a while" after ${days} days`);
+      syncPrefsStatus();
     });
     const themeSelect = el("select", { class: "season-select" });
     for (const [value, label] of [["auto", "Auto (follow system)"], ["dark", "Dark"], ["light", "Light"]] as const) {
@@ -157,23 +172,26 @@ export const settingsRoute: Route = {
     themeSelect.addEventListener("change", () => {
       saveSettings({ theme: themeSelect.value as "auto" | "dark" | "light" });
       applyTheme();
+      syncPrefsStatus();
     });
 
+    // Trimmed so that editing a field and putting it back matches the default exactly,
+    // which is what lets saveSettings drop the key again.
     const servicesInput = textInput(settings.myServices, "Netflix, Disney+, …");
     servicesInput.addEventListener("change", () => {
+      servicesInput.value = servicesInput.value.trim();
       saveSettings({ myServices: servicesInput.value });
       toast("Streaming services saved");
+      syncPrefsStatus();
     });
     const countriesInput = textInput(settings.watchCountries, "DK, US, GB");
     countriesInput.addEventListener("change", () => {
+      countriesInput.value = countriesInput.value.trim();
       saveSettings({ watchCountries: countriesInput.value });
       toast("Where-to-watch countries saved");
+      syncPrefsStatus();
     });
 
-    // Anything left at its default keeps following the default as the app ships new ones,
-    // so it's worth showing which preferences this device has pinned by hand.
-    const changed = changedPreferences();
-    const resetBtn = el("button", { class: "btn danger" }, "Reset preferences to defaults");
     resetBtn.addEventListener("click", async () => {
       const rows = changedPreferences().map((c) =>
         el(
@@ -201,7 +219,7 @@ export const settingsRoute: Route = {
       settingsRoute.render(container, []);
       toast("Preferences reset to defaults");
     });
-    if (changed.length === 0) resetBtn.setAttribute("disabled", "");
+    syncPrefsStatus();
 
     const prefsCard = el(
       "div",
@@ -216,13 +234,7 @@ export const settingsRoute: Route = {
       el("div", { class: "field" }, el("label", {}, "Theme"), themeSelect),
       field("My streaming services (comma-separated — highlighted under Where to watch)", servicesInput),
       field("Where-to-watch countries (ISO codes, comma-separated)", countriesInput),
-      el(
-        "p",
-        { class: "field-help" },
-        changed.length === 0
-          ? "All preferences are on their defaults, so they update automatically when the app ships new ones."
-          : `Changed by you: ${changed.map((c) => c.label).join(", ")}. These stay put when the app's defaults change.`,
-      ),
+      prefsStatus,
       resetBtn,
     );
 

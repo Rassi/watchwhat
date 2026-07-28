@@ -41,10 +41,11 @@ function readJson<T>(key: string): T | null {
 }
 
 /**
- * Only fields the user has explicitly set are stored, so a key's absence *is* the marker for
- * "use the default" — and keeps following it as defaults change. Every saveSettings call comes
- * from a deliberate action in Settings, so the patch keys are exactly what was touched, and
- * Reset simply drops keys again. No value comparison and no history of past defaults involved.
+ * Only fields that differ from the default are stored, so a key's absence *is* the marker for
+ * "use the default" — and keeps following it as defaults change. Reset simply drops keys again.
+ * Saving a value equal to the current default drops the key too, so editing a field and putting
+ * it back leaves no trace. Only the current default is ever compared against; nothing here
+ * remembers what the defaults used to be.
  */
 function readStored(): Partial<AppSettings> {
   return readJson<Partial<AppSettings>>(SETTINGS_KEY) ?? {};
@@ -61,7 +62,10 @@ export function getSettings(): AppSettings {
 export function saveSettings(patch: Partial<AppSettings>): AppSettings {
   const stored: Record<string, unknown> = { ...readStored() };
   for (const key of Object.keys(patch) as (keyof AppSettings)[]) {
-    if (patch[key] !== undefined) stored[key] = patch[key];
+    const value = patch[key];
+    if (value === undefined) continue;
+    if (value === defaults[key]) delete stored[key];
+    else stored[key] = value;
   }
   writeStored(stored as Partial<AppSettings>);
   return { ...defaults, ...(stored as Partial<AppSettings>) };
