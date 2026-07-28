@@ -1,5 +1,5 @@
 import type { Route } from "../router";
-import { el, toast } from "./components";
+import { el, toast, dialog } from "./components";
 import { getSettings, saveSettings, isAuthenticated, isConfigured, defaultSettings } from "../data/settings";
 import type { AppSettings } from "../data/settings";
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
@@ -151,27 +151,32 @@ export const settingsRoute: Route = {
     const prefs = [
       {
         key: "staleDays" as const,
+        label: '"Not watched for a while" cutoff (days)',
         draft: (): AppSettings["staleDays"] => clampDays(staleInput.value),
         show: (v: AppSettings["staleDays"]) => (staleInput.value = String(v)),
       },
       {
         key: "theme" as const,
+        label: "Theme",
         draft: (): AppSettings["theme"] => themeSelect.value as AppSettings["theme"],
         show: (v: AppSettings["theme"]) => (themeSelect.value = v),
       },
       {
         key: "myServices" as const,
+        label: "My streaming services",
         draft: (): string => servicesInput.value.trim(),
         show: (v: string) => (servicesInput.value = v),
       },
       {
         key: "watchCountries" as const,
+        label: "Where-to-watch countries",
         draft: (): string => countriesInput.value.trim(),
         show: (v: string) => (countriesInput.value = v),
       },
     ];
 
     const saveBtn = el("button", { class: "btn primary" }, "Save preferences");
+    const resetAllBtn = el("button", { class: "btn danger", type: "button" }, "Reset all");
     const resetBtns = new Map<string, HTMLButtonElement>();
     for (const p of prefs) {
       const btn = el("button", { class: "btn small", type: "button", title: "Restore the default" }, "Reset");
@@ -181,6 +186,9 @@ export const settingsRoute: Route = {
       });
       resetBtns.set(p.key, btn);
     }
+
+    /** Fields whose draft value would change if the defaults were put back. */
+    const offDefault = (): typeof prefs => prefs.filter((p) => p.draft() !== defaultSettings[p.key]);
 
     /** Reset lights up when a field differs from its default, Save when anything is unsaved. */
     function syncPrefButtons(): void {
@@ -192,7 +200,40 @@ export const settingsRoute: Route = {
         if (draft !== saved[p.key]) dirty = true;
       }
       saveBtn.toggleAttribute("disabled", !dirty);
+      resetAllBtn.toggleAttribute("disabled", offDefault().length === 0);
     }
+
+    // Worth a confirm: one click can change four fields at once, unlike a per-field Reset
+    // where the value you are replacing is right there in the input.
+    resetAllBtn.addEventListener("click", async () => {
+      const rows = offDefault().map((p) =>
+        el(
+          "div",
+          { class: "reset-row" },
+          el("span", { class: "reset-label" }, p.label),
+          el("span", { class: "reset-from" }, String(p.draft())),
+          el("span", { class: "reset-to" }, String(defaultSettings[p.key])),
+        ),
+      );
+      const body = el(
+        "div",
+        {},
+        el("p", {}, "These fields go back to their defaults in the form. Nothing is stored until you press Save."),
+        el(
+          "div",
+          { class: "reset-diff" },
+          el("div", { class: "reset-row head" }, el("span", {}, "Setting"), el("span", {}, "Now"), el("span", {}, "Default")),
+          ...rows,
+        ),
+      );
+      const choice = await dialog("Reset all preferences?", body, [
+        { label: "Cancel", value: "cancel", kind: "plain" },
+        { label: "Reset all", value: "reset", kind: "danger" },
+      ]);
+      if (choice !== "reset") return;
+      for (const p of prefs) (p.show as (v: unknown) => void)(defaultSettings[p.key]);
+      syncPrefButtons();
+    });
 
     for (const p of prefs) (p.show as (v: unknown) => void)(settings[p.key]);
     for (const input of [staleInput, servicesInput, countriesInput]) {
@@ -236,7 +277,7 @@ export const settingsRoute: Route = {
         { class: "field-help" },
         "Reset restores a field to its default. Fields left on their default follow along when the app ships new ones.",
       ),
-      saveBtn,
+      el("div", { class: "button-row" }, saveBtn, resetAllBtn),
     );
 
     // --- Data ---
