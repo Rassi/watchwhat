@@ -5,7 +5,7 @@
   --text: #f2f2f5;
   --text-dim: #9a9aa5;
   --accent: #fdc620; /* TV Time yellow */
-  --green: #34c759;
+  --green: #2ea44f; /* was iOS #34c759 — too high-chroma once badges cover most of a grid */
   --danger: #ff5252;
   --border: #2c2c35;
   --control-bg: #3a3a42;
