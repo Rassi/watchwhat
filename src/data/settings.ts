@@ -26,7 +26,9 @@ const defaults: AppSettings = {
   omdbApiKey: "",
   staleDays: 30,
   theme: "auto",
-  myServices: "Disney+, Netflix, Prime, Hulu, Paramount+, Channel 4, BBC, ITVX, HBO Max, Filmstriben, Apple TV+",
+  // Free-to-air services are left out on purpose: TMDB reports them as free/ads, so they are
+  // marked from the data. Listing them here would only claim you pay for them.
+  myServices: "Disney+, Netflix, Prime, Hulu, Paramount+, HBO Max, Apple TV+",
   watchCountries: "DK, US, GB",
 };
 
