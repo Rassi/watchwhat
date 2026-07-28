@@ -364,7 +364,6 @@ function toMovieRec(movie: trakt.TraktMovie, existing: MovieRec | undefined, sta
     lastWatchedAt: null,
     onWatchlist: false,
     listedAt: null,
-    tvtimeAddedAt: existing?.tvtimeAddedAt,
     overview: movie.overview || existing?.overview,
     runtime: movie.runtime ?? existing?.runtime,
     rating: movie.rating ?? existing?.rating,
@@ -574,7 +573,6 @@ export async function refreshMovieSummary(movies: Map<number, MovieRec>, traktId
       lastWatchedAt: existing.lastWatchedAt,
       onWatchlist: existing.onWatchlist,
       listedAt: existing.listedAt,
-      tvtimeAddedAt: existing.tvtimeAddedAt,
     });
     movies.set(traktId, rec);
     await dbPut("movies", traktId, rec);

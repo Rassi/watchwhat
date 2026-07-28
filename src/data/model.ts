@@ -122,8 +122,6 @@ export interface MovieRec {
   lastWatchedAt: string | null;
   onWatchlist: boolean;
   listedAt: string | null;
-  /** Original TV Time added date (from the export) — Trakt's listed_at was flattened by the import. */
-  tvtimeAddedAt?: string;
   /** Trakt ids of custom personal lists containing this movie. */
   customLists?: number[];
   // Trakt ?extended=full

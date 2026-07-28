@@ -48,7 +48,7 @@ export const moviesRoute: Route = {
         subtitle: `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
       });
 
-    const addedAt = (m: MovieRec): string => m.tvtimeAddedAt ?? m.listedAt ?? "";
+    const addedAt = (m: MovieRec): string => m.listedAt ?? "";
 
     const renderContent = (): void => {
       const all = [...movies.values()];

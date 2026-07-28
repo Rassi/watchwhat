@@ -405,29 +405,6 @@ export async function removeMovieFromWatchlist(ids: TraktIds): Promise<void> {
   await request("/sync/watchlist/remove", { method: "POST", body: { movies: [{ ids }] } });
 }
 
-export async function lookupMovieByImdb(imdbId: string): Promise<TraktMovie | null> {
-  const { data } = await request<{ type: string; movie?: TraktMovie }[]>(`/search/imdb/${imdbId}`, {
-    query: { type: "movie" },
-  });
-  return data.find((r) => r.movie)?.movie ?? null;
-}
-
-/** Add movies to history with individual watched-at timestamps (for imports). */
-export async function addMoviesToHistoryAt(items: { ids: TraktIds; watchedAt?: string }[]): Promise<void> {
-  await request("/sync/history", {
-    method: "POST",
-    body: { movies: items.map((i) => ({ ids: i.ids, ...(i.watchedAt ? { watched_at: i.watchedAt } : {}) })) },
-  });
-}
-
-export async function addMoviesToWatchlist(ids: TraktIds[]): Promise<void> {
-  await request("/sync/watchlist", { method: "POST", body: { movies: ids.map((i) => ({ ids: i })) } });
-}
-
-export async function removeMoviesFromWatchlist(ids: TraktIds[]): Promise<void> {
-  await request("/sync/watchlist/remove", { method: "POST", body: { movies: ids.map((i) => ({ ids: i })) } });
-}
-
 /** The user's custom personal lists. */
 export async function getMyLists(): Promise<TraktList[]> {
   return (await request<TraktList[]>("/users/me/lists")).data;
@@ -513,14 +490,6 @@ export async function addEpisodesToHistory(episodeTraktIds: number[], watchedAt?
   });
 }
 
-/** Add episodes to history with individual watched-at timestamps (for imports). */
-export async function addEpisodesToHistoryAt(items: { traktId: number; watchedAt?: string }[]): Promise<void> {
-  await request("/sync/history", {
-    method: "POST",
-    body: { episodes: items.map((i) => ({ ids: { trakt: i.traktId }, ...(i.watchedAt ? { watched_at: i.watchedAt } : {}) })) },
-  });
-}
-
 export async function removeEpisodesFromHistory(episodeTraktIds: number[]): Promise<void> {
   await request("/sync/history/remove", {
     method: "POST",
@@ -572,11 +541,4 @@ export interface CalendarEntry {
 /** Upcoming episodes for shows the user watches, from startDate (YYYY-MM-DD) for `days`. */
 export async function getMyCalendar(startDate: string, days: number): Promise<CalendarEntry[]> {
   return (await request<CalendarEntry[]>(`/calendars/my/shows/${startDate}/${days}`)).data;
-}
-
-export async function lookupByTvdb(tvdbId: number): Promise<TraktShow | null> {
-  const { data } = await request<{ type: string; show?: TraktShow }[]>(`/search/tvdb/${tvdbId}`, {
-    query: { type: "show" },
-  });
-  return data.find((r) => r.show)?.show ?? null;
 }

@@ -11,8 +11,10 @@ GitHub Pages, usable from phone and desktop with the same data.
   "Mark previous episodes?" dialog (all previous / only this season / never for
   this show).
 - **Search** to follow new shows (adds to your Trakt watchlist).
-- **Reconcile tool** to verify/complete a TV Time → Trakt import from the
-  [TV Time out exporter](https://github.com/tzheng-mars/tv-time-out) JSON.
+
+The original TV Time → Trakt migration is done and its reconcile tool has been
+removed; the exports it read are kept in `tvtime/` as the only surviving copy of
+that history, and the tool itself is recoverable from git if ever needed.
 
 ## How it works
 

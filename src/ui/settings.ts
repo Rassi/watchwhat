@@ -2,7 +2,6 @@ import type { Route } from "../router";
 import { el, toast } from "./components";
 import { getSettings, saveSettings, isAuthenticated, isConfigured } from "../data/settings";
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
-import { reconcileCard } from "./reconcile";
 import { applyTheme } from "../theme";
 import { hardReload } from "./refresh";
 
@@ -210,6 +209,6 @@ export const settingsRoute: Route = {
       reloadBtn,
     );
 
-    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, reconcileCard(), dataCard, versionCard);
+    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, dataCard, versionCard);
   },
 };
