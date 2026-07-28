@@ -180,7 +180,7 @@ export const settingsRoute: Route = {
           "div",
           { class: "reset-row" },
           el("span", { class: "reset-label" }, c.label),
-          el("span", { class: "reset-from" }, c.current),
+          el("span", { class: `reset-from${c.current === c.fallback ? " same" : ""}` }, c.current),
           el("span", { class: "reset-to" }, c.fallback),
         ),
       );

@@ -745,6 +745,11 @@ button {
   text-decoration: line-through;
 }
 
+/* Pinned by hand but already equal to the default — striking it through would read as a bug. */
+.reset-from.same {
+  text-decoration: none;
+}
+
 .reset-to {
   color: #111;
   font-weight: 600;

@@ -16,9 +16,6 @@ export interface AppSettings {
 }
 
 const SETTINGS_KEY = "watchwhat.settings";
-/** Bumped when the meaning of the stored blob changes; see migrateStored. */
-const SETTINGS_SCHEMA_KEY = "watchwhat.settingsSchema";
-const SETTINGS_SCHEMA = 2;
 const TOKENS_KEY = "watchwhat.tokens";
 const NEVER_MARK_PREVIOUS_KEY = "watchwhat.neverMarkPrevious";
 
@@ -44,46 +41,17 @@ function readJson<T>(key: string): T | null {
 }
 
 /**
- * Only fields the user has explicitly set are stored, so presence records intent: anything
- * absent follows the default and picks up future changes to it. Every saveSettings call
- * comes from a deliberate action in Settings, so the patch keys are exactly what was touched.
+ * Only fields the user has explicitly set are stored, so a key's absence *is* the marker for
+ * "use the default" — and keeps following it as defaults change. Every saveSettings call comes
+ * from a deliberate action in Settings, so the patch keys are exactly what was touched, and
+ * Reset simply drops keys again. No value comparison and no history of past defaults involved.
  */
 function readStored(): Partial<AppSettings> {
-  const stored = readJson<Partial<AppSettings>>(SETTINGS_KEY);
-  if (!stored) return {};
-  if (Number(localStorage.getItem(SETTINGS_SCHEMA_KEY)) >= SETTINGS_SCHEMA) return stored;
-  return migrateStored(stored);
+  return readJson<Partial<AppSettings>>(SETTINGS_KEY) ?? {};
 }
 
 function writeStored(stored: Partial<AppSettings>): void {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(stored));
-  localStorage.setItem(SETTINGS_SCHEMA_KEY, String(SETTINGS_SCHEMA));
-}
-
-/**
- * Schema 1 wrote every field on every save, default or not, so presence meant nothing there.
- * Drop the ones still sitting at a value we shipped as a default; what remains was chosen.
- * This list is closed — intent tracking replaced it, so a new default never needs an entry.
- */
-function migrateStored(stored: Partial<AppSettings>): Partial<AppSettings> {
-  const shippedDefaults: Partial<Record<keyof AppSettings, readonly unknown[]>> = {
-    staleDays: [30],
-    theme: ["auto"],
-    myServices: [
-      "Disney+, Netflix, Prime, Hulu, Paramount+, Channel 4, BBC, HBO Max, Filmstriben, Apple TV+",
-      defaults.myServices,
-    ],
-    watchCountries: ["DK, US, GB"],
-  };
-  const migrated: Record<string, unknown> = {};
-  for (const key of Object.keys(stored) as (keyof AppSettings)[]) {
-    if (!(key in defaults)) continue;
-    const value = stored[key];
-    if (value === defaults[key] || (shippedDefaults[key]?.includes(value) ?? false)) continue;
-    migrated[key] = value;
-  }
-  writeStored(migrated as Partial<AppSettings>);
-  return migrated as Partial<AppSettings>;
 }
 
 export function getSettings(): AppSettings {
