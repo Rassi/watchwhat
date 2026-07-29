@@ -31,11 +31,14 @@ const defaults: AppSettings = {
   // "@US/DK" limits an account to the countries it can actually play in; see parseServiceRules.
   // The "-" entries are the other way round: TMDB calls them free, but they are free to someone
   // else. Kanopy and Hoopla want a US library card, Cineasterna a Swedish one and Filmoteket a
-  // Norwegian one; YouTube's free tier has no Apple TV app. Filmstriben is deliberately absent —
-  // that one a Danish library card does cover.
+  // Norwegian one and Beamafilm an Australian one; FXNow and Adult Swim want a US pay-TV login,
+  // which is not free at all; YouTube's free tier has no Apple TV app. Filmstriben is
+  // deliberately absent — that one a Danish library card does cover. The geo-locked US tier
+  // (Tubi, Plex, Roku) is absent too: it is genuinely free where it plays, so it stays yellow
+  // and you judge the country row.
   myServices:
     "Disney+@US/DK, Netflix@US/DK, Prime@US/DK, Hulu@US, Paramount+@US, HBO Max@US/DK, Apple TV+@DK, " +
-    "-Kanopy, -Hoopla, -YouTube Free, -Cineasterna, -Filmoteket",
+    "-Kanopy, -Hoopla, -YouTube Free, -Cineasterna, -Filmoteket, -Beamafilm, -FXNow, -Adult Swim",
   // Most of these earn their place on free-to-air alone: SVT, NRK, SBS and ABC iview carry
   // things the others don't. Nordics grouped, since they overlap most.
   watchCountries: "DK, SE, NO, US, GB, AU",

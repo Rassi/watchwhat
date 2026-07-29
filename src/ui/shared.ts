@@ -97,12 +97,16 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
     if (!entry) {
       chips.append(el("span", { class: "wtw-none" }, "Not streaming here"));
     } else {
-      // De-duplicate providers that appear under several kinds, keeping the cheapest listing
-      // (a service offering both a subscription and a rental is not a rental).
+      // De-duplicate providers that appear under several kinds, keeping the cheapest listing:
+      // a service offering both a subscription and a rental is not a rental, and one offering
+      // both a subscription and a free tier is not a subscription. Comparing costs rather than
+      // testing for "rent" matters because TMDB's order is arbitrary — a "stream" listing
+      // arriving before the "free" one used to win and quietly hide the free tier.
+      const cost = (kind: string): number => (kind === "free" || kind === "ads" ? 0 : kind === "rent" ? 2 : 1);
       const seen = new Map<string, { name: string; logo: string | null; kind: string }>();
       for (const p of entry.providers) {
         const existing = seen.get(p.name);
-        if (!existing || (existing.kind === "rent" && p.kind !== "rent")) seen.set(p.name, p);
+        if (!existing || cost(p.kind) < cost(existing.kind)) seen.set(p.name, p);
       }
       // Cheapest first: yours, then free to anyone, then subscriptions you'd have to buy,
       // then per-title rentals. A blocked service sinks in with the subscriptions you don't
