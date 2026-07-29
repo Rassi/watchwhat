@@ -34,7 +34,8 @@ const defaults: AppSettings = {
   myServices:
     "Disney+@US/DK, Netflix@US/DK, Prime@US/DK, Hulu@US, Paramount+@US, HBO Max@US/DK, Apple TV+@DK, " +
     "-Kanopy, -Hoopla, -YouTube Free",
-  watchCountries: "DK, US, GB",
+  // AU earns its place for free-to-air: SBS and ABC iview carry things the other three don't.
+  watchCountries: "DK, US, GB, AU",
 };
 
 function readJson<T>(key: string): T | null {
