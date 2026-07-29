@@ -11,7 +11,7 @@ export type ProvidersRecord = Record<
 >;
 
 /** Loose provider-name match: lowercase, strip punctuation/spaces, "plus" -> "+". */
-function normalizeService(name: string): string {
+export function normalizeService(name: string): string {
   return name
     .toLowerCase()
     .replace(/\bplus\b/g, "+")
@@ -23,34 +23,70 @@ function watchCountries(): string[] {
 }
 
 /**
- * Tests a provider name against the user's own services, in a given country. A subscription
- * is not worldwide — a Netflix account in one country is no help in another — so an entry may
- * be limited with "Netflix@DK/US". A bare entry counts everywhere.
+ * One entry from the "My streaming services" list. Two things can be said about a service,
+ * so one list says both: "Netflix@US/DK" is one you have, "-Kanopy" is one you can't use.
+ * Blocking matters because TMDB's "free" is free *to someone* — Kanopy and Hoopla want a
+ * library card, and a free app may not exist on the box you watch on.
  */
-function myServiceMatcher(): (name: string, country: string) => boolean {
-  const mine = getSettings()
-    .myServices.split(",")
-    .map((raw) => {
-      const [namePart, countryPart] = raw.split("@");
-      const name = normalizeService(namePart);
+export interface ServiceRule {
+  /** The entry exactly as written, so Settings can point at the one that decided a match. */
+  text: string;
+  /** Normalised name, for matching. */
+  name: string;
+  /** A "-" entry: never counts as yours, and never counts as free. */
+  blocked: boolean;
+  /** Countries the entry is limited to, or null for everywhere. */
+  countries: string[] | null;
+}
+
+export function parseServiceRules(list: string): ServiceRule[] {
+  return list
+    .split(",")
+    .map((raw): ServiceRule => {
+      const text = raw.trim();
+      const blocked = text.startsWith("-");
+      // Split on "@" before normalising, which would strip both "-" and "@".
+      const [namePart, countryPart] = (blocked ? text.slice(1) : text).split("@");
       const countries = (countryPart ?? "").split("/").map((c) => c.trim().toUpperCase()).filter(Boolean);
-      return { name, countries: countries.length > 0 ? countries : null };
+      return { text, name: normalizeService(namePart), blocked, countries: countries.length > 0 ? countries : null };
     })
-    .filter((m) => m.name !== "");
-  return (name: string, country: string): boolean => {
-    const normalized = normalizeService(name);
-    return mine.some(
-      (m) =>
-        (normalized.includes(m.name) || m.name.includes(normalized)) &&
-        (m.countries === null || m.countries.includes(country)),
-    );
+    .filter((r) => r.name !== "");
+}
+
+export function serviceRules(): ServiceRule[] {
+  return parseServiceRules(getSettings().myServices);
+}
+
+/**
+ * The entry that decides a provider in a country, or null for "no opinion". A subscription is
+ * not worldwide — a Netflix account in one country is no help in another — so an entry may be
+ * limited with "Netflix@DK/US"; a bare entry counts everywhere. A block wins over a plain
+ * match, so a narrow "-YouTube Free" still overrides a broad "YouTube".
+ */
+export function matchServiceRule(rules: ServiceRule[], name: string, country: string): ServiceRule | null {
+  const normalized = normalizeService(name);
+  const hits = rules.filter(
+    (r) =>
+      (normalized.includes(r.name) || r.name.includes(normalized)) &&
+      (r.countries === null || r.countries.includes(country)),
+  );
+  return hits.find((r) => r.blocked) ?? hits[0] ?? null;
+}
+
+type ServiceVerdict = "mine" | "blocked" | null;
+
+function serviceVerdicts(): (name: string, country: string) => ServiceVerdict {
+  const rules = serviceRules();
+  return (name, country) => {
+    const rule = matchServiceRule(rules, name, country);
+    return rule ? (rule.blocked ? "blocked" : "mine") : null;
   };
 }
 
 export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLElement | null {
   if (!providers) return null;
   const countries = watchCountries();
-  const haveIt = myServiceMatcher();
+  const verdict = serviceVerdicts();
   const flag = (cc: string): string =>
     cc.length === 2 ? String.fromCodePoint(...[...cc].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65)) : cc;
 
@@ -69,22 +105,34 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
         if (!existing || (existing.kind === "rent" && p.kind !== "rent")) seen.set(p.name, p);
       }
       // Cheapest first: yours, then free to anyone, then subscriptions you'd have to buy,
-      // then per-title rentals.
+      // then per-title rentals. A blocked service sinks in with the subscriptions you don't
+      // have — it stays listed, because "it's here but not for me" is worth knowing.
       const rank = (p: { name: string; kind: string }): number => {
         if (p.kind === "rent") return 3;
-        if (haveIt(p.name, cc)) return 0;
+        const v = verdict(p.name, cc);
+        if (v === "mine") return 0;
+        if (v === "blocked") return 2;
         return p.kind === "free" || p.kind === "ads" ? 1 : 2;
       };
       const list = [...seen.values()].sort((a, b) => rank(a) - rank(b));
       const rentChips: HTMLElement[] = [];
       for (const p of list) {
         const rent = p.kind === "rent";
-        const free = !rent && (p.kind === "free" || p.kind === "ads");
-        const suffix = rent ? " (rent or buy)" : p.kind === "free" ? " (free)" : p.kind === "ads" ? " (free, with ads)" : "";
+        const v = rent ? null : verdict(p.name, cc);
+        const free = !rent && v !== "blocked" && (p.kind === "free" || p.kind === "ads");
+        const suffix = rent
+          ? " (rent or buy)"
+          : v === "blocked"
+            ? " — you've marked this as one you can't use"
+            : p.kind === "free"
+              ? " (free)"
+              : p.kind === "ads"
+                ? " (free, with ads)"
+                : "";
         const chip = el(
           "a",
           {
-            class: `provider-chip ${rent ? "rent" : haveIt(p.name, cc) ? "have" : free ? "free" : ""}`,
+            class: `provider-chip ${rent ? "rent" : v === "mine" ? "have" : free ? "free" : ""}`,
             href: entry.link ?? "#",
             target: "_blank",
             rel: "noopener",
@@ -143,14 +191,21 @@ export type WatchBadge = "mine" | "free" | "stream" | "rent";
  */
 export function watchBadge(providers: ProvidersRecord | undefined): WatchBadge | null {
   if (!providers) return null;
-  const haveIt = myServiceMatcher();
+  const verdict = serviceVerdicts();
   let free = false;
   let stream = false;
   let rent = false;
   for (const cc of watchCountries()) {
     for (const p of providers[cc]?.providers ?? []) {
-      if (p.kind === "rent") rent = true;
-      else if (haveIt(p.name, cc)) return "mine";
+      if (p.kind === "rent") {
+        rent = true;
+        continue;
+      }
+      const v = verdict(p.name, cc);
+      if (v === "mine") return "mine";
+      // Blocked drops to plain "streams somewhere" — never the yellow free badge, which is a
+      // promise you can watch it for nothing.
+      if (v === "blocked") stream = true;
       else if (p.kind === "free" || p.kind === "ads") free = true;
       else stream = true;
     }

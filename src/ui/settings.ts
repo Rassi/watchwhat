@@ -5,6 +5,7 @@ import type { AppSettings } from "../data/settings";
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
 import { applyTheme } from "../theme";
 import { hardReload } from "./refresh";
+import { pickServices } from "./servicePicker";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -318,6 +319,25 @@ export const settingsRoute: Route = {
     const prefField = (labelText: string, input: HTMLElement, key: string): HTMLElement =>
       el("div", { class: "field" }, el("label", {}, labelText), el("div", { class: "field-row" }, input, resetBtns.get(key)!));
 
+    // Names have to match TMDB's spelling to be any use, so offer the ones it actually sent
+    // rather than making them a guess. Edits land in the draft like any other, so Save still
+    // decides.
+    const pickBtn = el("button", { class: "btn small", type: "button" }, "Choose from my library…");
+    pickBtn.addEventListener("click", async () => {
+      pickBtn.disabled = true;
+      try {
+        const picked = await pickServices(servicesInput.value.trim(), countriesInput.value.trim());
+        if (picked !== null) {
+          servicesInput.value = picked;
+          syncPrefButtons();
+        }
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Could not read cached services", "error");
+      } finally {
+        pickBtn.disabled = false;
+      }
+    });
+
     const prefsCard = el(
       "div",
       { class: "card" },
@@ -330,11 +350,14 @@ export const settingsRoute: Route = {
       ),
       prefField("Theme", themeSelect, "theme"),
       prefField("My streaming services (comma-separated — highlighted under Where to watch)", servicesInput, "myServices"),
+      el("div", { class: "button-row" }, pickBtn),
       el(
         "p",
         { class: "field-help" },
-        'A subscription only counts in the countries it works in: write "Netflix@DK/US" to limit one. ' +
-          "A plain name counts everywhere. Free-to-air services don't belong here — they're detected automatically.",
+        'A subscription only counts in the countries it works in: write "Netflix@DK/US" to limit one; ' +
+          "a plain name counts everywhere. Put a minus in front of one you can't actually use — " +
+          '"-Kanopy" — and it never counts as yours or as free, however TMDB lists it. ' +
+          "Free-to-air services need no entry at all; they're detected automatically.",
       ),
       prefField("Where-to-watch countries (ISO codes, comma-separated)", countriesInput, "watchCountries"),
       el(
