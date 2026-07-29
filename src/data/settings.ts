@@ -29,13 +29,16 @@ const defaults: AppSettings = {
   // Free-to-air services are left out on purpose: TMDB reports them as free/ads, so they are
   // marked from the data. Listing them here would only claim you pay for them.
   // "@US/DK" limits an account to the countries it can actually play in; see parseServiceRules.
-  // The "-" entries are the other way round: TMDB calls them free, but Kanopy and Hoopla want a
-  // US library card and YouTube's free tier has no Apple TV app, so they are free to someone else.
+  // The "-" entries are the other way round: TMDB calls them free, but they are free to someone
+  // else. Kanopy and Hoopla want a US library card, Cineasterna a Swedish one and Filmoteket a
+  // Norwegian one; YouTube's free tier has no Apple TV app. Filmstriben is deliberately absent —
+  // that one a Danish library card does cover.
   myServices:
     "Disney+@US/DK, Netflix@US/DK, Prime@US/DK, Hulu@US, Paramount+@US, HBO Max@US/DK, Apple TV+@DK, " +
-    "-Kanopy, -Hoopla, -YouTube Free",
-  // AU earns its place for free-to-air: SBS and ABC iview carry things the other three don't.
-  watchCountries: "DK, US, GB, AU",
+    "-Kanopy, -Hoopla, -YouTube Free, -Cineasterna, -Filmoteket",
+  // Most of these earn their place on free-to-air alone: SVT, NRK, SBS and ABC iview carry
+  // things the others don't. Nordics grouped, since they overlap most.
+  watchCountries: "DK, SE, NO, US, GB, AU",
 };
 
 function readJson<T>(key: string): T | null {
