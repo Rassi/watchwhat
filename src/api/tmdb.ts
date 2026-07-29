@@ -28,8 +28,10 @@ export interface TmdbMovieExtras {
   overview: string | null;
   cast: TmdbCastMember[];
   providersByCountry: Record<string, TmdbCountryProviders>;
-  /** Earliest announced digital/streaming release (user's countries preferred). */
+  /** Earliest un-noted digital release — when it can be bought or rented. */
   digitalRelease: { date: string; country: string } | null;
+  /** Earliest digital release noted with the services, e.g. "Disney+ / Hulu" — the streaming date. */
+  streamingRelease: { date: string; country: string; note: string } | null;
 }
 
 /** Poster path only — for movie search results. */
@@ -64,19 +66,38 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
         { link?: string; flatrate?: RawProviderEntry[]; free?: RawProviderEntry[]; ads?: RawProviderEntry[]; rent?: RawProviderEntry[] }
       >;
     };
-    release_dates?: { results?: { iso_3166_1: string; release_dates?: { release_date: string; type: number }[] }[] };
+    release_dates?: {
+      results?: { iso_3166_1: string; release_dates?: { release_date: string; type: number; note?: string }[] }[];
+    };
   };
 
-  // Digital (type 4) release dates: prefer the user's countries, else earliest anywhere.
+  // TMDB files two different events under type 4 (Digital): the buy/rent drop, and the date it
+  // starts streaming on a subscription. Nothing in the schema separates them — only the
+  // free-text note ("Disney+ / Hulu") marks the streaming one. So they are split on exactly
+  // that, and kept apart rather than collapsed to one "digital" date, because they answer
+  // different questions: when can I pay for this, versus when is it included in something I
+  // already have. The noted date also lands here well before watch/providers catches up, so it
+  // is often the only advance warning available.
+  // Both prefer the user's countries and fall back to the earliest anywhere.
   const userCountries = getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase());
-  let bestUser: { date: string; country: string } | null = null;
-  let bestGlobal: { date: string; country: string } | null = null;
+  let buyUser: { date: string; country: string } | null = null;
+  let buyGlobal: { date: string; country: string } | null = null;
+  let noteUser: { date: string; country: string; note: string } | null = null;
+  let noteGlobal: { date: string; country: string; note: string } | null = null;
   for (const region of data.release_dates?.results ?? []) {
     for (const rel of region.release_dates ?? []) {
       if (rel.type !== 4 || !rel.release_date) continue;
       const candidate = { date: rel.release_date, country: region.iso_3166_1 };
-      if (userCountries.includes(candidate.country) && (!bestUser || candidate.date < bestUser.date)) bestUser = candidate;
-      if (!bestGlobal || candidate.date < bestGlobal.date) bestGlobal = candidate;
+      const mine = userCountries.includes(candidate.country);
+      const note = rel.note?.trim();
+      if (note) {
+        const noted = { ...candidate, note };
+        if (mine && (!noteUser || noted.date < noteUser.date)) noteUser = noted;
+        if (!noteGlobal || noted.date < noteGlobal.date) noteGlobal = noted;
+      } else {
+        if (mine && (!buyUser || candidate.date < buyUser.date)) buyUser = candidate;
+        if (!buyGlobal || candidate.date < buyGlobal.date) buyGlobal = candidate;
+      }
     }
   }
 
@@ -88,7 +109,8 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
       .slice(0, 15)
       .map((c) => ({ tmdbId: c.id, name: c.name, character: c.character ?? null, profile: c.profile_path })),
     providersByCountry: {},
-    digitalRelease: bestUser ?? bestGlobal,
+    digitalRelease: buyUser ?? buyGlobal,
+    streamingRelease: noteUser ?? noteGlobal,
   };
   for (const [country, entry] of Object.entries(data["watch/providers"]?.results ?? {})) {
     const providers: TmdbProvider[] = [

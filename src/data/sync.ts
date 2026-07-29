@@ -375,6 +375,12 @@ function toMovieRec(movie: trakt.TraktMovie, existing: MovieRec | undefined, sta
     backdrop: existing?.backdrop,
     cast: existing?.cast,
     providers: existing?.providers,
+    // Every TMDB-derived field has to be carried over, not just the obvious ones: a field left
+    // out comes back undefined, which the staleness check reads as "never fetched" and refetches
+    // the whole library from TMDB after every Trakt sync.
+    providersVersion: existing?.providersVersion,
+    digitalRelease: existing?.digitalRelease,
+    streamingRelease: existing?.streamingRelease,
     tmdbFetchedAt: existing?.tmdbFetchedAt,
     ...state,
   };
@@ -456,14 +462,32 @@ export async function syncMovies(force = false): Promise<boolean> {
  */
 const PROVIDERS_VERSION = 2;
 
-/** TMDB artwork/cast/providers for movies missing them (7-day TTL), limited concurrency. */
+const DAY = 24 * 3600 * 1000;
+
+/**
+ * How long cached TMDB details stay good. Providers only really move around a release: a title
+ * landing on a subscription this week can change daily, while a film from 1984 has said all it
+ * is going to say. Watched films are settled by definition — you already saw it.
+ */
+function detailsMaxAge(movie: MovieRec): number {
+  if (movie.plays > 0) return 7 * DAY;
+  const dates = [movie.released, movie.digitalRelease?.date, movie.streamingRelease?.date]
+    .filter((d): d is string => typeof d === "string")
+    .map((d) => new Date(d).getTime())
+    .filter((t) => Number.isFinite(t));
+  // Nothing announced yet — the dates themselves are what we are waiting for.
+  if (dates.length === 0) return 12 * 3600 * 1000;
+  const now = Date.now();
+  return dates.some((t) => Math.abs(t - now) < 30 * DAY) ? 6 * 3600 * 1000 : 7 * DAY;
+}
+
+/** TMDB artwork/cast/providers for movies missing or outgrowing their cache, limited concurrency. */
 export async function ensureMovieDetails(
   movies: Map<number, MovieRec>,
   traktIds: number[],
   onUpdate?: () => void,
   opts?: { skipWatchedRefresh?: boolean },
 ): Promise<void> {
-  const maxAge = 7 * 24 * 3600 * 1000;
   const stale = traktIds.filter((id) => {
     const movie = movies.get(id);
     if (!movie?.ids.tmdb) return false;
@@ -472,8 +496,9 @@ export async function ensureMovieDetails(
     // once and only re-fetched when the movie page itself is opened.
     if (opts?.skipWatchedRefresh && movie.plays > 0) return false;
     if (movie.digitalRelease === undefined) return true; // backfill new field
+    if (movie.streamingRelease === undefined) return true; // backfill new field
     if (movie.providersVersion !== PROVIDERS_VERSION) return true; // cached before rent was kept
-    return Date.now() - movie.tmdbFetchedAt > maxAge;
+    return Date.now() - movie.tmdbFetchedAt > detailsMaxAge(movie);
   });
   if (stale.length === 0) return;
 
@@ -489,6 +514,7 @@ export async function ensureMovieDetails(
     movie.providers = extras.providersByCountry;
     movie.providersVersion = PROVIDERS_VERSION;
     movie.digitalRelease = extras.digitalRelease;
+    movie.streamingRelease = extras.streamingRelease;
     movie.tmdbFetchedAt = Date.now();
     await dbPut("movies", traktId, movie);
     notify.tick();

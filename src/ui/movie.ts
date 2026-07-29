@@ -59,9 +59,31 @@ export const movieRoute: Route = {
       document.title = `${movie.title} · WatchWhat`;
       // Cached before the trailer field existed — refresh Trakt metadata once.
       if (movie.trailer === undefined) movie = (await refreshMovieSummary(movies, traktId)) ?? movie;
-      await ensureMovieDetails(movies, [traktId]);
-      await ensureMovieExtRatings(movies, movie).catch(() => false);
-      renderPage(body, movies, movie, await loadMovieLists());
+      const lists = await loadMovieLists();
+      // Draw from cache first. Waiting on TMDB before the first paint made every visit as slow
+      // as the network, to change nothing at all on the usual visit where the cache was current.
+      renderPage(body, movies, movie, lists);
+
+      // Then refresh in the background and redraw in place if anything actually came back
+      // different. Scroll position is restored because the redraw replaces the whole page, and
+      // having it jump under you while reading is worse than showing the old providers a moment
+      // longer. A no-op refresh must not repaint at all, or it steals the selection and any
+      // open dropdown for nothing.
+      const snapshot = (m: MovieRec | undefined): string => JSON.stringify([m?.providers, m?.cast, m?.poster, m?.backdrop, m?.digitalRelease, m?.streamingRelease, m?.extRatings]);
+      let last = snapshot(movies.get(traktId));
+      const redraw = (): void => {
+        const fresh = movies.get(traktId);
+        const next = snapshot(fresh);
+        if (!fresh || next === last) return;
+        last = next;
+        const y = window.scrollY;
+        renderPage(body, movies, fresh, lists);
+        window.scrollTo(0, y);
+      };
+      void ensureMovieDetails(movies, [traktId], redraw)
+        .then(() => ensureMovieExtRatings(movies, movies.get(traktId) ?? movie).catch(() => false))
+        .then(redraw)
+        .catch(() => undefined);
     } catch (e) {
       body.replaceChildren(el("div", { class: "empty-note" }, e instanceof Error ? e.message : "Could not load this movie."));
     }
@@ -186,13 +208,31 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
       })(),
       el("p", { class: "about-overview" }, movie.overview || "No description available."),
       movie.released ? el("p", { class: "about-facts" }, `Released ${movie.released}`) : null,
-      (() => {
-        if (movie.plays > 0 || !movie.digitalRelease) return null;
-        const date = new Date(movie.digitalRelease.date);
-        const label = date.getTime() > Date.now() ? "Streaming expected" : "Digital release";
-        const formatted = date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-        return el("p", { class: "about-facts digital-release" }, `${label}: ${formatted} (${movie.digitalRelease.country})`);
-      })(),
+      // Two dates, kept apart: when you can buy or rent it, and when it starts streaming on a
+      // subscription. Collapsing them into one "digital release" reads as the latter and is
+      // usually the former, which is the more expensive misunderstanding of the two.
+      ...(movie.plays > 0
+        ? []
+        : ([
+            movie.digitalRelease ? { ...movie.digitalRelease, kind: "buy" as const } : null,
+            movie.streamingRelease ? { ...movie.streamingRelease, kind: "stream" as const } : null,
+          ]
+            .filter((r) => r !== null)
+            .map((r) => {
+              const date = new Date(r.date);
+              const upcoming = date.getTime() > Date.now();
+              const label =
+                r.kind === "stream"
+                  ? upcoming
+                    ? "Streaming from"
+                    : "Streaming since"
+                  : upcoming
+                    ? "To buy or rent from"
+                    : "Digital release";
+              const when = date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+              const where = "note" in r ? `${r.country} · ${r.note}` : r.country;
+              return el("p", { class: "about-facts digital-release" }, `${label}: ${when} (${where})`);
+            }))),
       (() => {
         const names = [
           ...(movie.onWatchlist ? ["Watchlist"] : []),

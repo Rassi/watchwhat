@@ -135,6 +135,8 @@ export interface MovieRec {
   extRatings?: { imdb: string | null; rottenTomatoes: string | null; fetchedAt: number };
   /** Earliest announced digital/streaming release from TMDB (null = none announced). */
   digitalRelease?: { date: string; country: string } | null;
+  /** Digital release whose note names the services, e.g. "Disney+ / Hulu" — the streaming date. */
+  streamingRelease?: { date: string; country: string; note: string } | null;
   // TMDB
   poster?: string | null;
   backdrop?: string | null;
