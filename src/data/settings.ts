@@ -28,9 +28,12 @@ const defaults: AppSettings = {
   theme: "auto",
   // Free-to-air services are left out on purpose: TMDB reports them as free/ads, so they are
   // marked from the data. Listing them here would only claim you pay for them.
-  // "@US/DK" limits an account to the countries it can actually play in; see myServiceMatcher.
+  // "@US/DK" limits an account to the countries it can actually play in; see parseServiceRules.
+  // The "-" entries are the other way round: TMDB calls them free, but Kanopy and Hoopla want a
+  // US library card and YouTube's free tier has no Apple TV app, so they are free to someone else.
   myServices:
-    "Disney+@US/DK, Netflix@US/DK, Prime@US/DK, Hulu@US, Paramount+@US, HBO Max@US/DK, Apple TV+@DK",
+    "Disney+@US/DK, Netflix@US/DK, Prime@US/DK, Hulu@US, Paramount+@US, HBO Max@US/DK, Apple TV+@DK, " +
+    "-Kanopy, -Hoopla, -YouTube Free",
   watchCountries: "DK, US, GB",
 };
 
@@ -52,7 +55,20 @@ function readJson<T>(key: string): T | null {
  * remembers what the defaults used to be.
  */
 function readStored(): Partial<AppSettings> {
-  return readJson<Partial<AppSettings>>(SETTINGS_KEY) ?? {};
+  const stored: Record<string, unknown> = readJson<Record<string, unknown>>(SETTINGS_KEY) ?? {};
+  // A pin that has caught up with the default is not a pin. Dropping it has to reach storage,
+  // not just this read: a key left behind would look unpinned only while the two happened to
+  // agree, then silently take over again the next time the default moved. Reset and Save are
+  // both greyed out in that state, so nothing else would ever clear it.
+  let pruned = false;
+  for (const key of Object.keys(stored) as (keyof AppSettings)[]) {
+    if (stored[key] === defaults[key]) {
+      delete stored[key];
+      pruned = true;
+    }
+  }
+  if (pruned) writeStored(stored as Partial<AppSettings>);
+  return stored as Partial<AppSettings>;
 }
 
 function writeStored(stored: Partial<AppSettings>): void {
