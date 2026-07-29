@@ -32,13 +32,17 @@ const defaults: AppSettings = {
   // The "-" entries are the other way round: TMDB calls them free, but they are free to someone
   // else. Kanopy and Hoopla want a US library card, Cineasterna a Swedish one and Filmoteket a
   // Norwegian one and Beamafilm an Australian one; FXNow and Adult Swim want a US pay-TV login,
-  // which is not free at all; YouTube's free tier has no Apple TV app. Filmstriben is
-  // deliberately absent — that one a Danish library card does cover. The geo-locked US tier
-  // (Tubi, Plex, Roku) is absent too: it is genuinely free where it plays, so it stays yellow
-  // and you judge the country row.
+  // which is not free at all; YouTube's free tier and The Roku Channel have no Apple TV app.
+  // Filmstriben is deliberately absent — that one a Danish library card does cover.
+  // Plex is listed the long way round: it plays on the Apple TV in DK but nowhere else, and a
+  // block is the only half that takes countries, so every country except DK is named. Adding a
+  // seventh watch country means adding it here too, or Plex will claim to be free there.
+  // Tubi is absent on purpose: genuinely free where it plays, so it stays yellow and you judge
+  // the country row.
   myServices:
     "Disney+@US/DK, Netflix@US/DK, Prime@US/DK, Hulu@US, Paramount+@US, HBO Max@US/DK, Apple TV+@DK, " +
-    "-Kanopy, -Hoopla, -YouTube Free, -Cineasterna, -Filmoteket, -Beamafilm, -FXNow, -Adult Swim",
+    "-Kanopy, -Hoopla, -YouTube Free, -Cineasterna, -Filmoteket, -Beamafilm, -FXNow, -Adult Swim, " +
+    "-The Roku Channel, -Plex@SE/NO/US/GB/AU",
   // Most of these earn their place on free-to-air alone: SVT, NRK, SBS and ABC iview carry
   // things the others don't. Nordics grouped, since they overlap most.
   watchCountries: "DK, SE, NO, US, GB, AU",
