@@ -2,8 +2,9 @@ import type { Route } from "../router";
 import { dialog, el, toast, withSyncIndicator } from "./components";
 import { searchAll, searchShows, searchMovies, type TraktMovie, type TraktShow } from "../api/trakt";
 import { fetchMoviePoster, fetchShowImages, posterUrl } from "../api/tmdb";
-import { addToWatchlist, loadLibrary, loadMovies, removeFromWatchlist, setMovieOnWatchlist } from "../data/sync";
+import { addToWatchlist, loadLibrary, loadMovieLists, loadMovies, removeFromWatchlist } from "../data/sync";
 import { isAuthenticated, isConfigured } from "../data/settings";
+import { movieListsDropdown } from "./shared";
 import type { MovieRec } from "../data/model";
 
 export const searchRoute: Route = {
@@ -17,6 +18,7 @@ export const searchRoute: Route = {
 
     const lib = await loadLibrary();
     const movies = await loadMovies();
+    const movieLists = await loadMovieLists();
     type Mode = "all" | "show" | "movie";
     let mode: Mode = "all";
 
@@ -155,50 +157,29 @@ export const searchRoute: Route = {
         });
       }
 
-      const action = el("button", { class: "btn" });
-      const refreshAction = (): void => {
-        const rec = movies.get(movie.ids.trakt);
-        if (rec && rec.plays > 0) {
-          action.textContent = "Watched ✓";
-          action.disabled = true;
-        } else if (rec?.onWatchlist) {
-          action.textContent = "Listed ✓";
-          action.disabled = false;
-        } else {
-          action.textContent = "+ Add";
-          action.disabled = false;
-          action.classList.add("primary");
-        }
-      };
-      refreshAction();
-      action.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        action.disabled = true;
-        try {
-          const existing = movies.get(movie.ids.trakt);
-          if (existing?.onWatchlist) {
-            const choice = await dialog(`Remove "${movie.title}"?`, "It will be removed from your movie watchlist.", [
-              { label: "Remove", value: "yes", kind: "danger" },
-              { label: "Cancel", value: "no" },
-            ]);
-            if (choice !== "yes") {
-              refreshAction();
-              return;
-            }
-            await withSyncIndicator(setMovieOnWatchlist(movies, existing, false));
-            toast(`Removed "${movie.title}" from your watchlist`);
-          } else {
-            await withSyncIndicator(setMovieOnWatchlist(movies, existing ?? toMovieRec(movie), true));
-            toast(`Added "${movie.title}" to your movie watchlist`);
-          }
-        } catch (err) {
-          toast(err instanceof Error ? err.message : "Update failed", "error");
-        }
-        refreshAction();
+      // The record may not be cached yet; the first toggle is what creates it. Held in a local so
+      // every later toggle acts on the same object rather than building a second one that has
+      // forgotten the first change.
+      let rec = movies.get(movie.ids.trakt);
+      const action = movieListsDropdown({
+        movies,
+        record: () => (rec ??= movies.get(movie.ids.trakt) ?? toMovieRec(movie)),
+        lists: movieLists,
+        onChange: () => refreshWatched(),
       });
 
       const title = el("div", { class: "t" }, `${movie.title}${movie.year ? ` (${movie.year})` : ""}`);
       if (withType) title.append(typeChip("MOVIE"));
+      // "Watched" used to be the action button's job, which the dropdown takes over. It is still
+      // worth knowing at a glance — and a watched film can still go on a list, so it must not
+      // disable anything the way the old button did.
+      const watchedChip = el("span", { class: "type-chip watched" }, "WATCHED");
+      const refreshWatched = (): void => {
+        const current = movies.get(movie.ids.trakt);
+        watchedChip.hidden = !current || current.plays === 0;
+      };
+      refreshWatched();
+      title.append(watchedChip);
       const rowEl = el(
         "div",
         { class: "search-row" },

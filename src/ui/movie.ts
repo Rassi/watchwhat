@@ -8,8 +8,6 @@ import {
   loadMovieLists,
   loadMovies,
   refreshMovieSummary,
-  setMovieOnCustomList,
-  setMovieOnWatchlist,
   setMovieWatched,
   syncMovies,
 } from "../data/sync";
@@ -17,7 +15,7 @@ import type { MovieListRec } from "../data/model";
 import type { MovieRec } from "../data/model";
 import { getMovieSummary } from "../api/trakt";
 import { backdropUrl } from "../api/tmdb";
-import { castStripCard, whereToWatchCard } from "./shared";
+import { castStripCard, movieListsDropdown, whereToWatchCard } from "./shared";
 
 export const movieRoute: Route = {
   name: "movie",
@@ -155,36 +153,14 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
       renderContent();
     });
 
-    // Lists ▾ dropdown: toggle the watchlist and each custom list on/off.
-    const onListCount = (movie.onWatchlist ? 1 : 0) + (movie.customLists?.length ?? 0);
-    const listsWrap = el("div", { class: "lists-dropdown" });
-    const listsBtn = el("button", { class: "btn" }, `Lists${onListCount > 0 ? ` (${onListCount})` : ""} ▾`);
-    const menu = el("div", { class: "burger-menu" });
-    const toggleRow = (label: string, on: boolean, action: () => Promise<void>): HTMLElement => {
-      const row = el("button", { class: `burger-item ${on ? "on" : ""}` }, `${on ? "✓" : "○"}  ${label}`);
-      row.addEventListener("click", async () => {
-        listsWrap.classList.remove("open");
-        try {
-          await withSyncIndicator(action());
-          toast(on ? `Removed from ${label}` : `Added to ${label}`);
-        } catch (e) {
-          toast(e instanceof Error ? e.message : "Update failed", "error");
-        }
-        renderContent();
-      });
-      return row;
-    };
-    menu.append(toggleRow("Watchlist", movie.onWatchlist, () => setMovieOnWatchlist(movies, movie, !movie.onWatchlist)));
-    for (const list of movieLists) {
-      const on = movie.customLists?.includes(list.traktId) ?? false;
-      menu.append(toggleRow(list.name, on, () => setMovieOnCustomList(movies, movie, list.traktId, !on)));
-    }
-    listsBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      listsWrap.classList.toggle("open");
+    // Lists ▾ dropdown: toggle the watchlist and each custom list on/off. Shared with the search
+    // results, so "add to Family" means the same thing and looks the same in both places.
+    const listsWrap = movieListsDropdown({
+      movies,
+      record: () => movie,
+      lists: movieLists,
+      onChange: () => renderContent(),
     });
-    body.addEventListener("click", () => listsWrap.classList.remove("open"));
-    listsWrap.append(listsBtn, menu);
 
     const actions = el("div", { class: "card" }, el("div", { class: "manage-buttons" }, watchedBtn, listsWrap));
 

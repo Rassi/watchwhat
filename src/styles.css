@@ -644,6 +644,12 @@ button {
   white-space: nowrap;
 }
 
+/* Same chip, carrying state rather than a category — the action button used to say this. */
+.search-row .info .type-chip.watched {
+  color: var(--green);
+  border-color: currentColor;
+}
+
 .search-row .info .o {
   font-size: 12px;
   color: var(--text-dim);
@@ -1087,6 +1093,24 @@ button {
 
 .lists-dropdown.open .burger-menu {
   display: block;
+}
+
+/* In a search result the button is flush right, so the menu hangs from that edge instead of
+   running off the screen, and from just under a shorter button. */
+.search-row .lists-dropdown {
+  flex-shrink: 0;
+}
+
+/* Rows below are positioned too, so without this the next row's button paints on top of an
+   open menu — only while open, or every row would sit above the one before it for nothing. */
+.lists-dropdown.open {
+  z-index: 20;
+}
+
+.search-row .lists-dropdown .burger-menu {
+  top: 38px;
+  left: auto;
+  right: 0;
 }
 
 .burger-item.on {

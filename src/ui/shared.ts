@@ -1,9 +1,10 @@
 /** UI pieces shared between the show and movie pages. */
 
-import { el } from "./components";
+import { dialog, el, toast, withSyncIndicator } from "./components";
 import { getSettings } from "../data/settings";
 import { posterUrl } from "../api/tmdb";
-import type { CastMemberRec } from "../data/model";
+import { setMovieOnCustomList, setMovieOnWatchlist } from "../data/sync";
+import type { CastMemberRec, MovieListRec, MovieRec } from "../data/model";
 
 export type ProvidersRecord = Record<
   string,
@@ -182,6 +183,92 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
     ...rows,
     el("p", { class: "wtw-attrib" }, "Streaming data by JustWatch via TMDB"),
   );
+}
+
+// One listener for every dropdown ever built, rather than one per instance on whatever container
+// happened to be current: those die with the route that owned them, and Search throws its results
+// away on each keystroke. Clicks inside a dropdown never reach here — the wrap stops them.
+let closerInstalled = false;
+function installDropdownCloser(): void {
+  if (closerInstalled) return;
+  closerInstalled = true;
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".lists-dropdown.open").forEach((d) => d.classList.remove("open"));
+  });
+}
+
+/**
+ * "Lists ▾" — the watchlist and every custom list as one set of toggles, with the counts and
+ * confirmations that go with them.
+ *
+ * The record arrives as a thunk because a search hit need not be cached yet: the first toggle is
+ * what creates the record, and every toggle after it has to act on that same object rather than
+ * on a second copy that would forget the first change.
+ */
+export function movieListsDropdown(opts: {
+  movies: Map<number, MovieRec>;
+  record: () => MovieRec;
+  lists: MovieListRec[];
+  /** Called after a successful toggle, so the caller can redraw whatever else shows list state. */
+  onChange?: () => void;
+}): HTMLElement {
+  const { movies, record, lists, onChange } = opts;
+  installDropdownCloser();
+
+  const wrap = el("div", { class: "lists-dropdown" });
+  const button = el("button", { class: "btn" });
+  const menu = el("div", { class: "burger-menu" });
+  // The wrap sits inside a search row that navigates on click, so nothing in here may bubble.
+  wrap.addEventListener("click", (e) => e.stopPropagation());
+
+  const draw = (): void => {
+    const rec = movies.get(record().traktId);
+    const onWatchlist = rec?.onWatchlist ?? false;
+    const custom = rec?.customLists ?? [];
+    const count = (onWatchlist ? 1 : 0) + custom.length;
+    // Deliberately never "primary": Search's old "+ Add" earned the yellow by being the action,
+    // but a disclosure control that opens a menu does not, and one per result made the page a
+    // wall of it. The count is the signal worth having, and it points the useful way round.
+    button.textContent = count > 0 ? `Lists (${count}) ▾` : "Lists ▾";
+
+    const row = (label: string, on: boolean, apply: (rec: MovieRec) => Promise<void>): HTMLElement => {
+      const item = el("button", { class: `burger-item ${on ? "on" : ""}` }, `${on ? "✓" : "○"}  ${label}`);
+      item.addEventListener("click", async () => {
+        wrap.classList.remove("open");
+        try {
+          // Removal is the one direction worth a confirmation: it undoes a deliberate act, and on
+          // a search row the whole list is one mis-aimed tap away from the row underneath it.
+          if (on) {
+            const choice = await dialog(`Remove from ${label}?`, `"${record().title}" will be taken off ${label}.`, [
+              { label: "Remove", value: "yes", kind: "danger" },
+              { label: "Cancel", value: "no" },
+            ]);
+            if (choice !== "yes") return;
+          }
+          await withSyncIndicator(apply(record()));
+          toast(on ? `Removed from ${label}` : `Added to ${label}`);
+        } catch (e) {
+          toast(e instanceof Error ? e.message : "Update failed", "error");
+        }
+        draw();
+        onChange?.();
+      });
+      return item;
+    };
+
+    menu.replaceChildren(
+      row("Watchlist", onWatchlist, (rec) => setMovieOnWatchlist(movies, rec, !onWatchlist)),
+      ...lists.map((list) => {
+        const on = custom.includes(list.traktId);
+        return row(list.name, on, (rec) => setMovieOnCustomList(movies, rec, list.traktId, !on));
+      }),
+    );
+  };
+  draw();
+
+  button.addEventListener("click", () => wrap.classList.toggle("open"));
+  wrap.append(button, menu);
+  return wrap;
 }
 
 /**
