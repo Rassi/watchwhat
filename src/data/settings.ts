@@ -43,9 +43,12 @@ const defaults: AppSettings = {
     "Disney+@US/DK, Netflix@US/DK, Prime@US/DK, Hulu@US, Paramount+@US, HBO Max@US/DK, Apple TV+@DK, " +
     "-Kanopy, -Hoopla, -YouTube Free, -Cineasterna, -Filmoteket, -Beamafilm, -FXNow, -Adult Swim, " +
     "-The Roku Channel, -Plex@SE/NO/US/GB/AU",
-  // Most of these earn their place on free-to-air alone: SVT, NRK, SBS and ABC iview carry
-  // things the others don't. Nordics grouped, since they overlap most.
-  watchCountries: "DK, SE, NO, US, GB, AU",
+  // The order here is the order the rows appear in on a title page, so it runs from where you
+  // can actually watch things to where you mostly can't: DK and US are the real ones, GB is a
+  // maybe, and SE/NO/AU are kept only for the handful of free-to-air catalogues they add (SVT,
+  // NRK, SBS and ABC iview carry things the others don't). Grouping the Nordics together reads
+  // more tidily but buries US halfway down the card.
+  watchCountries: "DK, US, GB, SE, NO, AU",
 };
 
 function readJson<T>(key: string): T | null {
