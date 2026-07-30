@@ -224,14 +224,26 @@ export interface DeviceCode {
   interval: number;
 }
 
+/**
+ * Trakt answers 401 here only when it cannot find the client ID at all, so say
+ * that instead of the bare status: an app deleted on trakt.tv looks exactly
+ * like a typo from in here, and both are fixed in the same place.
+ */
+export const BAD_CLIENT = "Trakt doesn't recognise your Client ID — the API app may have been deleted. Re-create it on trakt.tv and paste the new Client ID and Secret above.";
+
 export async function requestDeviceCode(): Promise<DeviceCode> {
   const { traktClientId } = getSettings();
-  const { data } = await request<DeviceCode>("/oauth/device/code", {
-    method: "POST",
-    auth: false,
-    body: { client_id: traktClientId },
-  });
-  return data;
+  try {
+    const { data } = await request<DeviceCode>("/oauth/device/code", {
+      method: "POST",
+      auth: false,
+      body: { client_id: traktClientId },
+    });
+    return data;
+  } catch (e) {
+    if (e instanceof TraktError && e.status === 401) throw new TraktError(401, BAD_CLIENT);
+    throw e;
+  }
 }
 
 interface TokenResponse {
@@ -292,6 +304,16 @@ export async function pollForDeviceToken(code: DeviceCode, signal?: AbortSignal)
   throw new TraktError(410, "Code expired — try again");
 }
 
+/** Did an OAuth error blame the app's credentials rather than the login? */
+async function isInvalidClient(res: Response): Promise<boolean> {
+  try {
+    const body = (await res.json()) as { error?: string };
+    return body.error === "invalid_client";
+  } catch {
+    return false;
+  }
+}
+
 let refreshInFlight: Promise<Tokens> | null = null;
 
 /**
@@ -326,6 +348,10 @@ async function doRefreshTokens(): Promise<Tokens> {
     // Only a rejected grant means the session is really gone. 5xx, rate limits
     // and the like are transient — keep the tokens so a retry can succeed.
     if (res.status === 400 || res.status === 401) {
+      // invalid_client is the app's credentials being wrong, not the login: the
+      // stored tokens are still good and will keep working once the Client ID
+      // and Secret are fixed, so don't throw a live session away over it.
+      if (await isInvalidClient(res)) throw new TraktError(res.status, BAD_CLIENT);
       // Don't wipe tokens another refresh stored while this one was in flight.
       if (getTokens()?.refreshToken === tokens.refreshToken) clearTokens();
       throw new TraktError(res.status, "Trakt session expired — please log in again");

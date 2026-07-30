@@ -2,7 +2,7 @@ import type { Route } from "../router";
 import { el, toast, dialog, spinner } from "./components";
 import { getSettings, saveSettings, isAuthenticated, isConfigured, defaultSettings } from "../data/settings";
 import type { AppSettings } from "../data/settings";
-import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
+import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError, BAD_CLIENT } from "../api/trakt";
 import { applyTheme } from "../theme";
 import { hardReload } from "./refresh";
 import { pickServices } from "./servicePicker";
@@ -81,7 +81,7 @@ export const settingsRoute: Route = {
     const traktHelp = el("p", {});
     traktHelp.innerHTML =
       `One-time setup: create your own (free) API app at ` +
-      `<a href="https://trakt.tv/oauth/applications/new" target="_blank" rel="noopener"><b>trakt.tv/oauth/applications</b></a>. ` +
+      `<a href="https://app.trakt.tv/settings/apps/api" target="_blank" rel="noopener"><b>app.trakt.tv/settings/apps/api</b></a>. ` +
       `Name: anything (e.g. WatchWhat). Redirect URI: <code>urn:ietf:wg:oauth:2.0:oob</code>. ` +
       `Then paste the Client ID and Secret here — they stay in this browser only.`;
 
@@ -109,7 +109,9 @@ export const settingsRoute: Route = {
         getLastActivities()
           .then(() => (status.textContent = "Connected ✓"))
           .catch((e: unknown) => {
-            status.textContent = e instanceof TraktError && e.status === 401 ? "Session expired — reconnect below." : "Connected, but Trakt could not be reached right now.";
+            // A dead Client ID also comes back as a 401, but reconnecting can't fix that one.
+            if (e instanceof TraktError && e.message === BAD_CLIENT) status.textContent = BAD_CLIENT;
+            else status.textContent = e instanceof TraktError && e.status === 401 ? "Session expired — reconnect below." : "Connected, but Trakt could not be reached right now.";
           });
         const disconnectBtn = el("button", { class: "btn danger" }, "Disconnect");
         disconnectBtn.addEventListener("click", () => {

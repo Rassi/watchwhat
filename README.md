@@ -26,7 +26,7 @@ the repo can be public.
 
 ## Setup (once, ~2 minutes)
 
-1. Create a free Trakt API app at <https://trakt.tv/oauth/applications/new>
+1. Create a free Trakt API app at <https://app.trakt.tv/settings/apps/api>
    — any name, redirect URI `urn:ietf:wg:oauth:2.0:oob`.
 2. Get a free TMDB API key at <https://www.themoviedb.org/settings/api>.
 3. Open the app → **Settings** → paste the Trakt Client ID/Secret and the TMDB
