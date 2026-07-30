@@ -13,6 +13,7 @@
 import * as trakt from "../api/trakt";
 import { fetchMovieExtras, fetchShowExtras, fetchShowImages } from "../api/tmdb";
 import { fetchOmdbRatings } from "../api/omdb";
+import { fetchJustWatchOffers } from "../api/justwatch";
 import { dbBulkPut, dbClear, dbGet, dbGetAll, dbPut } from "./db";
 import type { EpisodesRec, Library, MovieListRec, MovieRec, ProgressRec, ShowRec, WatchedRec, WatchlistEntry } from "./model";
 import { getSettings, isAuthenticated } from "./settings";
@@ -464,6 +465,24 @@ const PROVIDERS_VERSION = 2;
 
 const DAY = 24 * 3600 * 1000;
 
+function watchCountryList(): string[] {
+  return getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+}
+
+/** Every date we know about, as timestamps. */
+function knownDates(movie: MovieRec): number[] {
+  return [movie.released, movie.digitalRelease?.date, movie.streamingRelease?.date]
+    .filter((d): d is string => typeof d === "string")
+    .map((d) => new Date(d).getTime())
+    .filter((t) => Number.isFinite(t));
+}
+
+/** Within a month of any known date — when listings actually move, in either direction. */
+function nearRelease(movie: MovieRec): boolean {
+  const now = Date.now();
+  return knownDates(movie).some((t) => Math.abs(t - now) < 30 * DAY);
+}
+
 /**
  * How long cached TMDB details stay good. Providers only really move around a release: a title
  * landing on a subscription this week can change daily, while a film from 1984 has said all it
@@ -471,14 +490,43 @@ const DAY = 24 * 3600 * 1000;
  */
 function detailsMaxAge(movie: MovieRec): number {
   if (movie.plays > 0) return 7 * DAY;
-  const dates = [movie.released, movie.digitalRelease?.date, movie.streamingRelease?.date]
-    .filter((d): d is string => typeof d === "string")
-    .map((d) => new Date(d).getTime())
-    .filter((t) => Number.isFinite(t));
   // Nothing announced yet — the dates themselves are what we are waiting for.
-  if (dates.length === 0) return 12 * 3600 * 1000;
-  const now = Date.now();
-  return dates.some((t) => Math.abs(t - now) < 30 * DAY) ? 6 * 3600 * 1000 : 7 * DAY;
+  if (knownDates(movie).length === 0) return 12 * 3600 * 1000;
+  return nearRelease(movie) ? 6 * 3600 * 1000 : 7 * DAY;
+}
+
+/**
+ * Fold JustWatch's offers into TMDB's, for the near-release titles where TMDB's ingest lags.
+ * TMDB stays the source of record: this only adds providers it is missing and downgrades a kind
+ * when JustWatch says something is cheaper than TMDB thinks. Nothing is ever removed — an entry
+ * TMDB has and JustWatch does not is far more likely to be a search miss than a delisting.
+ */
+function mergeJustWatch(
+  tmdb: NonNullable<MovieRec["providers"]>,
+  extra: Record<string, { name: string; kind: string }[]>,
+): NonNullable<MovieRec["providers"]> {
+  const cost = (k: string): number => (k === "free" || k === "ads" ? 0 : k === "rent" ? 2 : 1);
+  const merged: NonNullable<MovieRec["providers"]> = { ...tmdb };
+  for (const [cc, offers] of Object.entries(extra)) {
+    const entry = merged[cc] ?? { link: null, providers: [] };
+    const providers = [...entry.providers];
+    for (const offer of offers) {
+      const at = providers.findIndex((p) => p.name === offer.name);
+      if (at === -1) providers.push({ name: offer.name, logo: null, kind: offer.kind });
+      else if (cost(offer.kind) < cost(providers[at].kind)) providers[at] = { ...providers[at], kind: offer.kind };
+    }
+    merged[cc] = { link: entry.link, providers };
+  }
+  // Logos are TMDB paths, which JustWatch does not supply. A provider already seen in another
+  // country carries the same logo, so borrow it rather than render a bare chip.
+  const logos = new Map<string, string>();
+  for (const entry of Object.values(merged)) {
+    for (const p of entry.providers) if (p.logo && !logos.has(p.name)) logos.set(p.name, p.logo);
+  }
+  for (const entry of Object.values(merged)) {
+    for (const p of entry.providers) if (!p.logo) p.logo = logos.get(p.name) ?? null;
+  }
+  return merged;
 }
 
 /** TMDB artwork/cast/providers for movies missing or outgrowing their cache, limited concurrency. */
@@ -515,6 +563,12 @@ export async function ensureMovieDetails(
     movie.providersVersion = PROVIDERS_VERSION;
     movie.digitalRelease = extras.digitalRelease;
     movie.streamingRelease = extras.streamingRelease;
+    // Only near a release, and only with the dates TMDB just returned: this is the one window
+    // where TMDB is known to be behind, and it keeps the extra request off the other ~340 titles.
+    if (movie.ids.tmdb && nearRelease(movie)) {
+      const offers = await fetchJustWatchOffers(movie.title, movie.ids.tmdb, watchCountryList());
+      if (offers) movie.providers = mergeJustWatch(movie.providers ?? {}, offers);
+    }
     movie.tmdbFetchedAt = Date.now();
     await dbPut("movies", traktId, movie);
     notify.tick();
