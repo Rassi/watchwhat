@@ -13,6 +13,35 @@
  */
 
 const ENDPOINT = "https://apis.justwatch.com/graphql";
+const HEALTH_KEY = "watchwhat.justwatch.health";
+
+/** Outcome of the most recent real top-up, so Settings can report from actual use. */
+export interface JustWatchHealth {
+  at: number;
+  ok: boolean;
+  /** Where it got to: which stage produced the outcome. */
+  stage: "reach" | "search" | "offers" | "ok";
+  detail: string;
+  /** monetizationType values seen with no mapping — the quiet way offers get dropped. */
+  unknownKinds?: string[];
+}
+
+export function getJustWatchHealth(): JustWatchHealth | null {
+  try {
+    const raw = localStorage.getItem(HEALTH_KEY);
+    return raw ? (JSON.parse(raw) as JustWatchHealth) : null;
+  } catch {
+    return null;
+  }
+}
+
+function recordHealth(health: JustWatchHealth): void {
+  try {
+    localStorage.setItem(HEALTH_KEY, JSON.stringify(health));
+  } catch {
+    /* storage full or blocked — health reporting is not worth failing a fetch over */
+  }
+}
 
 /** JustWatch monetization types mapped onto our kinds; anything unlisted is ignored. */
 const KINDS: Record<string, "stream" | "free" | "ads" | "rent"> = {
@@ -75,6 +104,98 @@ async function findNodeId(title: string, tmdbId: number, searchCountries: string
   return null;
 }
 
+export interface JustWatchCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * Exercises every part of the contract this file depends on, and asserts on the shape of what
+ * comes back. A bare reachability ping is close to worthless here: the endpoint staying up says
+ * nothing about whether `externalIds`, `monetizationType` or `package.clearName` still exist
+ * under those names, and it is a rename that would quietly stop the top-ups.
+ *
+ * Availability is deliberately not asserted. A canary title dropping off a service is normal and
+ * is not a schema problem, so "reachable but no offers" reports as a warning, not a failure.
+ */
+export async function checkJustWatch(countries: string[]): Promise<JustWatchCheck[]> {
+  const checks: JustWatchCheck[] = [];
+  // The 2006 original: a fixed, long-lived title, and its sequel makes it a real test of whether
+  // results are still being confirmed by id rather than by title text.
+  const CANARY = { title: "The Devil Wears Prada", tmdbId: 350 };
+  const wanted = countries.map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
+
+  try {
+    const ping = await post<{ __typename: string }>("{__typename}", {});
+    checks.push({ label: "Endpoint reachable", ok: ping !== null, detail: ping ? "GraphQL responded" : "No usable response" });
+    if (!ping) return checks;
+  } catch (e) {
+    checks.push({ label: "Endpoint reachable", ok: false, detail: e instanceof Error ? e.message : "Request failed" });
+    return checks;
+  }
+
+  interface SearchData {
+    popularTitles: { edges: { node: { id: string; content?: { externalIds?: { tmdbId?: number | string } } } }[] };
+  }
+  const search = await post<SearchData>(SEARCH, { country: wanted[0] ?? "US", language: "en", q: CANARY.title });
+  const edges = search?.popularTitles?.edges;
+  if (!Array.isArray(edges)) {
+    checks.push({ label: "Title search", ok: false, detail: "Response shape changed — no popularTitles.edges array" });
+    return checks;
+  }
+  checks.push({ label: "Title search", ok: true, detail: `${edges.length} result(s) for "${CANARY.title}"` });
+
+  const hit = edges.find((e) => String(e.node.content?.externalIds?.tmdbId ?? "") === String(CANARY.tmdbId));
+  checks.push({
+    label: "TMDB id matching",
+    ok: hit !== undefined,
+    detail: hit ? `Confirmed tmdbId ${CANARY.tmdbId} by id` : `No result reported tmdbId ${CANARY.tmdbId} — externalIds may have moved`,
+  });
+  if (!hit) return checks;
+
+  const aliases = wanted
+    .map((cc) => `${cc.toLowerCase()}: offers(country: ${cc}, platform: WEB) { monetizationType presentationType package { clearName } }`)
+    .join("\n      ");
+  interface OfferRow {
+    monetizationType: string;
+    presentationType?: string;
+    package: { clearName: string };
+  }
+  const offers = await post<{ node: Record<string, OfferRow[] | undefined> }>(
+    `query O($id: ID!) { node(id: $id) { ... on MovieOrShow {\n      ${aliases}\n  } } }`,
+    { id: hit.node.id },
+  );
+  if (!offers?.node) {
+    checks.push({ label: "Offers query", ok: false, detail: "No node returned — offers field or country aliasing may have changed" });
+    return checks;
+  }
+  const rows = wanted.flatMap((cc) => offers.node[cc.toLowerCase()] ?? []);
+  const withCountries = wanted.filter((cc) => (offers.node[cc.toLowerCase()] ?? []).length > 0);
+  checks.push({
+    label: "Offers query",
+    ok: true,
+    detail: `${rows.length} offer(s) across ${withCountries.join(", ") || "no countries"}`,
+  });
+
+  const named = rows.filter((r) => typeof r.package?.clearName === "string" && r.package.clearName !== "");
+  checks.push({
+    label: "Provider names",
+    ok: rows.length === 0 || named.length > 0,
+    detail: rows.length === 0 ? "Nothing to check — no offers returned" : `${named.length}/${rows.length} carry package.clearName`,
+  });
+
+  const seen = [...new Set(rows.map((r) => r.monetizationType).filter(Boolean))];
+  const unknown = seen.filter((t) => !KINDS[t] && t !== "CINEMA");
+  checks.push({
+    label: "Monetization types",
+    ok: unknown.length === 0,
+    detail: unknown.length === 0 ? `All recognised: ${seen.join(", ") || "none seen"}` : `Unmapped: ${unknown.join(", ")}`,
+  });
+
+  return checks;
+}
+
 /**
  * Offers per country for one title, or null if anything at all went wrong. Countries are aliased
  * into a single query rather than requested one at a time — six round trips per title would make
@@ -91,7 +212,12 @@ export async function fetchJustWatchOffers(
     // US first: the largest catalogue, so the likeliest to know a title at all.
     const searchIn = [...new Set(["US", ...wanted])];
     const nodeId = await findNodeId(title, tmdbId, searchIn.slice(0, 2));
-    if (!nodeId) return null;
+    if (!nodeId) {
+      // Not necessarily breakage: a title genuinely absent from JustWatch looks the same as a
+      // renamed search field. Which it is shows up in whether *every* title starts failing.
+      recordHealth({ at: Date.now(), ok: false, stage: "search", detail: `No JustWatch match for "${title}"` });
+      return null;
+    }
 
     const aliases = wanted
       .map(
@@ -108,8 +234,12 @@ export async function fetchJustWatchOffers(
       `query O($id: ID!) { node(id: $id) { ... on MovieOrShow {\n      ${aliases}\n  } } }`,
       { id: nodeId },
     );
-    if (!data?.node) return null;
+    if (!data?.node) {
+      recordHealth({ at: Date.now(), ok: false, stage: "offers", detail: "Offers query returned no node" });
+      return null;
+    }
 
+    const unknownKinds = new Set<string>();
     const out: Record<string, JustWatchOffer[]> = {};
     for (const cc of wanted) {
       const rows = data.node[cc.toLowerCase()] ?? [];
@@ -119,6 +249,9 @@ export async function fetchJustWatchOffers(
       for (const row of rows) {
         const kind = KINDS[row.monetizationType];
         const name = row.package?.clearName?.trim();
+        // CINEMA is a deliberate omission, not a gap; anything else unmapped is worth surfacing,
+        // because a renamed or added type silently drops real offers.
+        if (!kind && row.monetizationType && row.monetizationType !== "CINEMA") unknownKinds.add(row.monetizationType);
         if (!kind || !name) continue;
         // JustWatch counts discs under BUY, which is how "Amazon DVD / Blu-ray" and high-street
         // retailers turn up. This is a where-to-*watch* list, so physical copies are dropped.
@@ -129,8 +262,26 @@ export async function fetchJustWatchOffers(
       }
       if (best.size > 0) out[cc] = [...best].map(([name, kind]) => ({ name, kind }));
     }
-    return Object.keys(out).length > 0 ? out : null;
-  } catch {
-    return null; // unofficial API: a failure just means TMDB's answer stands
+    const countries = Object.keys(out);
+    recordHealth({
+      at: Date.now(),
+      ok: countries.length > 0,
+      stage: countries.length > 0 ? "ok" : "offers",
+      detail:
+        countries.length > 0
+          ? `${title}: offers in ${countries.join(", ")}`
+          : `${title}: matched, but no usable offers in any watch country`,
+      ...(unknownKinds.size > 0 ? { unknownKinds: [...unknownKinds] } : {}),
+    });
+    return countries.length > 0 ? out : null;
+  } catch (e) {
+    // Unofficial API: a failure just means TMDB's answer stands.
+    recordHealth({
+      at: Date.now(),
+      ok: false,
+      stage: "reach",
+      detail: e instanceof Error ? `${e.name}: ${e.message}` : "Request failed",
+    });
+    return null;
   }
 }

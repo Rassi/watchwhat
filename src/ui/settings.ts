@@ -1,11 +1,12 @@
 import type { Route } from "../router";
-import { el, toast, dialog } from "./components";
+import { el, toast, dialog, spinner } from "./components";
 import { getSettings, saveSettings, isAuthenticated, isConfigured, defaultSettings } from "../data/settings";
 import type { AppSettings } from "../data/settings";
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError } from "../api/trakt";
 import { applyTheme } from "../theme";
 import { hardReload } from "./refresh";
 import { pickServices } from "./servicePicker";
+import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -368,6 +369,76 @@ export const settingsRoute: Route = {
       el("div", { class: "button-row" }, saveBtn, resetAllBtn),
     );
 
+    // --- JustWatch top-ups ---
+    // Two halves on purpose. The passive line is what real top-ups did, which is the only thing
+    // that can tell a schema break from a title JustWatch simply does not carry. The check is for
+    // when you want an answer now, and asserts on response shape rather than pinging — a rename
+    // is what would quietly stop this working, and a reachable endpoint says nothing about that.
+    const jwStatus = el("p", { class: "field-help" });
+    const jwResults = el("div", {});
+    const jwBtn = el("button", { class: "btn" }, "Run check");
+
+    function renderJwStatus(): void {
+      const health = getJustWatchHealth();
+      if (!health) {
+        jwStatus.textContent = "No top-up has run on this device yet. They only fire for titles within a month of a release date.";
+        return;
+      }
+      const when = new Date(health.at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+      const unknown = health.unknownKinds?.length ? ` Unmapped offer types seen: ${health.unknownKinds.join(", ")}.` : "";
+      jwStatus.textContent = `Last top-up ${health.ok ? "succeeded" : "did not complete"} on ${when} — ${health.detail}.${unknown}`;
+    }
+    renderJwStatus();
+
+    jwBtn.addEventListener("click", async () => {
+      jwBtn.disabled = true;
+      jwBtn.textContent = "Checking…";
+      jwResults.replaceChildren(spinner("Querying JustWatch…"));
+      try {
+        // The draft countries, not the saved ones: checking what you are about to save is the
+        // more useful answer, and country aliasing is one of the things that can break.
+        const countries = (countriesInput.value.trim() || defaultSettings.watchCountries).split(",");
+        const checks = await checkJustWatch(countries);
+        const list = el("ul", { class: "info-list" });
+        for (const c of checks) {
+          list.append(el("li", {}, `${c.ok ? "✓" : "✗"} ${c.label} — ${c.detail}`));
+        }
+        const failed = checks.filter((c) => !c.ok).length;
+        jwResults.replaceChildren(
+          list,
+          el(
+            "p",
+            { class: "field-help" },
+            failed === 0
+              ? "Everything this feature depends on is intact."
+              : `${failed} check(s) failed. Provider rows fall back to TMDB alone, so nothing is broken — just no longer topped up.`,
+          ),
+        );
+      } catch (e) {
+        jwResults.replaceChildren(el("p", { class: "field-help" }, e instanceof Error ? e.message : "Check failed"));
+      } finally {
+        jwBtn.disabled = false;
+        jwBtn.textContent = "Run check";
+      }
+    });
+
+    const justWatchCard = el(
+      "div",
+      { class: "card" },
+      el("h2", {}, "JustWatch top-ups"),
+      el(
+        "p",
+        {},
+        "Titles near a release get their providers topped up straight from JustWatch, because TMDB's copy of " +
+          "the same data lags by days exactly when it matters. It is an unofficial API with no version " +
+          "guarantee, so this is here to tell you when it stops working — provider rows quietly fall back to " +
+          "TMDB alone rather than breaking.",
+      ),
+      jwStatus,
+      jwBtn,
+      jwResults,
+    );
+
     // --- Data ---
     const clearBtn = el("button", { class: "btn danger" }, "Clear cached data");
     clearBtn.addEventListener("click", () => {
@@ -399,6 +470,6 @@ export const settingsRoute: Route = {
       reloadBtn,
     );
 
-    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, dataCard, versionCard);
+    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, justWatchCard, dataCard, versionCard);
   },
 };
