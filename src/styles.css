@@ -1395,6 +1395,15 @@ a.cast-card {
   cursor: pointer;
 }
 
+/* When renting is all a country offers, the toggle is the row's only content, so it reads as
+   the verdict rather than as something withheld — same muted prose as "Not streaming here". */
+.wtw-more.sole {
+  border-color: transparent;
+  padding-left: 0;
+  font-weight: 400;
+  font-size: 13px;
+}
+
 /* The same coin, at chip scale. */
 .chip-rent {
   display: inline-flex;

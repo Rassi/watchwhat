@@ -156,18 +156,20 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
         if (rent) rentChips.push(chip);
         else chips.append(chip);
       }
-      // Rentals are the longest and least useful part of a row, so they fold away — unless
-      // renting is the only way to watch it here, when hiding them would empty the row.
-      if (rentChips.length > 0 && chips.childElementCount > 0) {
+      // Rentals are the longest and least useful part of a row, so they always fold away — even
+      // in the countries where renting is all there is. Leaving those expanded used to be
+      // justified as "hiding them would empty the row", but an empty row is not a loss: "rent
+      // or buy only" is the entire answer for that country, and seven paid chips repeating it
+      // across three countries buried the rows that did have something included.
+      if (rentChips.length > 0) {
+        const sole = chips.childElementCount === 0;
         const group = el("span", { class: "wtw-rent-group hidden" }, ...rentChips);
-        const toggle = el("button", { class: "wtw-more", type: "button" }, `+${rentChips.length} to rent`);
+        const shut = sole ? `Rent or buy only (${rentChips.length})` : `+${rentChips.length} to rent`;
+        const toggle = el("button", { class: `wtw-more ${sole ? "sole" : ""}`, type: "button" }, shut);
         toggle.addEventListener("click", () => {
-          const hidden = group.classList.toggle("hidden");
-          toggle.textContent = hidden ? `+${rentChips.length} to rent` : "Hide rentals";
+          toggle.textContent = group.classList.toggle("hidden") ? shut : "Hide rentals";
         });
         chips.append(group, toggle);
-      } else {
-        chips.append(...rentChips);
       }
     }
     rows.push(el("div", { class: "wtw-country" }, el("span", { class: "wtw-flag", title: cc }, flag(cc)), chips));
