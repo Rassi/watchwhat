@@ -212,6 +212,11 @@ button {
 
 .progress-fill {
   height: 100%;
+  /* Empty unless a width is set. A bar with nothing to report is at zero, not
+     full — every caller that has numbers sets this inline, and the ones that
+     don't (a show added from search, a season with nothing aired) used to
+     inherit the track's full width and read as "complete". */
+  width: 0;
   background: var(--accent);
 }
 

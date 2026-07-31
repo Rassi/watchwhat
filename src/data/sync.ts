@@ -18,7 +18,7 @@
  */
 
 import * as trakt from "../api/trakt";
-import { fetchMovieExtras, fetchShowExtras, fetchShowImages } from "../api/tmdb";
+import { fetchMovieExtras, fetchSeasonNumbers, fetchShowExtras, fetchShowImages } from "../api/tmdb";
 import { fetchOmdbRatings } from "../api/omdb";
 import { fetchJustWatchOffers } from "../api/justwatch";
 import { dbBulkPut, dbClear, dbGet, dbGetAll, dbPut } from "./db";
@@ -133,6 +133,35 @@ function computeNextEpisode(progress: ProgressRec, episodes?: EpisodesRec): Next
     };
   }
   return null;
+}
+
+/**
+ * An empty progress record for a show Trakt never computed one for. Counts only
+ * episodes that have aired — TMDB lists unaired ones too, and treating those as
+ * aired would make every progress bar read short of where it should.
+ */
+function progressFromEpisodes(traktId: number, episodes: EpisodesRec): ProgressRec {
+  const today = new Date().toISOString().slice(0, 10);
+  const hasAired = (airDate: string | null | undefined): boolean => !!airDate && airDate <= today;
+  const seasons = episodes.seasons.map((s) => {
+    const aired = s.episodes.filter((e) => hasAired(e.airDate));
+    return {
+      number: s.number,
+      aired: aired.length,
+      completed: 0,
+      episodes: aired.map((e) => ({ number: e.number, completed: false, watchedAt: null })),
+    };
+  });
+  const regular = seasons.filter((s) => s.number > 0);
+  return {
+    traktId,
+    fetchedAt: Date.now(),
+    aired: regular.reduce((n, s) => n + s.aired, 0),
+    completed: 0,
+    lastWatchedAt: null,
+    seasons,
+    nextEpisode: null,
+  };
 }
 
 /** Per-episode watched flag, from the progress cache. */
@@ -342,6 +371,21 @@ async function mergeTmdbEpisodes(show: ShowRec, rec: EpisodesRec): Promise<boole
   for (const season of rec.seasons) {
     const tmdbEps = extras.episodesBySeason.get(season.number);
     if (!tmdbEps) continue;
+    // Nothing to patch means the season list came from TMDB rather than Trakt,
+    // so TMDB is also where the episodes themselves have to come from.
+    if (season.episodes.length === 0) {
+      season.episodes = tmdbEps.map((t) => ({
+        traktId: 0, // Trakt issues no ids for these; local watch state keys on season+number
+        season: season.number,
+        number: t.episode_number,
+        title: t.name,
+        overview: t.overview,
+        still: t.still_path,
+        airDate: t.air_date,
+        rating: t.vote_average ?? null,
+      }));
+      continue;
+    }
     for (const ep of season.episodes) {
       const t = tmdbEps.find((x) => x.episode_number === ep.number);
       if (!t) continue;
@@ -363,15 +407,21 @@ async function mergeTmdbEpisodes(show: ShowRec, rec: EpisodesRec): Promise<boole
  * recorded there, so an unaired episode is missing until TMDB is asked — which
  * is the trade for a show page that works with no Trakt at all.
  */
-async function episodesFromProgress(traktId: number): Promise<EpisodesRec> {
-  const progress = await dbGet<ProgressRec>("progress", traktId);
+async function episodesFromProgress(show: ShowRec): Promise<EpisodesRec> {
+  const progress = await dbGet<ProgressRec>("progress", show.traktId);
+  let seasons = (progress?.seasons ?? []).map((s) => ({
+    number: s.number,
+    episodes: s.episodes.map((e) => ({ traktId: 0, season: s.number, number: e.number, title: null })),
+  }));
+  // A show added from TMDB search has no progress either — ask TMDB which
+  // seasons exist and let the merge below fill them in.
+  if (seasons.length === 0 && show.ids.tmdb) {
+    seasons = (await fetchSeasonNumbers(show.ids.tmdb)).map((number) => ({ number, episodes: [] }));
+  }
   return {
-    traktId,
+    traktId: show.traktId,
     fetchedAt: 0, // never treated as fresh: a real fetch should replace this
-    seasons: (progress?.seasons ?? []).map((s) => ({
-      number: s.number,
-      episodes: s.episodes.map((e) => ({ traktId: 0, season: s.number, number: e.number, title: null })),
-    })),
+    seasons,
   };
 }
 
@@ -384,7 +434,7 @@ export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
   // time a show page is opened so it lists episodes rather than erroring. TMDB
   // still fills in titles, stills and air dates — it needs only its own key.
   if (!isTraktLive()) {
-    const rec = cached ?? (await episodesFromProgress(show.traktId));
+    const rec = cached ?? (await episodesFromProgress(show));
     const stale = !rec.tmdbMergedAt || Date.now() - rec.tmdbMergedAt > ttl;
     if (stale && (await mergeTmdbEpisodes(show, rec))) {
       rec.fetchedAt = Date.now();
@@ -812,6 +862,11 @@ function applyLocalWatch(
   if (!watchedRec && watched) {
     watchedRec = { traktId: showTraktId, plays: 0, lastWatchedAt: nowIso, lastUpdatedAt: nowIso };
     lib.watched.set(showTraktId, watchedRec);
+  }
+  // A show added from TMDB search has no progress record — Trakt built those.
+  // Seed one from the episode list so the tick has somewhere to land.
+  if (!lib.progress.get(showTraktId) && episodeInfo) {
+    lib.progress.set(showTraktId, progressFromEpisodes(showTraktId, episodeInfo));
   }
   const progress = lib.progress.get(showTraktId);
 

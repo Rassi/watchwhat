@@ -1,11 +1,19 @@
 import type { Route } from "../router";
 import { dialog, el, toast, withSyncIndicator } from "./components";
 import { searchAll, searchShows, searchMovies, type TraktMovie, type TraktShow } from "../api/trakt";
-import { fetchMoviePoster, fetchShowImages, posterUrl } from "../api/tmdb";
+import {
+  fetchMoviePoster,
+  fetchShowImages,
+  posterUrl,
+  searchTmdbAll,
+  searchTmdbMovies,
+  searchTmdbShows,
+  type TmdbSearchHit,
+} from "../api/tmdb";
 import { addToWatchlist, loadLibrary, loadMovieLists, loadMovies, removeFromWatchlist } from "../data/sync";
-import { isTraktLive } from "../data/settings";
+import { getSettings, isTraktLive } from "../data/settings";
 import { movieListsDropdown } from "./shared";
-import type { MovieRec, ShowRec } from "../data/model";
+import { tmdbKey, type MovieRec, type ShowRec } from "../data/model";
 
 /**
  * Cached records in the shape the result rows expect. Everything past title,
@@ -57,13 +65,14 @@ export const searchRoute: Route = {
     type Mode = "all" | "show" | "movie";
     let mode: Mode = "all";
 
-    // Searching the whole catalogue is a Trakt call. Without it, the thing
-    // worth searching is the library already on the device — so the box keeps
-    // working, over a smaller haystack, and says which one it is searching.
-    const local = !isTraktLive();
-    const placeholders: Record<Mode, string> = local
-      ? { all: "Search your shows & movies…", show: "Search your shows…", movie: "Search your movies…" }
-      : { all: "Search movies & TV shows…", show: "Search TV shows…", movie: "Search movies…" };
+    // Three ways to search, in order of preference: Trakt while it lasts, TMDB
+    // once it doesn't, and failing both the library on the device. Only the
+    // last one cannot turn up something new, so it says so in the placeholder.
+    const source: "trakt" | "tmdb" | "library" = isTraktLive() ? "trakt" : getSettings().tmdbApiKey ? "tmdb" : "library";
+    const placeholders: Record<Mode, string> =
+      source === "library"
+        ? { all: "Search your shows & movies…", show: "Search your shows…", movie: "Search your movies…" }
+        : { all: "Search movies & TV shows…", show: "Search TV shows…", movie: "Search movies…" };
 
     const input = el("input", { type: "search", placeholder: placeholders[mode], autofocus: "true" });
     const results = el("div", {});
@@ -100,9 +109,9 @@ export const searchRoute: Route = {
       return el("span", { class: "type-chip" }, label);
     }
 
-    function showRow(show: TraktShow, withType = false): HTMLElement {
+    function showRow(show: TraktShow, withType = false, poster?: string | null): HTMLElement {
       const img = el("img", { class: "mini-placeholder", loading: "lazy", alt: "" }) as HTMLImageElement;
-      const cached = lib.shows.get(show.ids.trakt)?.poster;
+      const cached = lib.shows.get(show.ids.trakt)?.poster ?? poster;
       if (cached) img.src = posterUrl(cached, "w154")!;
       else if (show.ids.tmdb) {
         void fetchShowImages(show.ids.tmdb).then((images) => {
@@ -183,9 +192,9 @@ export const searchRoute: Route = {
       };
     }
 
-    function movieRow(movie: TraktMovie, withType = false): HTMLElement {
+    function movieRow(movie: TraktMovie, withType = false, poster?: string | null): HTMLElement {
       const img = el("img", { class: "mini-placeholder", loading: "lazy", alt: "" }) as HTMLImageElement;
-      const cached = movies.get(movie.ids.trakt)?.poster;
+      const cached = movies.get(movie.ids.trakt)?.poster ?? poster;
       if (cached) img.src = posterUrl(cached, "w154")!;
       else if (movie.ids.tmdb) {
         void fetchMoviePoster(movie.ids.tmdb).then((poster) => {
@@ -228,6 +237,30 @@ export const searchRoute: Route = {
       return rowEl;
     }
 
+    // ----- TMDB results -----
+    // A hit for something already tracked has to resolve to that record, or the
+    // row would offer to add a second copy under a different key and show none
+    // of its state. TMDB ids are the only thing the two eras share.
+    const showsByTmdb = new Map<number, ShowRec>();
+    for (const show of lib.shows.values()) if (show.ids.tmdb) showsByTmdb.set(show.ids.tmdb, show);
+    const moviesByTmdb = new Map<number, MovieRec>();
+    for (const movie of movies.values()) if (movie.ids.tmdb) moviesByTmdb.set(movie.ids.tmdb, movie);
+
+    function hitToShow(hit: TmdbSearchHit): TraktShow {
+      const existing = showsByTmdb.get(hit.tmdbId);
+      if (existing) return asTraktShow(existing);
+      return { title: hit.title, year: hit.year, ids: { trakt: tmdbKey(hit.tmdbId), tmdb: hit.tmdbId }, overview: hit.overview ?? undefined };
+    }
+
+    function hitToMovie(hit: TmdbSearchHit): TraktMovie {
+      const existing = moviesByTmdb.get(hit.tmdbId);
+      if (existing) return asTraktMovie(existing);
+      return { title: hit.title, year: hit.year, ids: { trakt: tmdbKey(hit.tmdbId), tmdb: hit.tmdbId }, overview: hit.overview ?? undefined };
+    }
+
+    const hitRow = (hit: TmdbSearchHit, withType: boolean): HTMLElement =>
+      hit.kind === "show" ? showRow(hitToShow(hit), withType, hit.poster) : movieRow(hitToMovie(hit), withType, hit.poster);
+
     // ----- search plumbing -----
     function runSearch(): void {
       window.clearTimeout(debounce);
@@ -236,7 +269,7 @@ export const searchRoute: Route = {
         results.replaceChildren();
         return;
       }
-      if (local) {
+      if (source === "library") {
         const q = query.toLowerCase();
         const shows = byRelevance(q, [...lib.shows.values()].filter((s) => s.title.toLowerCase().includes(q))).map(asTraktShow);
         const found = byRelevance(q, [...movies.values()].filter((m) => m.title.toLowerCase().includes(q))).map(asTraktMovie);
@@ -247,14 +280,23 @@ export const searchRoute: Route = {
               ? found.map((m) => movieRow(m))
               : [...shows.map((s) => showRow(s, true)), ...found.map((m) => movieRow(m, true))];
         results.replaceChildren(...rows);
-        if (rows.length === 0) results.append(el("div", { class: "empty-note" }, "Nothing in your library matches."));
+        if (rows.length === 0) {
+          results.append(el("div", { class: "empty-note" }, "Nothing in your library matches. Add a TMDB key in Settings to search for new titles."));
+        }
         return;
       }
 
       debounce = window.setTimeout(async () => {
         const seq = ++requestSeq;
         try {
-          if (mode === "all") {
+          if (source === "tmdb") {
+            const hits =
+              mode === "all" ? await searchTmdbAll(query) : mode === "show" ? await searchTmdbShows(query) : await searchTmdbMovies(query);
+            if (seq !== requestSeq) return; // a newer search superseded this one
+            const rows = hits.map((h) => hitRow(h, mode === "all"));
+            results.replaceChildren(...rows);
+            if (rows.length === 0) results.append(el("div", { class: "empty-note" }, "Nothing found."));
+          } else if (mode === "all") {
             const found = await searchAll(query);
             if (seq !== requestSeq) return; // a newer search superseded this one
             const rows = found

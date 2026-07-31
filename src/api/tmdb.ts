@@ -125,6 +125,86 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
   return out;
 }
 
+// ---------- search ----------
+
+/** A search hit, in the few fields a result row shows. */
+export interface TmdbSearchHit {
+  kind: "show" | "movie";
+  tmdbId: number;
+  title: string;
+  year: number | null;
+  overview: string | null;
+  poster: string | null;
+  /** How many people voted — TMDB's only popularity signal, used to break ties. */
+  popularity: number;
+}
+
+interface RawSearchHit {
+  id: number;
+  media_type?: string;
+  name?: string;
+  title?: string;
+  first_air_date?: string;
+  release_date?: string;
+  overview?: string | null;
+  poster_path?: string | null;
+  popularity?: number;
+}
+
+const yearOf = (date: string | undefined): number | null => {
+  const year = Number(date?.slice(0, 4));
+  return Number.isFinite(year) && year > 0 ? year : null;
+};
+
+function toHit(raw: RawSearchHit, kind: "show" | "movie"): TmdbSearchHit {
+  return {
+    kind,
+    tmdbId: raw.id,
+    title: (kind === "show" ? raw.name : raw.title) ?? "",
+    year: yearOf(kind === "show" ? raw.first_air_date : raw.release_date),
+    overview: raw.overview || null,
+    poster: raw.poster_path ?? null,
+    popularity: raw.popularity ?? 0,
+  };
+}
+
+async function search(path: string, query: string): Promise<RawSearchHit[]> {
+  const { tmdbApiKey } = getSettings();
+  if (!tmdbApiKey) return [];
+  const url = `${API}/search/${path}?api_key=${encodeURIComponent(tmdbApiKey)}&query=${encodeURIComponent(query)}&include_adult=false`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(res.status === 401 ? "TMDB rejected the API key — check it in Settings." : `TMDB search failed: ${res.status}`);
+  return ((await res.json()) as { results?: RawSearchHit[] }).results ?? [];
+}
+
+export async function searchTmdbShows(query: string): Promise<TmdbSearchHit[]> {
+  return (await search("tv", query)).map((r) => toHit(r, "show"));
+}
+
+export async function searchTmdbMovies(query: string): Promise<TmdbSearchHit[]> {
+  return (await search("movie", query)).map((r) => toHit(r, "movie"));
+}
+
+/** Both kinds at once. `/search/multi` also returns people — dropped here. */
+export async function searchTmdbAll(query: string): Promise<TmdbSearchHit[]> {
+  return (await search("multi", query))
+    .filter((r) => r.media_type === "tv" || r.media_type === "movie")
+    .map((r) => toHit(r, r.media_type === "tv" ? "show" : "movie"));
+}
+
+/**
+ * The season numbers TMDB lists for a show. Needed when a show was added from
+ * search and so has no episode data of any kind to build a page from.
+ */
+export async function fetchSeasonNumbers(tmdbId: number): Promise<number[]> {
+  const { tmdbApiKey } = getSettings();
+  if (!tmdbApiKey) return [];
+  const res = await fetch(`${API}/tv/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { seasons?: { season_number: number }[] };
+  return (data.seasons ?? []).map((s) => s.season_number).sort((a, b) => a - b);
+}
+
 export function posterUrl(path: string | null | undefined, size = "w342"): string | null {
   return path ? `${IMG}${size}${path}` : null;
 }

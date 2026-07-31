@@ -1,5 +1,16 @@
 import type { TraktIds } from "../api/trakt";
 
+/**
+ * Records found through TMDB have no Trakt id and never will — Trakt stopped
+ * issuing them to this app. They are keyed by the negation of their TMDB id,
+ * which cannot collide with a real Trakt id, so titles from both eras sit in
+ * one store and every `traktId` field keeps working as "the record's key" until
+ * the full re-key onto TMDB ids happens. The real id is always in `ids.tmdb`.
+ */
+export const tmdbKey = (tmdbId: number): number => -tmdbId;
+
+export const isTmdbKeyed = (key: number): boolean => key < 0;
+
 /** Cached show metadata (from Trakt ?extended=full) + TMDB artwork. */
 export interface ShowRec {
   traktId: number;
