@@ -4,7 +4,7 @@ const DB_NAME = "watchwhat";
 const DB_VERSION = 2;
 
 export type StoreName = "shows" | "watched" | "progress" | "episodes" | "movies" | "meta";
-const STORES: StoreName[] = ["shows", "watched", "progress", "episodes", "movies", "meta"];
+export const STORES: StoreName[] = ["shows", "watched", "progress", "episodes", "movies", "meta"];
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -40,6 +40,15 @@ export async function dbGet<T>(store: StoreName, key: IDBValidKey): Promise<T | 
 export async function dbGetAll<T>(store: StoreName): Promise<T[]> {
   const db = await openDb();
   return toPromise(db.transaction(store).objectStore(store).getAll() as IDBRequest<T[]>);
+}
+
+/** Every key/value pair in a store — what export needs, since keys are out-of-line. */
+export async function dbGetAllEntries(store: StoreName): Promise<[IDBValidKey, unknown][]> {
+  const db = await openDb();
+  const tx = db.transaction(store);
+  const os = tx.objectStore(store);
+  const [keys, values] = await Promise.all([toPromise(os.getAllKeys()), toPromise(os.getAll())]);
+  return keys.map((key, i) => [key, values[i]]);
 }
 
 export async function dbPut(store: StoreName, key: IDBValidKey, value: unknown): Promise<void> {

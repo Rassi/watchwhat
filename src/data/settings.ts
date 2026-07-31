@@ -136,6 +136,18 @@ export function isAuthenticated(): boolean {
   return getTokens() !== null;
 }
 
+/**
+ * Whether Trakt can be called at all. Trakt deleted the API app in July 2026, so
+ * this is false on every device that isn't set up with working credentials —
+ * and the app then runs entirely off its IndexedDB mirror: it still renders,
+ * still records what you watch, and just doesn't sync anywhere. Every Trakt call
+ * site is gated on this rather than on being offline, because a device with no
+ * tokens is not a device that failed a request.
+ */
+export function isTraktLive(): boolean {
+  return isConfigured() && isAuthenticated();
+}
+
 /** Shows for which "mark previous episodes?" should never be asked. */
 export function getNeverMarkPrevious(): Set<number> {
   return new Set(readJson<number[]>(NEVER_MARK_PREVIOUS_KEY) ?? []);

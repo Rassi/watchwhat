@@ -1,5 +1,6 @@
 /**
- * Sync engine: Trakt is the source of truth, IndexedDB is the cache.
+ * Sync engine. IndexedDB holds the library; Trakt, when reachable, is the
+ * source of truth it reconciles against.
  *
  * - `syncLibrary()` is gated on /sync/last_activities so an app open with no
  *   remote changes costs one API call.
@@ -8,6 +9,12 @@
  *   changed, or a TTL expired (so newly aired episodes show up).
  * - Mutations update the cache optimistically, then hit Trakt, then re-pull
  *   that show's progress; failures trigger a forced resync.
+ *
+ * Without Trakt (`isTraktLive()` false) the same code runs local-only: reads
+ * come from IndexedDB, writes stop at IndexedDB, and the values Trakt would
+ * have computed are worked out here instead. That is the normal state since
+ * Trakt closed API access, not an error path — nothing below should report a
+ * failure just because there is nowhere to sync to.
  */
 
 import * as trakt from "../api/trakt";
@@ -15,8 +22,18 @@ import { fetchMovieExtras, fetchShowExtras, fetchShowImages } from "../api/tmdb"
 import { fetchOmdbRatings } from "../api/omdb";
 import { fetchJustWatchOffers } from "../api/justwatch";
 import { dbBulkPut, dbClear, dbGet, dbGetAll, dbPut } from "./db";
-import type { EpisodesRec, Library, MovieListRec, MovieRec, ProgressRec, ShowRec, WatchedRec, WatchlistEntry } from "./model";
-import { getSettings, isAuthenticated } from "./settings";
+import type {
+  EpisodesRec,
+  Library,
+  MovieListRec,
+  MovieRec,
+  NextEpisodeRec,
+  ProgressRec,
+  ShowRec,
+  WatchedRec,
+  WatchlistEntry,
+} from "./model";
+import { getSettings, isTraktLive } from "./settings";
 
 export const dataEvents = new EventTarget();
 
@@ -88,6 +105,36 @@ function toProgressRec(traktId: number, p: trakt.ShowProgress): ProgressRec {
   };
 }
 
+/**
+ * The next unwatched aired episode, worked out from the cached progress alone.
+ * Trakt computes this server-side; recomputing it here is what keeps a card
+ * advancing to the next episode after you mark one watched, instead of going
+ * blank until a refetch that may never come.
+ *
+ * Progress only lists episodes that have aired, so the first uncompleted one is
+ * by definition watchable now. Title and air date come from the episodes cache,
+ * which is only populated once a show's page has been opened — for a show it
+ * hasn't, the season and number are still right and the UI renders those fine.
+ */
+function computeNextEpisode(progress: ProgressRec, episodes?: EpisodesRec): NextEpisodeRec | null {
+  const seasons = progress.seasons.filter((s) => s.number > 0).sort((a, b) => a.number - b.number);
+  for (const season of seasons) {
+    const next = [...season.episodes].sort((a, b) => a.number - b.number).find((e) => !e.completed);
+    if (!next) continue;
+    const info = episodes?.seasons.find((s) => s.number === season.number)?.episodes.find((e) => e.number === next.number);
+    return {
+      // Only Trakt knows the episode's own id, and nothing reads it off this
+      // record — the show page addresses episodes through the episodes cache.
+      traktId: info?.traktId ?? 0,
+      season: season.number,
+      number: next.number,
+      title: info?.title ?? null,
+      firstAired: info?.airDate ?? null,
+    };
+  }
+  return null;
+}
+
 /** Per-episode watched flag, from the progress cache. */
 export function isEpisodeWatched(lib: Library, showTraktId: number, season: number, episode: number): boolean {
   const progress = lib.progress.get(showTraktId);
@@ -123,7 +170,7 @@ export async function loadLibrary(): Promise<Library> {
 
 /** Pull from Trakt if anything changed remotely. Returns true if the cache was updated. */
 export async function syncLibrary(force = false): Promise<boolean> {
-  if (!isAuthenticated()) return false;
+  if (!isTraktLive()) return false;
 
   const acts = await trakt.getLastActivities();
   const prev = await dbGet<trakt.LastActivities>("meta", "lastActivities");
@@ -241,6 +288,7 @@ export async function ensureProgress(
   onUpdate?: () => void,
   opts?: { skipFinishedTtl?: boolean },
 ): Promise<void> {
+  if (!isTraktLive()) return; // progress is whatever the cache says; nothing to refresh it from
   const stale = traktIds.filter((id) => progressIsStale(lib, id, opts?.skipFinishedTtl));
   if (stale.length === 0) return;
 
@@ -310,10 +358,40 @@ async function mergeTmdbEpisodes(show: ShowRec, rec: EpisodesRec): Promise<boole
   return true;
 }
 
+/**
+ * Episode numbers for a show, from its cached progress. Only aired episodes are
+ * recorded there, so an unaired episode is missing until TMDB is asked — which
+ * is the trade for a show page that works with no Trakt at all.
+ */
+async function episodesFromProgress(traktId: number): Promise<EpisodesRec> {
+  const progress = await dbGet<ProgressRec>("progress", traktId);
+  return {
+    traktId,
+    fetchedAt: 0, // never treated as fresh: a real fetch should replace this
+    seasons: (progress?.seasons ?? []).map((s) => ({
+      number: s.number,
+      episodes: s.episodes.map((e) => ({ traktId: 0, season: s.number, number: e.number, title: null })),
+    })),
+  };
+}
+
 /** Episode titles/ids for the show page (24h TTL for airing shows, 7d for ended). */
 export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
   const cached = await dbGet<EpisodesRec>("episodes", show.traktId);
   const ttl = progressTtlMs(show) * 2;
+
+  // No Trakt: serve what's cached, and build a skeleton from progress the first
+  // time a show page is opened so it lists episodes rather than erroring. TMDB
+  // still fills in titles, stills and air dates — it needs only its own key.
+  if (!isTraktLive()) {
+    const rec = cached ?? (await episodesFromProgress(show.traktId));
+    const stale = !rec.tmdbMergedAt || Date.now() - rec.tmdbMergedAt > ttl;
+    if (stale && (await mergeTmdbEpisodes(show, rec))) {
+      rec.fetchedAt = Date.now();
+      await dbPut("episodes", show.traktId, rec);
+    }
+    return rec;
+  }
 
   if (cached && Date.now() - cached.fetchedAt < ttl) {
     // Cached from before a TMDB key was configured (or before cast/ratings/
@@ -398,7 +476,7 @@ export async function loadMovieLists(): Promise<MovieListRec[]> {
 
 /** Pull movies from Trakt if changed remotely (gated on last_activities like shows). */
 export async function syncMovies(force = false): Promise<boolean> {
-  if (!isAuthenticated()) return false;
+  if (!isTraktLive()) return false;
 
   const acts = await trakt.getLastActivities();
   const prev = await dbGet<trakt.LastActivities>("meta", "movieActivities");
@@ -577,8 +655,10 @@ export async function ensureMovieDetails(
 }
 
 export async function setMovieWatched(movies: Map<number, MovieRec>, movie: MovieRec, watched: boolean): Promise<void> {
-  if (watched) await trakt.addMovieToHistory(movie.ids);
-  else await trakt.removeMovieFromHistory(movie.ids);
+  if (isTraktLive()) {
+    if (watched) await trakt.addMovieToHistory(movie.ids);
+    else await trakt.removeMovieFromHistory(movie.ids);
+  }
   movie.plays = watched ? movie.plays + 1 : 0;
   movie.lastWatchedAt = watched ? new Date().toISOString() : null;
   movies.set(movie.traktId, movie);
@@ -590,8 +670,10 @@ export async function setMovieWatched(movies: Map<number, MovieRec>, movie: Movi
 }
 
 export async function setMovieOnWatchlist(movies: Map<number, MovieRec>, movie: MovieRec, onList: boolean): Promise<void> {
-  if (onList) await trakt.addMovieToWatchlist(movie.ids);
-  else await trakt.removeMovieFromWatchlist(movie.ids);
+  if (isTraktLive()) {
+    if (onList) await trakt.addMovieToWatchlist(movie.ids);
+    else await trakt.removeMovieFromWatchlist(movie.ids);
+  }
   movie.onWatchlist = onList;
   movie.listedAt = onList ? new Date().toISOString() : null;
   movies.set(movie.traktId, movie);
@@ -637,8 +719,10 @@ export async function setMovieOnCustomList(
   listId: number,
   on: boolean,
 ): Promise<void> {
-  if (on) await trakt.addMovieToList(listId, movie.ids);
-  else await trakt.removeMovieFromList(listId, movie.ids);
+  if (isTraktLive()) {
+    if (on) await trakt.addMovieToList(listId, movie.ids);
+    else await trakt.removeMovieFromList(listId, movie.ids);
+  }
   movie.customLists = on
     ? [...(movie.customLists ?? []), listId]
     : (movie.customLists ?? []).filter((id) => id !== listId);
@@ -654,6 +738,7 @@ export async function setMovieOnCustomList(
 export async function refreshMovieSummary(movies: Map<number, MovieRec>, traktId: number): Promise<MovieRec | undefined> {
   const existing = movies.get(traktId);
   if (!existing) return undefined;
+  if (!isTraktLive()) return existing;
   try {
     const summary = await trakt.getMovieSummary(traktId);
     const rec = toMovieRec(summary, existing, {
@@ -672,6 +757,7 @@ export async function refreshMovieSummary(movies: Map<number, MovieRec>, traktId
 
 /** Refresh a show's Trakt metadata (genres/airs/rating etc.) into the cache. */
 export async function refreshShowSummary(lib: Library, traktId: number): Promise<ShowRec | undefined> {
+  if (!isTraktLive()) return lib.shows.get(traktId);
   try {
     const summary = await trakt.getShowSummary(traktId);
     const rec = toShowRec(summary, lib.shows.get(traktId));
@@ -697,6 +783,7 @@ async function adoptBaseline(
   key: "lastActivities" | "movieActivities",
   merge: (baseline: trakt.LastActivities, acts: trakt.LastActivities) => void,
 ): Promise<void> {
+  if (!isTraktLive()) return; // nothing to reconcile against
   const acts = await trakt.getLastActivities();
   const baseline = await dbGet<trakt.LastActivities>("meta", key);
   if (!baseline) return; // no baseline yet — the next sync does a full pull anyway
@@ -712,7 +799,13 @@ export interface EpisodeRef {
   number: number;
 }
 
-function applyLocalWatch(lib: Library, showTraktId: number, episodes: EpisodeRef[], watched: boolean): void {
+function applyLocalWatch(
+  lib: Library,
+  showTraktId: number,
+  episodes: EpisodeRef[],
+  watched: boolean,
+  episodeInfo?: EpisodesRec,
+): void {
   const nowIso = new Date().toISOString();
 
   let watchedRec = lib.watched.get(showTraktId);
@@ -740,7 +833,7 @@ function applyLocalWatch(lib: Library, showTraktId: number, episodes: EpisodeRef
   }
   if (progress) {
     progress.lastWatchedAt = watchedRec?.lastWatchedAt ?? progress.lastWatchedAt;
-    progress.nextEpisode = null; // unknown until refetch; UI falls back gracefully
+    progress.nextEpisode = computeNextEpisode(progress, episodeInfo);
   }
 }
 
@@ -763,9 +856,11 @@ export async function setEpisodesWatched(
   episodes: EpisodeRef[],
   watched: boolean,
 ): Promise<void> {
-  applyLocalWatch(lib, showTraktId, episodes, watched);
+  applyLocalWatch(lib, showTraktId, episodes, watched, await dbGet<EpisodesRec>("episodes", showTraktId));
   await persistShowState(lib, showTraktId);
   emitChange();
+
+  if (!isTraktLive()) return; // local-only: the cache write above is the whole job
 
   try {
     const ids = episodes.map((e) => e.traktId);
@@ -793,7 +888,7 @@ export async function setEpisodesWatched(
 }
 
 export async function addToWatchlist(lib: Library, show: trakt.TraktShow): Promise<void> {
-  await trakt.addShowToWatchlist(show.ids);
+  if (isTraktLive()) await trakt.addShowToWatchlist(show.ids);
   const rec = toShowRec(show, lib.shows.get(show.ids.trakt));
   lib.shows.set(rec.traktId, rec);
   lib.watchlist = [{ traktId: rec.traktId, listedAt: new Date().toISOString() }, ...lib.watchlist];
@@ -812,8 +907,10 @@ export async function addToWatchlist(lib: Library, show: trakt.TraktShow): Promi
 export async function setShowHidden(lib: Library, traktId: number, hidden: boolean): Promise<void> {
   const show = lib.shows.get(traktId);
   if (!show) return;
-  if (hidden) await trakt.hideShowFromProgress(show.ids);
-  else await trakt.unhideShowFromProgress(show.ids);
+  if (isTraktLive()) {
+    if (hidden) await trakt.hideShowFromProgress(show.ids);
+    else await trakt.unhideShowFromProgress(show.ids);
+  }
   if (hidden) lib.hidden.add(traktId);
   else lib.hidden.delete(traktId);
   await Promise.all([
@@ -826,7 +923,7 @@ export async function setShowHidden(lib: Library, traktId: number, hidden: boole
 export async function removeFromWatchlist(lib: Library, showTraktId: number): Promise<void> {
   const show = lib.shows.get(showTraktId);
   if (!show) return;
-  await trakt.removeShowFromWatchlist(show.ids);
+  if (isTraktLive()) await trakt.removeShowFromWatchlist(show.ids);
   lib.watchlist = lib.watchlist.filter((e) => e.traktId !== showTraktId);
   await Promise.all([
     dbPut("meta", "watchlist", lib.watchlist),
