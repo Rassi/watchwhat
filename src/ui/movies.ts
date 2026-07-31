@@ -3,8 +3,9 @@
 
 import type { Route } from "../router";
 import { el, posterCard, sectionHeader, spinner, toast } from "./components";
-import { isAuthenticated, isConfigured } from "../data/settings";
+
 import { ensureMovieDetails, loadMovieLists, loadMovies, syncMovies } from "../data/sync";
+import { isTraktLive } from "../data/settings";
 import type { MovieListRec, MovieRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { watchBadge } from "./shared";
@@ -26,10 +27,6 @@ export const moviesRoute: Route = {
   async render(container, params) {
     const view: "watchlist" | "watched" = params[0] === "watched" ? "watched" : "watchlist";
     container.append(moviesTabs(view));
-    if (!isConfigured() || !isAuthenticated()) {
-      container.append(el("div", { class: "empty-note" }, "Connect to Trakt in Settings first."));
-      return;
-    }
 
     let movies = await loadMovies();
     let lists = await loadMovieLists();
@@ -50,6 +47,12 @@ export const moviesRoute: Route = {
 
     const addedAt = (m: MovieRec): string => m.listedAt ?? "";
 
+    // With nothing to sync from, an empty library is empty — not still loading.
+    const nothingYet = (): HTMLElement =>
+      isTraktLive()
+        ? spinner("Loading your movies from Trakt…")
+        : el("div", { class: "empty-note" }, "No movies here yet — import your data from Settings, or add some via Search.");
+
     const renderContent = (): void => {
       const all = [...movies.values()];
       content.replaceChildren();
@@ -61,8 +64,7 @@ export const moviesRoute: Route = {
         if (watched.length > 0) {
           content.append(sectionHeader(`Watched (${watched.length})`), el("div", { class: "poster-grid" }, ...watched.map((m) => card(m))));
         } else {
-          content.append(el("div", { class: "empty-note" }, movies.size === 0 ? "" : "No watched movies yet."));
-          if (movies.size === 0) content.append(spinner("Loading your movies from Trakt…"));
+          content.append(movies.size === 0 ? nothingYet() : el("div", { class: "empty-note" }, "No watched movies yet."));
         }
         return;
       }
@@ -99,9 +101,7 @@ export const moviesRoute: Route = {
           content.append(sectionHeader(`Want to watch (${watchlist.length})`), el("div", { class: "poster-grid" }, ...watchlist.map((m) => card(m))));
         } else {
           content.append(
-            movies.size === 0
-              ? spinner("Loading your movies from Trakt…")
-              : el("div", { class: "empty-note" }, "Watchlist is empty — add movies via Search."),
+            movies.size === 0 ? nothingYet() : el("div", { class: "empty-note" }, "Watchlist is empty — add movies via Search."),
           );
         }
       } else {

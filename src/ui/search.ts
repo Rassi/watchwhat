@@ -3,30 +3,67 @@ import { dialog, el, toast, withSyncIndicator } from "./components";
 import { searchAll, searchShows, searchMovies, type TraktMovie, type TraktShow } from "../api/trakt";
 import { fetchMoviePoster, fetchShowImages, posterUrl } from "../api/tmdb";
 import { addToWatchlist, loadLibrary, loadMovieLists, loadMovies, removeFromWatchlist } from "../data/sync";
-import { isAuthenticated, isConfigured } from "../data/settings";
+import { isTraktLive } from "../data/settings";
 import { movieListsDropdown } from "./shared";
-import type { MovieRec } from "../data/model";
+import type { MovieRec, ShowRec } from "../data/model";
+
+/**
+ * Cached records in the shape the result rows expect. Everything past title,
+ * year and ids is optional on the Trakt types, so this loses nothing the rows
+ * actually read.
+ */
+const asTraktShow = (s: ShowRec): TraktShow => ({
+  title: s.title,
+  year: s.year,
+  ids: s.ids,
+  status: s.status,
+  overview: s.overview,
+  network: s.network,
+  aired_episodes: s.airedEpisodes,
+  first_aired: s.firstAired,
+  genres: s.genres,
+  runtime: s.runtime,
+  rating: s.rating,
+  trailer: s.trailer,
+});
+
+const asTraktMovie = (m: MovieRec): TraktMovie => ({
+  title: m.title,
+  year: m.year,
+  ids: m.ids,
+  overview: m.overview,
+  runtime: m.runtime,
+  rating: m.rating,
+  genres: m.genres,
+  released: m.released,
+  trailer: m.trailer,
+});
+
+/** Titles starting with the query first, then the rest — both alphabetical. */
+function byRelevance<T extends { title: string }>(query: string, items: T[]): T[] {
+  const starts = (t: string): boolean => t.toLowerCase().startsWith(query);
+  return items.sort(
+    (a, b) => Number(starts(b.title)) - Number(starts(a.title)) || a.title.localeCompare(b.title),
+  );
+}
 
 export const searchRoute: Route = {
   name: "search",
   title: "Search · WatchWhat",
   async render(container) {
-    if (!isConfigured() || !isAuthenticated()) {
-      container.append(el("div", { class: "empty-note" }, "Connect to Trakt in Settings to search."));
-      return;
-    }
-
     const lib = await loadLibrary();
     const movies = await loadMovies();
     const movieLists = await loadMovieLists();
     type Mode = "all" | "show" | "movie";
     let mode: Mode = "all";
 
-    const placeholders: Record<Mode, string> = {
-      all: "Search movies & TV shows…",
-      show: "Search TV shows…",
-      movie: "Search movies…",
-    };
+    // Searching the whole catalogue is a Trakt call. Without it, the thing
+    // worth searching is the library already on the device — so the box keeps
+    // working, over a smaller haystack, and says which one it is searching.
+    const local = !isTraktLive();
+    const placeholders: Record<Mode, string> = local
+      ? { all: "Search your shows & movies…", show: "Search your shows…", movie: "Search your movies…" }
+      : { all: "Search movies & TV shows…", show: "Search TV shows…", movie: "Search movies…" };
 
     const input = el("input", { type: "search", placeholder: placeholders[mode], autofocus: "true" });
     const results = el("div", {});
@@ -199,6 +236,21 @@ export const searchRoute: Route = {
         results.replaceChildren();
         return;
       }
+      if (local) {
+        const q = query.toLowerCase();
+        const shows = byRelevance(q, [...lib.shows.values()].filter((s) => s.title.toLowerCase().includes(q))).map(asTraktShow);
+        const found = byRelevance(q, [...movies.values()].filter((m) => m.title.toLowerCase().includes(q))).map(asTraktMovie);
+        const rows =
+          mode === "show"
+            ? shows.map((s) => showRow(s))
+            : mode === "movie"
+              ? found.map((m) => movieRow(m))
+              : [...shows.map((s) => showRow(s, true)), ...found.map((m) => movieRow(m, true))];
+        results.replaceChildren(...rows);
+        if (rows.length === 0) results.append(el("div", { class: "empty-note" }, "Nothing in your library matches."));
+        return;
+      }
+
       debounce = window.setTimeout(async () => {
         const seq = ++requestSeq;
         try {

@@ -2,7 +2,7 @@
 
 import type { Route } from "../router";
 import { el, spinner, toast } from "./components";
-import { isAuthenticated, isConfigured } from "../data/settings";
+import { isTraktLive } from "../data/settings";
 import { getMyCalendar, type CalendarEntry } from "../api/trakt";
 import { dbGet, dbPut } from "../data/db";
 import { loadLibrary } from "../data/sync";
@@ -33,17 +33,16 @@ export const upcomingRoute: Route = {
   title: "Upcoming · WatchWhat",
   async render(container) {
     container.append(homeTabs("upcoming"));
-    if (!isConfigured() || !isAuthenticated()) {
-      container.append(el("div", { class: "empty-note" }, "Connect to Trakt in Settings first."));
-      return;
-    }
 
     const body = el("div", {});
     container.append(body);
     body.append(spinner("Loading upcoming episodes…"));
 
     let cache = await dbGet<UpcomingCache>("meta", "upcoming");
-    if (!cache || Date.now() - cache.fetchedAt > CACHE_TTL) {
+    // The calendar is the one screen with no local substitute: it's Trakt
+    // working out what airs next across every show you track. Without Trakt the
+    // last fetched copy stands until it runs out, and then there's nothing.
+    if (isTraktLive() && (!cache || Date.now() - cache.fetchedAt > CACHE_TTL)) {
       try {
         const start = new Date().toISOString().slice(0, 10);
         cache = { fetchedAt: Date.now(), entries: await getMyCalendar(start, DAYS) };
@@ -57,7 +56,12 @@ export const upcomingRoute: Route = {
       }
     }
 
-    if (!cache) return;
+    if (!cache) {
+      body.replaceChildren(
+        el("div", { class: "empty-note" }, "The upcoming calendar needs a Trakt connection, so there's nothing to show here."),
+      );
+      return;
+    }
     const lib = await loadLibrary();
     body.replaceChildren();
 

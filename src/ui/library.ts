@@ -2,8 +2,8 @@
 
 import type { Route } from "../router";
 import { el, posterCard, sectionHeader, spinner } from "./components";
-import { isAuthenticated, isConfigured } from "../data/settings";
 import { ensureImages, ensureProgress, loadLibrary } from "../data/sync";
+import { isTraktLive } from "../data/settings";
 import type { Library, ShowRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { homeTabs } from "./hometabs";
@@ -61,10 +61,6 @@ export const libraryRoute: Route = {
   title: "All shows · WatchWhat",
   async render(container) {
     container.append(homeTabs("library"));
-    if (!isConfigured() || !isAuthenticated()) {
-      container.append(el("div", { class: "empty-note" }, "Connect to Trakt in Settings first."));
-      return;
-    }
 
     const lib = await loadLibrary();
     const content = el("div", {});
@@ -125,7 +121,11 @@ export const libraryRoute: Route = {
       }
       if (content.childElementCount === 0) {
         content.append(
-          lib.shows.size === 0 ? spinner("Loading your shows…") : el("div", { class: "empty-note" }, "No shows yet — add some via Search."),
+          lib.shows.size > 0
+            ? el("div", { class: "empty-note" }, "No shows yet — add some via Search.")
+            : isTraktLive()
+              ? spinner("Loading your shows…")
+              : el("div", { class: "empty-note" }, "No shows here yet — import your data from Settings, or add some via Search."),
         );
       }
     };

@@ -1,6 +1,6 @@
 import type { Route } from "../router";
 import { el, posterCard, sectionHeader, spinner, toast } from "./components";
-import { getSettings, isAuthenticated, isConfigured } from "../data/settings";
+import { getSettings } from "../data/settings";
 import { ensureImages, ensureProgress, loadLibrary, syncLibrary } from "../data/sync";
 import type { Library, ProgressRec, ShowRec, WatchedRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
@@ -79,7 +79,12 @@ export const watchlistRoute: Route = {
   name: "home",
   async render(container) {
     container.append(homeTabs("watchlist"));
-    if (!isConfigured() || !isAuthenticated()) {
+
+    let lib = await loadLibrary();
+
+    // An empty library is the only thing worth interrupting for. A library that
+    // is merely unsynced still has everything to show, so it gets shown.
+    if (lib.watched.size === 0 && lib.watchlist.length === 0) {
       container.append(
         el(
           "div",
@@ -88,7 +93,8 @@ export const watchlistRoute: Route = {
           el(
             "p",
             {},
-            "Your TV Time-style watch list, backed by your Trakt account. Head to Settings to add your (free) Trakt API app and log in — it takes about two minutes, once.",
+            "Your TV Time-style watch list. If you already use WatchWhat on another device, export your data there " +
+              "and import it here from Settings — that carries your shows, movies and watch history across.",
           ),
           (() => {
             const a = el("a", { class: "btn primary", href: "#/settings" }, "Open Settings");
@@ -99,7 +105,6 @@ export const watchlistRoute: Route = {
       return;
     }
 
-    let lib = await loadLibrary();
     const grids = el("div", {});
     const syncNote = el("div", { class: "empty-note" });
     container.append(grids, syncNote);
