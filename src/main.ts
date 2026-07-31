@@ -1,7 +1,6 @@
 import "./styles.css";
 import { registerRoute, startRouter } from "./router";
 import { watchlistRoute } from "./ui/watchlist";
-import { upcomingRoute } from "./ui/upcoming";
 import { libraryRoute } from "./ui/library";
 import { showRoute } from "./ui/show";
 import { moviesRoute } from "./ui/movies";
@@ -11,14 +10,17 @@ import { settingsRoute } from "./ui/settings";
 import { applyTheme } from "./theme";
 import { ensureUnlocked } from "./gate";
 import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
+import { dbDelete } from "./data/db";
 
 applyTheme();
 stripReloadParam();
 installPullToRefresh();
+// The Upcoming tab is gone; drop the calendar it cached so it stops riding
+// along in every export. A no-op once it has run.
+void dbDelete("meta", "upcoming");
 await ensureUnlocked();
 
 registerRoute(watchlistRoute);
-registerRoute(upcomingRoute);
 registerRoute(libraryRoute);
 registerRoute(showRoute);
 registerRoute(moviesRoute);

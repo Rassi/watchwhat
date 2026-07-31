@@ -931,7 +931,7 @@ button {
   padding: 24px 12px;
 }
 
-/* ---------- home top tabs (Watch list | Upcoming) ---------- */
+/* ---------- home top tabs (Watch list | All shows) ---------- */
 .home-tabs {
   display: flex;
   margin: -4px -12px 4px;
@@ -1144,62 +1144,6 @@ button {
 .list-select {
   min-width: 200px;
   text-align: center;
-}
-
-/* ---------- upcoming ---------- */
-.date-header {
-  font-weight: 700;
-  font-size: 14px;
-  margin: 18px 2px 8px;
-}
-
-.upcoming-group {
-  padding: 0;
-}
-
-.upcoming-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  cursor: pointer;
-}
-
-.upcoming-row + .upcoming-row {
-  border-top: 1px solid var(--border);
-}
-
-.up-poster {
-  width: 40px;
-  aspect-ratio: 2 / 3;
-  object-fit: cover;
-  border-radius: 4px;
-  background: var(--bg-row);
-  flex-shrink: 0;
-}
-
-.upcoming-row .info {
-  flex: 1;
-  min-width: 0;
-}
-
-.upcoming-row .t {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.upcoming-row .o {
-  font-size: 12px;
-  color: var(--text-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.up-time {
-  font-size: 12px;
-  color: var(--text-dim);
-  white-space: nowrap;
 }
 
 /* ---------- ratings chart: swipeable season pages ---------- */

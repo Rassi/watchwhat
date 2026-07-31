@@ -568,13 +568,3 @@ export async function unhideShowFromProgress(ids: TraktIds): Promise<void> {
   await request("/users/hidden/progress_watched/remove", { method: "POST", body: { shows: [{ ids }] } });
 }
 
-export interface CalendarEntry {
-  first_aired: string; // UTC timestamp of the airing
-  episode: EpisodeSummary;
-  show: TraktShow;
-}
-
-/** Upcoming episodes for shows the user watches, from startDate (YYYY-MM-DD) for `days`. */
-export async function getMyCalendar(startDate: string, days: number): Promise<CalendarEntry[]> {
-  return (await request<CalendarEntry[]>(`/calendars/my/shows/${startDate}/${days}`)).data;
-}
