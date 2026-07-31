@@ -136,6 +136,32 @@ export function isAuthenticated(): boolean {
   return getTokens() !== null;
 }
 
+const TRAKT_UNAVAILABLE_KEY = "watchwhat.traktUnavailable";
+
+export interface TraktUnavailable {
+  at: number;
+  reason: string;
+}
+
+/**
+ * Trakt saying it doesn't recognise this app is not a transient failure — it is
+ * the answer to every call from now on. Latching it stops the app retrying a
+ * dead endpoint on every screen and every mutation. Saving credentials clears
+ * the latch, which is the only repair that could ever work anyway.
+ */
+export function markTraktUnavailable(reason: string): void {
+  if (localStorage.getItem(TRAKT_UNAVAILABLE_KEY)) return; // keep the first reason
+  localStorage.setItem(TRAKT_UNAVAILABLE_KEY, JSON.stringify({ at: Date.now(), reason }));
+}
+
+export function traktUnavailable(): TraktUnavailable | null {
+  return readJson<TraktUnavailable>(TRAKT_UNAVAILABLE_KEY);
+}
+
+export function clearTraktUnavailable(): void {
+  localStorage.removeItem(TRAKT_UNAVAILABLE_KEY);
+}
+
 /**
  * Whether Trakt can be called at all. Trakt deleted the API app in July 2026, so
  * this is false on every device that isn't set up with working credentials —
@@ -145,7 +171,7 @@ export function isAuthenticated(): boolean {
  * tokens is not a device that failed a request.
  */
 export function isTraktLive(): boolean {
-  return isConfigured() && isAuthenticated();
+  return isConfigured() && isAuthenticated() && traktUnavailable() === null;
 }
 
 /** Shows for which "mark previous episodes?" should never be asked. */

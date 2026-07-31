@@ -1,12 +1,21 @@
 import type { Route } from "../router";
 import { el, toast, dialog, spinner } from "./components";
-import { getSettings, saveSettings, isAuthenticated, isConfigured, defaultSettings } from "../data/settings";
+import {
+  getSettings,
+  saveSettings,
+  isAuthenticated,
+  isConfigured,
+  defaultSettings,
+  clearTraktUnavailable,
+  traktUnavailable,
+} from "../data/settings";
 import type { AppSettings } from "../data/settings";
 import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError, BAD_CLIENT } from "../api/trakt";
 import { applyTheme } from "../theme";
 import { hardReload } from "./refresh";
 import { pickServices } from "./servicePicker";
 import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
+import { downloadBackup, exportBackup, importBackup, parseBackup, summarize } from "../data/transfer";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -74,6 +83,8 @@ export const settingsRoute: Route = {
     const saveTraktBtn = el("button", { class: "btn primary" }, "Save");
     saveTraktBtn.addEventListener("click", () => {
       saveSettings({ traktClientId: clientId.value.trim(), traktClientSecret: clientSecret.value.trim() });
+      // New credentials deserve a fresh try, whatever the old ones did.
+      clearTraktUnavailable();
       toast("Trakt credentials saved");
       renderConnectCard();
     });
@@ -100,6 +111,30 @@ export const settingsRoute: Route = {
 
     function renderConnectCard(): void {
       connectCard.replaceChildren(el("h2", {}, "Trakt account"));
+      const dead = traktUnavailable();
+      if (dead) {
+        // Retrying is pointless until the credentials change, so say what state
+        // the app is in rather than offering a button that cannot work.
+        connectCard.append(
+          el("p", {}, dead.reason),
+          el(
+            "p",
+            {},
+            `Since ${new Date(dead.at).toLocaleDateString()}, everything runs from the library stored on this ` +
+              `device: your shows, movies and history are all here, and marking things watched still works — it ` +
+              `just stays on this device. Use Export below to carry it to another one. Saving new credentials ` +
+              `above will try Trakt again.`,
+          ),
+        );
+        const forgetBtn = el("button", { class: "btn" }, "Disconnect Trakt");
+        forgetBtn.addEventListener("click", () => {
+          logout();
+          toast("Disconnected from Trakt");
+          renderConnectCard();
+        });
+        connectCard.append(forgetBtn);
+        return;
+      }
       if (!isConfigured()) {
         connectCard.append(el("p", {}, "Save your Trakt API credentials above first."));
         return;
@@ -441,17 +476,96 @@ export const settingsRoute: Route = {
       jwResults,
     );
 
+    // --- Transfer ---
+    // The only way a library reaches another device now that there is no server
+    // between them: a file out of one, into the other.
+    const exportBtn = el("button", { class: "btn primary" }, "Export my data");
+    exportBtn.addEventListener("click", async () => {
+      exportBtn.disabled = true;
+      try {
+        const backup = await exportBackup();
+        const { shows, movies, episodes } = summarize(backup);
+        downloadBackup(backup);
+        toast(`Exported ${shows} shows, ${movies} movies, ${episodes} watched episodes`);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Export failed", "error");
+      }
+      exportBtn.disabled = false;
+    });
+
+    const importInput = el("input", { type: "file", accept: "application/json,.json" }) as HTMLInputElement;
+    importInput.style.display = "none";
+    const importBtn = el("button", { class: "btn" }, "Import from a file");
+    importBtn.addEventListener("click", () => importInput.click());
+    importInput.addEventListener("change", async () => {
+      const file = importInput.files?.[0];
+      importInput.value = ""; // so picking the same file twice still fires
+      if (!file) return;
+      try {
+        const backup = parseBackup(await file.text());
+        const { shows, movies, episodes } = summarize(backup);
+        const choice = await dialog(
+          "Replace this device's data?",
+          `The file holds ${shows} shows, ${movies} movies and ${episodes} watched episodes. ` +
+            `Everything currently on this device is replaced by it — anything you marked watched here and ` +
+            `nowhere else would be lost.`,
+          [
+            { label: "Import", value: "yes", kind: "danger" },
+            { label: "Cancel", value: "no" },
+          ],
+        );
+        if (choice !== "yes") return;
+        await importBackup(backup);
+        toast("Imported — reloading…");
+        setTimeout(() => hardReload(), 600);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Import failed", "error");
+      }
+    });
+
+    const transferCard = el(
+      "div",
+      { class: "card" },
+      el("h2", {}, "Transfer data between devices"),
+      el(
+        "p",
+        {},
+        "WatchWhat keeps your library on the device, so a second device starts empty. Export here, open the file " +
+          "on the other device (AirDrop, iCloud Drive, email — anything that lands it in Files), and import it " +
+          "there. Nothing is uploaded anywhere; the file never leaves your devices.",
+      ),
+      el(
+        "p",
+        {},
+        "Importing replaces the receiving device's library rather than merging it, so treat one device as the " +
+          "one you keep up to date and re-export whenever you want the other to catch up.",
+      ),
+      el("div", { class: "btn-row" }, exportBtn, importBtn),
+      importInput,
+    );
+
     // --- Data ---
     const clearBtn = el("button", { class: "btn danger" }, "Clear cached data");
-    clearBtn.addEventListener("click", () => {
+    clearBtn.addEventListener("click", async () => {
+      const choice = await dialog(
+        "Clear this device's data?",
+        "Everything WatchWhat has stored here is deleted. With no Trakt connection there is nothing to rebuild " +
+          "it from, so export first unless another device has a copy.",
+        [
+          { label: "Clear", value: "yes", kind: "danger" },
+          { label: "Cancel", value: "no" },
+        ],
+      );
+      if (choice !== "yes") return;
       indexedDB.deleteDatabase("watchwhat");
-      toast("Cache cleared — it will be rebuilt from Trakt on next load");
+      toast("Cleared — reloading…");
+      setTimeout(() => hardReload(), 600);
     });
     const dataCard = el(
       "div",
       { class: "card" },
       el("h2", {}, "Data"),
-      el("p", {}, "Clears the local cache (shows, progress, images). Your Trakt data is untouched."),
+      el("p", {}, "Deletes the local library (shows, progress, movies, images) from this device."),
       clearBtn,
     );
 
@@ -472,6 +586,6 @@ export const settingsRoute: Route = {
       reloadBtn,
     );
 
-    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, justWatchCard, dataCard, versionCard);
+    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, justWatchCard, transferCard, dataCard, versionCard);
   },
 };

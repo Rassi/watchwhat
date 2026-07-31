@@ -1,6 +1,6 @@
 /** Typed Trakt API client (https://trakt.docs.apiary.io) with device-code auth. */
 
-import { getSettings, getTokens, saveTokens, clearTokens, type Tokens } from "../data/settings";
+import { getSettings, getTokens, saveTokens, clearTokens, markTraktUnavailable, type Tokens } from "../data/settings";
 
 const BASE = "https://api.trakt.tv";
 
@@ -204,7 +204,11 @@ async function request<T>(path: string, opts: RequestOpts = {}): Promise<{ data:
     throw cooldownError();
   }
   if (!res.ok) {
-    throw new TraktError(res.status, `Trakt ${opts.method ?? "GET"} ${path} failed: ${res.status}`);
+    // 403 is Trakt refusing the API key itself ("invalid API key or unapproved
+    // app"), not this particular request. Nothing here can fix that, so record
+    // it and let the app fall back to running on its local library.
+    if (res.status === 403) markTraktUnavailable(DEAD_APP);
+    throw new TraktError(res.status, res.status === 403 ? DEAD_APP : `Trakt ${opts.method ?? "GET"} ${path} failed: ${res.status}`);
   }
   const data = res.status === 204 ? (undefined as T) : ((await res.json()) as T);
   return { data, headers: res.headers };
@@ -230,6 +234,9 @@ export interface DeviceCode {
  * like a typo from in here, and both are fixed in the same place.
  */
 export const BAD_CLIENT = "Trakt doesn't recognise your Client ID — the API app may have been deleted. Re-create it on trakt.tv and paste the new Client ID and Secret above.";
+
+/** What a 403 from Trakt means in practice: this app's API access is gone. */
+export const DEAD_APP = "Trakt is refusing this app's API key — WatchWhat is running on the data stored on this device.";
 
 export async function requestDeviceCode(): Promise<DeviceCode> {
   const { traktClientId } = getSettings();
@@ -351,7 +358,10 @@ async function doRefreshTokens(): Promise<Tokens> {
       // invalid_client is the app's credentials being wrong, not the login: the
       // stored tokens are still good and will keep working once the Client ID
       // and Secret are fixed, so don't throw a live session away over it.
-      if (await isInvalidClient(res)) throw new TraktError(res.status, BAD_CLIENT);
+      if (await isInvalidClient(res)) {
+        markTraktUnavailable(BAD_CLIENT);
+        throw new TraktError(res.status, BAD_CLIENT);
+      }
       // Don't wipe tokens another refresh stored while this one was in flight.
       if (getTokens()?.refreshToken === tokens.refreshToken) clearTokens();
       throw new TraktError(res.status, "Trakt session expired — please log in again");

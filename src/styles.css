@@ -574,6 +574,13 @@ button {
   cursor: default;
 }
 
+/* Two buttons side by side, wrapping rather than overflowing a narrow phone. */
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .device-code {
   font-size: 30px;
   font-weight: 800;
