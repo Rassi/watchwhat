@@ -458,7 +458,34 @@ export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
     rec.fetchedAt = Date.now();
     await dbPut("episodes", show.traktId, rec);
   }
+  await refreshNextEpisode(show.traktId, rec);
   return rec;
+}
+
+/**
+ * Re-derive `nextEpisode` now that the episode cache may know more than it did.
+ *
+ * `nextEpisode` is otherwise only computed during a progress rebuild, from
+ * whatever the cache held at that moment — and the two caches refresh on
+ * independent schedules. A show whose progress rebuilt before its page had ever
+ * been opened gets a next episode with no title and, worse, no air date. A null
+ * `firstAired` silently disables the "unstarted new season stays in Watch next"
+ * rule in the home screen, so a season that has just landed drops into
+ * "Haven't watched for a while" until the progress TTL expires — a week for an
+ * ended show. Cheap to recompute, and it costs no request.
+ */
+async function refreshNextEpisode(traktId: number, episodes: EpisodesRec): Promise<void> {
+  const progress = await dbGet<ProgressRec>("progress", traktId);
+  if (!progress) return;
+  const next = computeNextEpisode(progress, episodes);
+  const same =
+    next?.season === progress.nextEpisode?.season &&
+    next?.number === progress.nextEpisode?.number &&
+    next?.firstAired === progress.nextEpisode?.firstAired &&
+    next?.title === progress.nextEpisode?.title;
+  if (same) return;
+  progress.nextEpisode = next;
+  await dbPut("progress", traktId, progress);
 }
 
 // ---------- movies ----------
