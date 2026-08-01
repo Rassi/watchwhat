@@ -1,7 +1,8 @@
 # Sync plan — Cloudflare Workers + D1
 
-**Status:** decided 2026-08-01, not started. This document is the handoff into
-the session that builds it.
+**Status:** built, deployed and seeded, 2026-08-01. All four steps are done and
+the production log holds 4,195 events. What remains is operational, not code —
+see "Still to do".
 
 WatchWhat has been fully local-first since 2026-08-01 (commit `e1f4676` removed
 the last Trakt code). Every device holds the complete library in IndexedDB and
@@ -118,10 +119,11 @@ mutation functions, advance the cursor.
    `localhost:5173`, separate IndexedDB) standing in for a second device: an
    empty library rebuilt itself from the log alone.
 4. ~~**Backfill.**~~ — built 2026-08-01, `src/data/backfill.ts` plus a "Seed the
-   server from this device…" action in Settings. **Not yet run against
-   production.** The desktop's library comes to **4,173 events** (3,743 watched
-   episodes, 231 films, 137 watchlist entries, 62 list entries), pushed in five
-   chunks in about a second against a local Worker.
+   server from this device…" action in Settings. **Run against production the
+   same day, from the iPhone** rather than the desktop as planned, because the
+   phone had the more recent ticks and the film *Her*. The live log holds
+   **4,195 events** (3,764 watched episodes, 231 films, 138 watchlist entries,
+   62 list entries), all from the one device.
 
    Ids are derived from the fact — `seed:ep:1396:1:1` — not generated, so the
    whole thing is safely repeatable: a push that dies at event 2,000 is fixed by
@@ -174,6 +176,38 @@ of them were. Worth knowing before chasing the next one.
 - **A stale `nextEpisode.firstAired` moves shows between sections.** Fixed in
   `refreshNextEpisode`; see the gotcha below.
 
+## Two real bugs the first cross-device comparison found (2026-08-01)
+
+Both were found from one symptom: the dev origin showed Location, Location,
+Location at 183/351 where the live site showed 203/370. Neither was visible
+from a single device, and both reported a clean sync while losing data.
+
+- **The cursor was not tied to a server.** The dev origin's cursor was still at
+  4173 from testing against the local Worker. Pointed at production it asked for
+  `since=4173`, got the 22 events above it, applied those, and jumped to 4195 —
+  skipping 4,173 events it had never seen, and saying it was up to date. Fixed by
+  storing the URL alongside the cursor and restarting from zero on a mismatch.
+  **Deploying that fix makes every existing device re-pull once**, because none
+  of them has a recorded URL — which is also how they get the second fix applied
+  retroactively.
+- **A replayed watch was dropped if the local episode cache had never heard of
+  the episode.** `applyLocalWatch` found no entry, so the idempotency guard did
+  not fire, `plays` was incremented, and the branch that marks the episode did
+  nothing. The cursor then advanced past the event, so the loss was permanent and
+  showed up only as a `plays` count drifting above `completed`. Fixed by creating
+  the season and episode on the spot.
+
+**The log is not the union of the libraries.** Only the phone was seeded, so
+watches that exist solely on another device were never appended and cannot
+propagate — the live site has at least one Location episode the log does not.
+Seeding again from the desktop fixes this: the ids are derived from the fact, so
+a second seed appends only what is genuinely new.
+
+## Still to do
+
+- Re-seed from the desktop so the log becomes the union of both libraries.
+- Re-tick the stragglers from the phone export.
+
 ## Gotchas
 
 - **The repo is public.** The sync token must never be committed. It lives as a
@@ -221,10 +255,12 @@ of them were. Worth knowing before chasing the next one.
   access ended on 2026-07-30, so the divergence is about two days' worth and is
   cheaper to re-enter by hand than to reconcile in code.
 - Whether the Settings sync card also exposes a "force full re-pull" for
-  recovery, or whether clearing the cursor is enough. **Not built, and clearing
-  the cursor alone is not sufficient:** replay skips events whose `device`
-  matches this one, so a device re-pulling from 0 would skip its own history.
-  Clearing site data does work, because that drops the `watchwhat.deviceId` in
+  recovery, or whether clearing the cursor is enough. **Still not built**, but
+  less pressing now: changing the server URL forces one automatically, which is
+  what repaired both devices after the two bugs above. Clearing the cursor by
+  hand remains insufficient on its own — replay skips events whose `device`
+  matches this one, so a device re-pulling from 0 skips its own history. Clearing
+  site data does work, because that drops the `watchwhat.deviceId` in
   localStorage too and the device comes back under a new name.
 
 ## Verified facts (2026-08-01)
