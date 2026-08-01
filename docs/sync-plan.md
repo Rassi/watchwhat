@@ -102,8 +102,11 @@ mutation functions, advance the cursor.
 ## Steps
 
 0. ~~Pick the host~~ — done, Cloudflare.
-1. **Server.** `wrangler init` a Worker in `server/`, D1 schema above, the two
-   endpoints, bearer auth, CORS for `https://rassi.github.io`.
+1. ~~**Server.**~~ — done 2026-08-01, `server/`, see its README. Scaffolded by
+   hand rather than `wrangler init` (interactive). Verified against local D1:
+   auth rejects, a resent batch reports `accepted` without advancing `seq`, reads
+   page at 500 carrying the cursor, and the preflight answers only the allowed
+   origins. **Not deployed yet** — that needs `wrangler login`.
 2. **Client write path.** Outbox store + append beside each of the seven
    mutations + a flush that retries.
 3. **Client read path.** Cursor + replay through the existing local functions.
@@ -126,8 +129,12 @@ Rough effort: 1–2 evenings for 1–3, plus a careful hour on the backfill.
 - **Don't break the Pages build.** `tsconfig.json` has `"include": ["src"]` and
   `npm run build` runs `tsc` at the root, so a `server/` directory with its own
   tsconfig is safe — but check `npm run build` still passes after adding it.
-- **CORS will be the first confusing hour** — the `OPTIONS` preflight must be
-  answered and the auth header allowed.
+- ~~**CORS will be the first confusing hour**~~ — handled in the Worker, and the
+  preflight is answered *before* auth on purpose: a 401 without CORS headers
+  reaches the browser as an opaque network error that hides the real cause.
+- **`seq` is monotonic but not contiguous.** An ignored duplicate still consumes
+  a rowid, so a resent batch leaves gaps. The `seq > ?` cursor doesn't care, but
+  don't write a client that counts on +1 steps.
 - Mixed content is *not* an issue here (Workers are HTTPS); it would have been
   the main trap on the NAS route.
 
