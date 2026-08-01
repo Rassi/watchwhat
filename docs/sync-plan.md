@@ -117,15 +117,45 @@ mutation functions, advance the cursor.
    of `{ replay, at }`. Verified with a second origin (`127.0.0.1:5173` vs
    `localhost:5173`, separate IndexedDB) standing in for a second device: an
    empty library rebuilt itself from the log alone.
-4. **Backfill** — the only step left. One-off: turn the desktop library into
-   ~3,764 events and push.
-   Then the phone pulls from `seq: 0`. **Export the phone to a file before this
-   step** — that file is the only copy of whatever it has marked since
-   2026-07-30, and `importBackup` clears each store before writing. Diffing it
-   against the desktop afterwards gives the exact list of stragglers to re-tick,
-   which beats recalling them.
+4. ~~**Backfill.**~~ — built 2026-08-01, `src/data/backfill.ts` plus a "Seed the
+   server from this device…" action in Settings. **Not yet run against
+   production.** The desktop's library comes to **4,173 events** (3,743 watched
+   episodes, 231 films, 137 watchlist entries, 62 list entries), pushed in five
+   chunks in about a second against a local Worker.
+
+   Ids are derived from the fact — `seed:ep:1396:1:1` — not generated, so the
+   whole thing is safely repeatable: a push that dies at event 2,000 is fixed by
+   running it again. Verified by pushing all 4,173 twice; the log still held
+   4,173 rows.
+
+   **Still do the phone export first.** That file is the only copy of whatever
+   it has marked since 2026-07-30, and `importBackup` clears each store before
+   writing. Diffing it against the desktop afterwards gives the exact list of
+   stragglers to re-tick, which beats recalling them.
 
 Rough effort: 1–2 evenings for 1–3, plus a careful hour on the backfill.
+
+## Running the backfill
+
+1. Paste the token into Settings → Sync on **both** devices and Save.
+2. **Export the phone to a file** and keep it. Everything below assumes the
+   desktop wins.
+3. Desktop → Settings → Sync → **Seed the server from this device…**, confirm.
+4. Bring the phone up to date, either way round:
+   - **Import the desktop's export, then Sync now.** Fast, no TMDB traffic. Safe
+     since replay became idempotent — it was not before, see below.
+   - **Or let it rebuild from the log alone.** Correct but slow: every show it
+     has never seen is fetched from TMDB and its episode list built, which for
+     232 shows is thousands of requests. Fine on the desktop, unpleasant on a
+     phone.
+5. Re-tick the stragglers from the phone's export.
+
+**Replay is idempotent, but that took a fix.** `plays` used to move on every
+episode event rather than on an actual change of state, so replaying history
+onto a device that already had it doubled every total — silently, since the
+episode ticks themselves stayed correct. Three consecutive full replays now
+leave the numbers alone. If either counter ever starts climbing, this is the
+first place to look.
 
 ## Gotchas
 
@@ -140,9 +170,11 @@ Rough effort: 1–2 evenings for 1–3, plus a careful hour on the backfill.
 - ~~**CORS will be the first confusing hour**~~ — handled in the Worker, and the
   preflight is answered *before* auth on purpose: a 401 without CORS headers
   reaches the browser as an opaque network error that hides the real cause.
-- **`seq` is monotonic but not contiguous.** An ignored duplicate still consumes
-  a rowid, so a resent batch leaves gaps. The `seq > ?` cursor doesn't care, but
-  don't write a client that counts on +1 steps.
+- **`seq` is monotonic but not contiguous.** Deleted rows certainly leave gaps,
+  and an ignored duplicate sometimes does — re-pushing 2 events left a gap of 2,
+  while re-pushing all 4,173 of the backfill left none, so it depends on the
+  path SQLite takes. Don't reason about the mechanism; just never write a client
+  that counts on +1 steps. The `seq > ?` cursor doesn't care.
 - **The local D1 database is keyed by `database_id`.** Changing it in
   `wrangler.toml` — as pasting the real id after `d1 create` does — silently
   points `wrangler dev` at a fresh, empty database. Re-run `npm run schema:local`
