@@ -15,7 +15,7 @@
 
 import { MAX_BATCH, pushEvents, syncConfigured, type OutgoingEvent } from "../api/syncserver";
 import { dbDelete, dbGet, dbGetAll, dbGetAllEntries, dbPut } from "./db";
-import { getDeviceId } from "./settings";
+import { getDeviceId, getSettings } from "./settings";
 
 /**
  * The event vocabulary, one entry per client mutation.
@@ -44,18 +44,33 @@ export interface PendingEvent extends OutgoingEvent {
 }
 
 const CURSOR_KEY = "cursor";
+const CURSOR_URL_KEY = "cursorUrl";
+
+/** The same normalisation `syncserver` applies, so the two always agree. */
+const serverUrl = (): string => getSettings().syncUrl.trim().replace(/\/$/, "");
 
 /**
  * How far through the server's log this device has replayed. Device-local by
  * design — it describes this browser's position, not the library's state, which
  * is why the `sync` store stays out of exports.
+ *
+ * **A seq only means anything against the server that issued it.** Point a device
+ * at a different log — a test Worker, or the NAS fallback — and the old number is
+ * not just wrong but silently plausible: it fast-forwards past everything below
+ * it and reports a clean sync. So the cursor is stored with the URL it was
+ * counted against, and a mismatch restarts from the beginning. Replay is
+ * idempotent, so re-reading a log this device has already seen costs time and
+ * nothing else.
  */
 export async function getCursor(): Promise<number> {
+  const url = await dbGet<string>("sync", CURSOR_URL_KEY);
+  if (url !== serverUrl()) return 0;
   return (await dbGet<number>("sync", CURSOR_KEY)) ?? 0;
 }
 
 export async function setCursor(seq: number): Promise<void> {
   await dbPut("sync", CURSOR_KEY, seq);
+  await dbPut("sync", CURSOR_URL_KEY, serverUrl());
 }
 
 /** ISO timestamp shared by every event of one mutation, so a batch reads as one action. */
