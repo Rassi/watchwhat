@@ -7,6 +7,8 @@ import { hardReload } from "./refresh";
 import { pickServices } from "./servicePicker";
 import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
 import { downloadBackup, exportBackup, importBackup, parseBackup, summarize } from "../data/transfer";
+import { flush, getCursor, pendingCount } from "../data/outbox";
+import { syncConfigured, testConnection } from "../api/syncserver";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -106,6 +108,64 @@ export const settingsRoute: Route = {
       `<a href="https://www.omdbapi.com/apikey.aspx" target="_blank" rel="noopener"><b>omdbapi.com/apikey.aspx</b></a>. ` +
       `Ratings are fetched once per title per week, only when you open its page.`;
     const omdbCard = el("div", { class: "card" }, el("h2", {}, "OMDb (IMDb & Rotten Tomatoes ratings)"), omdbHelp, field("API key", omdbKey), saveOmdbBtn);
+
+    // --- Sync ---
+    // The token is per-device on purpose: the repo is public, so it can only ever
+    // live in localStorage. The URL is not a secret and ships as a default.
+    const syncUrlInput = textInput(settings.syncUrl, "https://…workers.dev");
+    const syncTokenInput = textInput(settings.syncToken, "Sync token");
+    const saveSyncBtn = el("button", { class: "btn primary" }, "Save");
+    const testSyncBtn = el("button", { class: "btn" }, "Test");
+    const syncStatus = el("p", { class: "diff-summary" }, "");
+
+    const refreshSyncStatus = async (): Promise<void> => {
+      const pending = await pendingCount();
+      syncStatus.textContent = !syncConfigured()
+        ? "Not configured — changes are saved on this device only."
+        : pending === 0
+          ? "Everything on this device has been uploaded."
+          : `${pending} change${pending === 1 ? "" : "s"} waiting to upload.`;
+    };
+    void refreshSyncStatus();
+
+    saveSyncBtn.addEventListener("click", async () => {
+      saveSettings({ syncUrl: syncUrlInput.value.trim(), syncToken: syncTokenInput.value.trim() });
+      toast("Sync settings saved");
+      // A token arriving is often the reason a queue exists at all.
+      await flush();
+      await refreshSyncStatus();
+    });
+
+    testSyncBtn.addEventListener("click", async () => {
+      if (!syncConfigured()) {
+        toast("Enter a URL and token, then Save first");
+        return;
+      }
+      try {
+        const page = await testConnection(await getCursor());
+        const waiting = page.events.length === 0 ? "nothing new to pull" : `${page.events.length}${page.more ? "+" : ""} to pull`;
+        toast(`Connected — ${waiting}`);
+      } catch (err) {
+        toast(`Sync failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      }
+      await refreshSyncStatus();
+    });
+
+    const syncHelp = el("p", {});
+    syncHelp.innerHTML =
+      `Keeps this device and the others in step through your own Cloudflare Worker. Every change is saved locally ` +
+      `first and queued, so marking something watched offline still works — the queue uploads next time the app has ` +
+      `a connection. <b>Test</b> checks the saved values, so Save first if you have just edited them.`;
+    const syncCard = el(
+      "div",
+      { class: "card" },
+      el("h2", {}, "Sync"),
+      syncHelp,
+      field("Server URL", syncUrlInput),
+      field("Token", syncTokenInput),
+      el("div", { class: "field-row" }, saveSyncBtn, testSyncBtn),
+      syncStatus,
+    );
 
     // --- Preferences ---
     // Unlike the credential cards, these edit a draft: nothing is written until Save. Each
@@ -477,6 +537,6 @@ export const settingsRoute: Route = {
       reloadBtn,
     );
 
-    container.append(tmdbCard, omdbCard, prefsCard, justWatchCard, transferCard, dataCard, versionCard);
+    container.append(tmdbCard, omdbCard, syncCard, prefsCard, justWatchCard, transferCard, dataCard, versionCard);
   },
 };

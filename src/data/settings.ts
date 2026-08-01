@@ -11,6 +11,13 @@ export interface AppSettings {
   myServices: string;
   /** Comma-separated ISO country codes for Where to watch. */
   watchCountries: string;
+  /** Base URL of the sync Worker. Empty disables sync entirely. */
+  syncUrl: string;
+  /**
+   * Bearer token for the sync Worker. Per-device, like the API keys — the repo is
+   * public, so this can only ever live in localStorage, never in the build.
+   */
+  syncToken: string;
 }
 
 const SETTINGS_KEY = "watchwhat.settings";
@@ -44,7 +51,27 @@ const defaults: AppSettings = {
   // NRK, SBS and ABC iview carry things the others don't). Grouping the Nordics together reads
   // more tidily but buries US halfway down the card.
   watchCountries: "DK, US, GB, SE, NO, AU",
+  // The URL is not a secret, so it ships as a default and only the token has to be
+  // typed on each device.
+  syncUrl: "https://watchwhat-sync.rassi.workers.dev",
+  syncToken: "",
 };
+
+const DEVICE_ID_KEY = "watchwhat.deviceId";
+
+/**
+ * A stable name for this browser, stamped on every event it appends.
+ * Nothing reconciles on it — the log merges by event id — but it is what makes
+ * a divergence legible after the fact ("which device marked this?").
+ */
+export function getDeviceId(): string {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+}
 
 function readJson<T>(key: string): T | null {
   const raw = localStorage.getItem(key);

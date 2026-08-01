@@ -12,6 +12,7 @@ import { ensureUnlocked } from "./gate";
 import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
 import { dbDelete } from "./data/db";
 import { purgeTraktRemnants } from "./data/settings";
+import { installFlushTriggers } from "./data/outbox";
 
 applyTheme();
 stripReloadParam();
@@ -32,3 +33,7 @@ registerRoute(searchRoute);
 registerRoute(settingsRoute);
 
 startRouter(document.getElementById("app")!);
+
+// After the gate and the router, so a queue left over from last session drains
+// in the background rather than delaying first paint.
+installFlushTriggers();

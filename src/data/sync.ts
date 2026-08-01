@@ -19,6 +19,7 @@ import { fetchMovieExtras, fetchSeasonNumbers, fetchShowExtras, fetchShowImages,
 import { fetchOmdbRatings } from "../api/omdb";
 import { fetchJustWatchOffers } from "../api/justwatch";
 import { dbGet, dbGetAll, dbPut } from "./db";
+import { enqueue, now } from "./outbox";
 import type {
   EpisodesRec,
   Library,
@@ -579,6 +580,9 @@ export async function setMovieWatched(movies: Map<number, MovieRec>, movie: Movi
   movie.lastWatchedAt = watched ? new Date().toISOString() : null;
   movies.set(movie.traktId, movie);
   await dbPut("movies", movie.traktId, movie);
+  if (movie.ids.tmdb) {
+    await enqueue(watched ? "movie.watched" : "movie.unwatched", { movie: movie.ids.tmdb, at: now() });
+  }
   emitChange();
 }
 
@@ -587,6 +591,9 @@ export async function setMovieOnWatchlist(movies: Map<number, MovieRec>, movie: 
   movie.listedAt = onList ? new Date().toISOString() : null;
   movies.set(movie.traktId, movie);
   await dbPut("movies", movie.traktId, movie);
+  if (movie.ids.tmdb) {
+    await enqueue(onList ? "watchlist.add" : "watchlist.remove", { type: "movie", tmdb: movie.ids.tmdb, at: now() });
+  }
   emitChange();
 }
 
@@ -661,6 +668,9 @@ export async function setMovieOnCustomList(
     : (movie.customLists ?? []).filter((id) => id !== listId);
   movies.set(movie.traktId, movie);
   await dbPut("movies", movie.traktId, movie);
+  if (movie.ids.tmdb) {
+    await enqueue(on ? "list.add" : "list.remove", { movie: movie.ids.tmdb, list: listId, at: now() });
+  }
   emitChange();
 }
 
@@ -733,6 +743,16 @@ export async function setEpisodesWatched(
 ): Promise<void> {
   applyLocalWatch(lib, showTraktId, episodes, watched, await dbGet<EpisodesRec>("episodes", showTraktId));
   await persistShowState(lib, showTraktId);
+  // One event per episode, for exactly the set that was asked for — replaying
+  // them makes the same call on the other device, so the two land identically.
+  // "Mark the season" therefore arrives as a season's worth of events, which is
+  // also what makes a later single-episode unwatch expressible.
+  const tmdb = lib.shows.get(showTraktId)?.ids.tmdb;
+  if (tmdb) {
+    const at = now();
+    const kind = watched ? "episode.watched" : "episode.unwatched";
+    for (const ep of episodes) await enqueue(kind, { show: tmdb, season: ep.season, number: ep.number, at });
+  }
   emitChange();
 }
 
@@ -743,6 +763,7 @@ export async function addToWatchlist(lib: Library, show: ShowRec): Promise<void>
   lib.shows.set(rec.traktId, rec);
   lib.watchlist = [{ traktId: rec.traktId, listedAt: new Date().toISOString() }, ...lib.watchlist];
   await Promise.all([dbPut("shows", rec.traktId, rec), dbPut("meta", "watchlist", lib.watchlist)]);
+  if (rec.ids.tmdb) await enqueue("watchlist.add", { type: "show", tmdb: rec.ids.tmdb, at: now() });
   emitChange();
 }
 
@@ -752,6 +773,8 @@ export async function setShowHidden(lib: Library, traktId: number, hidden: boole
   if (hidden) lib.hidden.add(traktId);
   else lib.hidden.delete(traktId);
   await dbPut("meta", "hidden", [...lib.hidden]);
+  const tmdb = lib.shows.get(traktId)?.ids.tmdb;
+  if (tmdb) await enqueue(hidden ? "show.hidden" : "show.unhidden", { show: tmdb, at: now() });
   emitChange();
 }
 
@@ -759,5 +782,7 @@ export async function removeFromWatchlist(lib: Library, showTraktId: number): Pr
   if (!lib.shows.has(showTraktId)) return;
   lib.watchlist = lib.watchlist.filter((e) => e.traktId !== showTraktId);
   await dbPut("meta", "watchlist", lib.watchlist);
+  const tmdb = lib.shows.get(showTraktId)?.ids.tmdb;
+  if (tmdb) await enqueue("watchlist.remove", { type: "show", tmdb, at: now() });
   emitChange();
 }

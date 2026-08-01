@@ -1,18 +1,39 @@
 /** Minimal promise wrapper around IndexedDB with out-of-line keys. */
 
 const DB_NAME = "watchwhat";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
-export type StoreName = "shows" | "watched" | "progress" | "episodes" | "movies" | "meta";
+export type StoreName =
+  | "shows"
+  | "watched"
+  | "progress"
+  | "episodes"
+  | "movies"
+  | "meta"
+  | "outbox"
+  | "sync";
+
+/** The library itself — what a backup contains and what an import replaces. */
 export const STORES: StoreName[] = ["shows", "watched", "progress", "episodes", "movies", "meta"];
+
+/**
+ * Sync bookkeeping, deliberately outside `STORES`: an export carries a library,
+ * not one device's unsent queue or its position in the log. Were these exported,
+ * importing a backup would clear the outbox — discarding watches that had never
+ * reached the server — and adopt the exporting device's cursor, so everything
+ * between the two positions would never be pulled.
+ */
+export const DEVICE_STORES: StoreName[] = ["outbox", "sync"];
+
+const ALL_STORES: StoreName[] = [...STORES, ...DEVICE_STORES];
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
-function openDb(): Promise<IDBDatabase> {
-  dbPromise ??= new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+function open(version?: number): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, version);
     req.onupgradeneeded = () => {
-      for (const name of STORES) {
+      for (const name of ALL_STORES) {
         if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
       }
     };
@@ -22,6 +43,34 @@ function openDb(): Promise<IDBDatabase> {
     };
     req.onerror = () => reject(req.error);
   });
+}
+
+/**
+ * Open the database, creating any store that is missing.
+ *
+ * The second pass is what makes this safe rather than merely tidy. Stores are
+ * only ever created in `onupgradeneeded`, so a database that reached the current
+ * version *without* one — an upgrade that raced a second tab, or a build where
+ * the version had been bumped before the store was added to the list — can never
+ * gain it, and every read of that store throws NotFoundError forever. Reopening
+ * one version higher runs the upgrade again and repairs it, which also means
+ * adding a store later needs no version bump at all.
+ */
+async function openDb(): Promise<IDBDatabase> {
+  dbPromise ??= (async () => {
+    // Open at whatever version exists first. Asking for DB_VERSION outright
+    // throws VersionError on a database the repair below has already pushed
+    // past it, which would take the whole app down rather than just one store.
+    const db = await open();
+    if (db.version >= DB_VERSION && ALL_STORES.every((name) => db.objectStoreNames.contains(name))) {
+      return db;
+    }
+    // One version past the current one when repairing, so the upgrade fires
+    // whether this device is behind DB_VERSION or level with it.
+    const next = Math.max(DB_VERSION, db.version + 1);
+    db.close();
+    return open(next);
+  })();
   return dbPromise;
 }
 

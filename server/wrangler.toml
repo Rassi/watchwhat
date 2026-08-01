@@ -12,4 +12,4 @@ compatibility_date = "2026-08-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "watchwhat"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "187fdf9d-263c-48e6-b1d8-b2d916310b19"
