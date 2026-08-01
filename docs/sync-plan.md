@@ -107,8 +107,11 @@ mutation functions, advance the cursor.
    auth rejects, a resent batch reports `accepted` without advancing `seq`, reads
    page at 500 carrying the cursor, and the preflight answers only the allowed
    origins. **Not deployed yet** — that needs `wrangler login`.
-2. **Client write path.** Outbox store + append beside each of the seven
-   mutations + a flush that retries.
+2. ~~**Client write path.**~~ — done 2026-08-01. `src/data/outbox.ts` (queue,
+   flush, cursor), `src/api/syncserver.ts` (the two calls), an append in each of
+   the seven mutations, and a Sync card in Settings. Verified in Chrome against a
+   local Worker, including that events queued while it was down went out on the
+   next flush.
 3. **Client read path.** Cursor + replay through the existing local functions.
 4. **Backfill.** One-off: turn the desktop library into ~3,764 events and push.
    Then the phone pulls from `seq: 0`. **Export the phone to a file before this
@@ -135,6 +138,16 @@ Rough effort: 1–2 evenings for 1–3, plus a careful hour on the backfill.
 - **`seq` is monotonic but not contiguous.** An ignored duplicate still consumes
   a rowid, so a resent batch leaves gaps. The `seq > ?` cursor doesn't care, but
   don't write a client that counts on +1 steps.
+- **The local D1 database is keyed by `database_id`.** Changing it in
+  `wrangler.toml` — as pasting the real id after `d1 create` does — silently
+  points `wrangler dev` at a fresh, empty database. Re-run `npm run schema:local`
+  or every request 500s with `no such table: events`.
+- **A store is only ever created in `onupgradeneeded`.** A database that reaches
+  a version without one can otherwise never gain it, and every read throws
+  `NotFoundError` forever — which happened once while building step 2, cause
+  never established. `openDb` now checks the store list after opening and
+  reopens one version higher to repair it, so adding a store later needs no
+  version bump. Don't "simplify" that second pass away.
 - Mixed content is *not* an issue here (Workers are HTTPS); it would have been
   the main trap on the NAS route.
 
