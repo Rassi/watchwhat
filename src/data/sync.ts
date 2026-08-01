@@ -767,14 +767,35 @@ function applyLocalWatch(
   const progress = lib.progress.get(showTraktId);
 
   for (const ep of episodes) {
-    const season = progress?.seasons.find((s) => s.number === ep.season);
-    const entry = season?.episodes.find((e) => e.number === ep.number);
+    let season = progress?.seasons.find((s) => s.number === ep.season);
+    let entry = season?.episodes.find((e) => e.number === ep.number);
 
     // Already in the state being asked for, so this changes nothing — and must
     // therefore count nothing. Incrementing `plays` regardless is what made a
     // replayed log inflate every total on a device that already had the
     // history, while the episode flags themselves stayed correct.
     if (entry && entry.completed === watched) continue;
+
+    // An episode this device's progress has never heard of, because its cache is
+    // older than the event — the ordinary case when a replayed log is newer than
+    // the local metadata. The watch has to land anyway: the cursor advances past
+    // this event either way, so anything dropped here is dropped permanently.
+    // Same reasoning as the fallback in `progressFromEpisodes`, which keeps a
+    // watched episode that the episode list cannot describe.
+    if (!entry && watched && progress) {
+      if (!season) {
+        season = { number: ep.season, aired: 0, completed: 0, episodes: [] };
+        progress.seasons.push(season);
+        progress.seasons.sort((a, b) => a.number - b.number);
+      }
+      entry = { number: ep.number, completed: false, watchedAt: null };
+      season.episodes.push(entry);
+      season.episodes.sort((a, b) => a.number - b.number);
+      season.aired++;
+      if (ep.season > 0) progress.aired++; // totals exclude specials
+    }
+    // Nothing to unwatch, so there is no play to take back either.
+    if (progress && !entry) continue;
 
     if (watchedRec) {
       watchedRec.plays = Math.max(0, watchedRec.plays + (watched ? 1 : -1));
