@@ -9,6 +9,7 @@ import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
 import { downloadBackup, exportBackup, importBackup, parseBackup, summarize } from "../data/transfer";
 import { flush, getCursor, pendingCount } from "../data/outbox";
 import { syncNow } from "../data/replay";
+import { describePlan, planBackfill, pushBackfill } from "../data/backfill";
 import { syncConfigured, testConnection } from "../api/syncserver";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
@@ -173,6 +174,52 @@ export const settingsRoute: Route = {
       await refreshSyncStatus();
     });
 
+    // One-off seeding. Kept beside the sync controls but visually quieter than
+    // Save/Sync now, because it is something you do once and then never again.
+    const backfillBtn = el("button", { class: "btn small" }, "Seed the server from this device…");
+    backfillBtn.addEventListener("click", async () => {
+      if (!syncConfigured()) {
+        toast("Enter a URL and token, then Save first");
+        return;
+      }
+      backfillBtn.textContent = "Reading library…";
+      let plan;
+      try {
+        plan = await planBackfill();
+      } finally {
+        backfillBtn.textContent = "Seed the server from this device…";
+      }
+      if (plan.events.length === 0) {
+        toast("Nothing to send — this device's library is empty");
+        return;
+      }
+
+      const choice = await dialog(
+        "Seed the server?",
+        `This sends ${plan.events.length} events describing everything this device has: ` +
+          `${describePlan(plan.counts)}. Do this on the device whose library is the one you want to keep. ` +
+          `It is safe to run again if it fails partway — the server ignores anything it already has.`,
+        [
+          { label: "Cancel", value: "cancel", kind: "plain" },
+          { label: `Send ${plan.events.length} events`, value: "go", kind: "primary" },
+        ],
+      );
+      if (choice !== "go") return;
+
+      backfillBtn.textContent = "Sending…";
+      try {
+        await pushBackfill(plan, ({ sent, total }) => {
+          backfillBtn.textContent = `Sending ${sent}/${total}…`;
+        });
+        toast(`Seeded — ${plan.events.length} events sent`);
+      } catch (err) {
+        toast(`Seeding failed: ${err instanceof Error ? err.message : "unknown error"}. Safe to try again.`, "error");
+      } finally {
+        backfillBtn.textContent = "Seed the server from this device…";
+        await refreshSyncStatus();
+      }
+    });
+
     const syncHelp = el("p", {});
     syncHelp.innerHTML =
       `Keeps this device and the others in step through your own Cloudflare Worker. Every change is saved locally ` +
@@ -187,6 +234,8 @@ export const settingsRoute: Route = {
       field("Token", syncTokenInput),
       el("div", { class: "field-row" }, saveSyncBtn, syncNowBtn, testSyncBtn),
       syncStatus,
+      el("p", { class: "field-help" }, "First time only — put this device's existing library into the log so the others can pull it."),
+      backfillBtn,
     );
 
     // --- Preferences ---

@@ -599,6 +599,11 @@ export async function setMovieWatched(
   opts?: MutationOpts,
 ): Promise<void> {
   const at = opts?.at ?? new Date().toISOString();
+  // A film has no per-episode flag to compare against, so the event's own
+  // timestamp is its identity: the same watch arriving twice is the same watch.
+  // Without this, re-pulling the log adds a play per replay — and unlike a
+  // rewatch tapped here, that is never something that happened.
+  if (opts?.replay && watched && movie.plays > 0 && movie.lastWatchedAt === at) return;
   movie.plays = watched ? movie.plays + 1 : 0;
   movie.lastWatchedAt = watched ? at : null;
   movies.set(movie.traktId, movie);
@@ -735,19 +740,24 @@ function applyLocalWatch(
   const progress = lib.progress.get(showTraktId);
 
   for (const ep of episodes) {
+    const season = progress?.seasons.find((s) => s.number === ep.season);
+    const entry = season?.episodes.find((e) => e.number === ep.number);
+
+    // Already in the state being asked for, so this changes nothing — and must
+    // therefore count nothing. Incrementing `plays` regardless is what made a
+    // replayed log inflate every total on a device that already had the
+    // history, while the episode flags themselves stayed correct.
+    if (entry && entry.completed === watched) continue;
+
     if (watchedRec) {
       watchedRec.plays = Math.max(0, watchedRec.plays + (watched ? 1 : -1));
       if (watched) watchedRec.lastWatchedAt = nowIso;
     }
-    if (progress) {
-      const season = progress.seasons.find((s) => s.number === ep.season);
-      const entry = season?.episodes.find((e) => e.number === ep.number);
-      if (season && entry && entry.completed !== watched) {
-        entry.completed = watched;
-        entry.watchedAt = watched ? nowIso : null;
-        season.completed += watched ? 1 : -1;
-        if (ep.season > 0) progress.completed += watched ? 1 : -1; // totals exclude specials
-      }
+    if (progress && season && entry) {
+      entry.completed = watched;
+      entry.watchedAt = watched ? nowIso : null;
+      season.completed += watched ? 1 : -1;
+      if (ep.season > 0) progress.completed += watched ? 1 : -1; // totals exclude specials
     }
   }
   if (progress) {
