@@ -11,10 +11,8 @@ import {
   setMovieWatched,
   syncMovies,
 } from "../data/sync";
-import type { MovieListRec } from "../data/model";
-import type { MovieRec } from "../data/model";
-import { getMovieSummary } from "../api/trakt";
-import { backdropUrl } from "../api/tmdb";
+import { isTmdbKeyed, type MovieListRec, type MovieRec } from "../data/model";
+import { backdropUrl, fetchMovieSummary } from "../api/tmdb";
 import { castStripCard, movieListsDropdown, whereToWatchCard } from "./shared";
 
 export const movieRoute: Route = {
@@ -35,11 +33,14 @@ export const movieRoute: Route = {
       const movies = await loadMovies();
       let movie = movies.get(traktId);
       if (!movie) {
-        // Deep link (e.g. from search) — build a record from Trakt and cache it lazily.
-        const summary = await getMovieSummary(traktId);
+        // Deep link (e.g. tapping a search result) — build the record from TMDB
+        // and cache it lazily. Only TMDB-keyed ids resolve; see show.ts.
+        if (!isTmdbKeyed(traktId)) throw new Error("This film isn't in your library, and its id can no longer be looked up.");
+        const summary = await fetchMovieSummary(-traktId);
+        if (!summary) throw new Error("Could not load this film from TMDB — check your API key in Settings.");
         movie = {
           traktId,
-          ids: summary.ids,
+          ids: { trakt: traktId, tmdb: -traktId, imdb: summary.imdb },
           title: summary.title,
           year: summary.year,
           plays: 0,

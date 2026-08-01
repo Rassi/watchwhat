@@ -17,9 +17,8 @@ import {
   setEpisodesWatched,
   type EpisodeRef,
 } from "../data/sync";
-import type { EpisodeInfo, EpisodesRec, Library, ShowRec } from "../data/model";
-import { getShowSummary } from "../api/trakt";
-import { backdropUrl, stillUrl } from "../api/tmdb";
+import { isTmdbKeyed, type EpisodeInfo, type EpisodesRec, type Library, type ShowRec } from "../data/model";
+import { backdropUrl, fetchShowSummary, stillUrl } from "../api/tmdb";
 
 function epCode(season: number, number: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -56,17 +55,24 @@ export const showRoute: Route = {
 
     try {
       if (!show) {
-        // Deep link to a show we haven't cached (e.g. from search).
-        const summary = await getShowSummary(traktId);
+        // Deep link to a show we haven't cached (e.g. tapping a search result).
+        // Only TMDB-keyed ids can be resolved: a bare Trakt id would need a
+        // Trakt lookup to map it onto TMDB, and that door is closed.
+        if (!isTmdbKeyed(traktId)) throw new Error("This show isn't in your library, and its id can no longer be looked up.");
+        const summary = await fetchShowSummary(-traktId);
+        if (!summary) throw new Error("Could not load this show from TMDB — check your API key in Settings.");
         show = {
           traktId,
-          ids: summary.ids,
+          ids: { trakt: traktId, tmdb: -traktId, imdb: summary.imdb },
           title: summary.title,
           year: summary.year,
           status: summary.status,
           network: summary.network,
           overview: summary.overview,
-          airedEpisodes: summary.aired_episodes,
+          genres: summary.genres,
+          runtime: summary.runtime,
+          rating: summary.rating,
+          firstAired: summary.firstAired,
         };
         lib.shows.set(traktId, show);
       }

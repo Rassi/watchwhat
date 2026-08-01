@@ -192,17 +192,109 @@ export async function searchTmdbAll(query: string): Promise<TmdbSearchHit[]> {
     .map((r) => toHit(r, r.media_type === "tv" ? "show" : "movie"));
 }
 
+/** A show's headline metadata — the fields a ShowRec carries, plus its season list. */
+export interface TmdbShowSummary {
+  title: string;
+  year: number | null;
+  status?: string;
+  network?: string;
+  overview?: string;
+  genres?: string[];
+  runtime?: number | null;
+  rating?: number | null;
+  firstAired?: string | null;
+  imdb?: string | null;
+  seasonNumbers: number[];
+}
+
+/**
+ * Trakt spelled statuses lowercase ("ended", "canceled") and several checks
+ * still compare against those literals; TMDB sends "Ended" / "Returning
+ * Series". Normalising here keeps the vocabulary in one place rather than
+ * spreading case-insensitive comparisons through the UI.
+ */
+const normaliseStatus = (s: string | null | undefined): string | undefined => s?.toLowerCase() || undefined;
+
+export async function fetchShowSummary(tmdbId: number): Promise<TmdbShowSummary | null> {
+  const { tmdbApiKey } = getSettings();
+  if (!tmdbApiKey) return null;
+  const res = await fetch(`${API}/tv/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=external_ids`);
+  if (!res.ok) return null;
+  const data = (await res.json()) as {
+    name?: string;
+    first_air_date?: string;
+    status?: string;
+    overview?: string | null;
+    networks?: { name: string }[];
+    genres?: { name: string }[];
+    episode_run_time?: number[];
+    vote_average?: number;
+    seasons?: { season_number: number }[];
+    external_ids?: { imdb_id?: string | null };
+  };
+  return {
+    title: data.name ?? "",
+    year: yearOf(data.first_air_date),
+    status: normaliseStatus(data.status),
+    network: data.networks?.[0]?.name,
+    overview: data.overview || undefined,
+    genres: data.genres?.map((g) => g.name),
+    runtime: data.episode_run_time?.[0] ?? null,
+    rating: data.vote_average ?? null,
+    firstAired: data.first_air_date || null,
+    imdb: data.external_ids?.imdb_id ?? null,
+    seasonNumbers: (data.seasons ?? []).map((s) => s.season_number).sort((a, b) => a - b),
+    // Deliberately no episode count: TMDB's `number_of_episodes` counts every
+    // episode it knows about, including unaired ones, where `airedEpisodes`
+    // means aired. The progress rebuild derives the real figure from air dates.
+  };
+}
+
 /**
  * The season numbers TMDB lists for a show. Needed when a show was added from
  * search and so has no episode data of any kind to build a page from.
  */
 export async function fetchSeasonNumbers(tmdbId: number): Promise<number[]> {
+  return (await fetchShowSummary(tmdbId))?.seasonNumbers ?? [];
+}
+
+/** A movie's headline metadata — the fields a MovieRec carries. */
+export interface TmdbMovieSummary {
+  title: string;
+  year: number | null;
+  overview?: string;
+  runtime?: number | null;
+  rating?: number | null;
+  genres?: string[];
+  released?: string | null;
+  imdb?: string | null;
+}
+
+export async function fetchMovieSummary(tmdbId: number): Promise<TmdbMovieSummary | null> {
   const { tmdbApiKey } = getSettings();
-  if (!tmdbApiKey) return [];
-  const res = await fetch(`${API}/tv/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}`);
-  if (!res.ok) return [];
-  const data = (await res.json()) as { seasons?: { season_number: number }[] };
-  return (data.seasons ?? []).map((s) => s.season_number).sort((a, b) => a - b);
+  if (!tmdbApiKey) return null;
+  const res = await fetch(`${API}/movie/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=external_ids`);
+  if (!res.ok) return null;
+  const data = (await res.json()) as {
+    title?: string;
+    release_date?: string;
+    overview?: string | null;
+    runtime?: number | null;
+    vote_average?: number;
+    genres?: { name: string }[];
+    external_ids?: { imdb_id?: string | null };
+    imdb_id?: string | null;
+  };
+  return {
+    title: data.title ?? "",
+    year: yearOf(data.release_date),
+    overview: data.overview || undefined,
+    runtime: data.runtime ?? null,
+    rating: data.vote_average ?? null,
+    genres: data.genres?.map((g) => g.name),
+    released: data.release_date || null,
+    imdb: data.external_ids?.imdb_id ?? data.imdb_id ?? null,
+  };
 }
 
 export function posterUrl(path: string | null | undefined, size = "w342"): string | null {
