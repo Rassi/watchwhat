@@ -107,9 +107,12 @@ mutation functions, advance the cursor.
 2. **Client write path.** Outbox store + append beside each of the seven
    mutations + a flush that retries.
 3. **Client read path.** Cursor + replay through the existing local functions.
-4. **Backfill.** One-off: turn the existing library into ~3,764 events and push
-   from whichever device is declared authoritative. Then the other device pulls
-   from `seq: 0`.
+4. **Backfill.** One-off: turn the desktop library into ~3,764 events and push.
+   Then the phone pulls from `seq: 0`. **Export the phone to a file before this
+   step** — that file is the only copy of whatever it has marked since
+   2026-07-30, and `importBackup` clears each store before writing. Diffing it
+   against the desktop afterwards gives the exact list of stragglers to re-tick,
+   which beats recalling them.
 
 Rough effort: 1–2 evenings for 1–3, plus a careful hour on the backfill.
 
@@ -130,10 +133,11 @@ Rough effort: 1–2 evenings for 1–3, plus a careful hour on the backfill.
 
 ## Open decisions
 
-- **Which device seeds the backfill.** The desktop currently holds 232 shows /
-  344 movies / 154 watched-show records. The phone has not been counted. Compare
-  export toast counts on both **before** seeding, because the loser's divergence
-  is discarded.
+- ~~Which device seeds the backfill~~ — **decided 2026-08-01: the desktop**, which
+  holds 232 shows / 344 movies / 154 watched-show records. The phone is the
+  authoritative library in principle, but little was marked on it after Trakt
+  access ended on 2026-07-30, so the divergence is about two days' worth and is
+  cheaper to re-enter by hand than to reconcile in code.
 - Whether the Settings sync card also exposes a "force full re-pull" for
   recovery, or whether clearing the cursor is enough.
 
