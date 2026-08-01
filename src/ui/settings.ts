@@ -197,10 +197,21 @@ export const settingsRoute: Route = {
     });
     const tmdbHelp = el("p", {});
     tmdbHelp.innerHTML =
-      `Used for posters and artwork. Get a free API key at ` +
+      `Now the main source: search, artwork, episode lists and air dates all come from here, so without a key ` +
+      `you can only browse what is already saved. Get a free API key at ` +
       `<a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener"><b>themoviedb.org/settings/api</b></a> ` +
       `(the "API Key (v3 auth)" value).`;
-    const tmdbCard = el("div", { class: "card" }, el("h2", {}, "TMDB (images)"), tmdbHelp, field("API key", tmdbKey), saveTmdbBtn);
+    // Required by TMDB's terms of use, and more honest now that they carry the app.
+    const tmdbAttribution = el("p", { class: "attribution" }, "This product uses the TMDB API but is not endorsed or certified by TMDB.");
+    const tmdbCard = el(
+      "div",
+      { class: "card" },
+      el("h2", {}, "TMDB (search & metadata)"),
+      tmdbHelp,
+      field("API key", tmdbKey),
+      saveTmdbBtn,
+      tmdbAttribution,
+    );
 
     // --- OMDb (optional ratings) ---
     const omdbKey = textInput(settings.omdbApiKey, "OMDb API key");
