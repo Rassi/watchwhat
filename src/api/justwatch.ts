@@ -12,6 +12,8 @@
  * caller must treat a failure as "no extra information" and keep TMDB's answer.
  */
 
+import { getSettings } from "../data/settings";
+
 const ENDPOINT = "https://apis.justwatch.com/graphql";
 const HEALTH_KEY = "watchwhat.justwatch.health";
 
@@ -68,10 +70,35 @@ export interface JustWatchOffer {
   kind: "stream" | "free" | "ads" | "rent";
 }
 
+/**
+ * Where to send a query.
+ *
+ * **JustWatch sends no `Access-Control-Allow-Origin` for `https://rassi.github.io`,
+ * while allowing `http://localhost:5173`** (measured 2026-08-01), so calling it
+ * from the browser works on the dev server and nowhere else — which meant the
+ * deployed app never once got a top-up, silently. The sync Worker forwards it
+ * server-side, where CORS does not apply.
+ *
+ * Direct is kept as the fallback rather than removed: it is what makes the dev
+ * server work with no token configured, and it is the path that still functions
+ * if the Worker is ever retired.
+ */
+function target(): { url: string; headers: Record<string, string> } {
+  const { syncUrl, syncToken } = getSettings();
+  if (syncUrl.trim() && syncToken.trim()) {
+    return {
+      url: `${syncUrl.trim().replace(/\/$/, "")}/justwatch`,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${syncToken.trim()}` },
+    };
+  }
+  return { url: ENDPOINT, headers: { "Content-Type": "application/json" } };
+}
+
 async function post<T>(query: string, variables: Record<string, unknown>): Promise<T | null> {
-  const res = await fetch(ENDPOINT, {
+  const { url, headers } = target();
+  const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ query, variables }),
   });
   if (!res.ok) return null;

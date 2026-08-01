@@ -65,10 +65,24 @@ A `mode: "no-cors"` probe from production returns an opaque response, so the
 network reaches JustWatch perfectly well — it is CORS refusing to expose the
 answer, not a block or an outage.
 
-**The fix, if wanted:** proxy it through the sync Worker, which already exists,
-already has the allowed-origin logic, and is server-side so CORS does not apply
-to its own outbound call. Until then, the deployed app lags TMDB's ingest around
-a release, which is exactly when it matters. **Not built.**
+**Fixed by proxying through the sync Worker** — `POST /justwatch`, which forwards
+the query server-side where CORS does not apply. The client uses it whenever a
+sync URL and token are configured and falls back to calling JustWatch directly
+otherwise, which is what keeps the dev server working with no token.
+
+The proxy is deliberately **not** general: the destination is fixed in the Worker
+and never taken from the request, and the bearer token is still required. An open
+relay against someone else's API, on someone else's quota, is a fine way to get
+the Worker's address blocked.
+
+*The Drama* was the case that exposed all of this. TMDB listed it rent/buy only
+in the US while JustWatch reported `FLATRATE` on HBO Max — so localhost showed it
+as included and the live site charged you for it.
+
+> **Watch the ids here.** The movie route is keyed by `traktId`
+> (`#/movie/1083999`), while everything provider-related is TMDB
+> (`1325734`). Searching JustWatch for the traktId finds nothing and looks
+> exactly like "JustWatch cannot see this title".
 
 Because that endpoint can change under us without warning, Settings can run
 `checkJustWatch` — a canary against *The Devil Wears Prada* (2006, chosen because

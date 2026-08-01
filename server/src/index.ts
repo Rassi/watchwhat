@@ -45,6 +45,12 @@ const ALLOWED_ORIGINS = [
   "http://127.0.0.1:5173",
 ];
 
+/** Fixed destination for `/justwatch`. Never taken from the request — see `handleJustWatch`. */
+const JUSTWATCH_ENDPOINT = "https://apis.justwatch.com/graphql";
+
+/** A GraphQL document from this client is a few hundred bytes; this is only a sanity bound. */
+const MAX_QUERY_CHARS = 8192;
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get("Origin");
@@ -55,13 +61,18 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
     const url = new URL(request.url);
-    if (url.pathname !== "/events") return json({ error: "Not found" }, 404, cors);
+    const route = url.pathname;
+    if (route !== "/events" && route !== "/justwatch") return json({ error: "Not found" }, 404, cors);
 
     if (!(await authorized(request, env))) {
       return json({ error: "Unauthorized" }, 401, cors);
     }
 
     try {
+      if (route === "/justwatch") {
+        if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, cors);
+        return await handleJustWatch(request, cors);
+      }
       if (request.method === "GET") return await handleGet(url, env, cors);
       if (request.method === "POST") return await handlePost(request, env, cors);
     } catch (err) {
@@ -150,6 +161,63 @@ async function handlePost(request: Request, env: Env, cors: HeadersInit): Promis
 
   const row = await env.DB.prepare("SELECT MAX(seq) AS seq FROM events").first<{ seq: number | null }>();
   return json({ accepted: events.length, seq: row?.seq ?? 0 }, 200, cors);
+}
+
+/**
+ * Forward one GraphQL query to JustWatch.
+ *
+ * This exists for one reason: **JustWatch sends no `Access-Control-Allow-Origin`
+ * for `https://rassi.github.io`, while allowing `http://localhost:5173`.** The
+ * browser could therefore reach it from the dev server and nowhere else, so the
+ * near-release provider top-up silently did nothing on the deployed app — and
+ * failed silently by design, since a failed top-up means "keep TMDB's answer".
+ * Server-to-server has no such restriction.
+ *
+ * **Deliberately not a general proxy.** The destination is fixed above and never
+ * taken from the request, and the bearer token is still required. An open relay
+ * against someone else's API, on someone else's quota, is a fine way to get this
+ * Worker's address blocked — and it would be this one endpoint that did it.
+ *
+ * This is the only place the server talks to anything but its own database, and
+ * it still interprets nothing: the query is the client's, and the response goes
+ * back untouched.
+ */
+async function handleJustWatch(request: Request, cors: HeadersInit): Promise<Response> {
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return json({ error: "Body must be JSON" }, 400, cors);
+  }
+
+  const { query, variables } = (payload ?? {}) as { query?: unknown; variables?: unknown };
+  if (typeof query !== "string" || !query.trim()) {
+    return json({ error: "`query` must be a non-empty string" }, 400, cors);
+  }
+  if (query.length > MAX_QUERY_CHARS) return json({ error: "`query` is too long" }, 400, cors);
+  if (variables !== undefined && (typeof variables !== "object" || variables === null)) {
+    return json({ error: "`variables` must be an object" }, 400, cors);
+  }
+
+  const upstream = await fetch(JUSTWATCH_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      // Named rather than anonymous: this is an unofficial API being used politely,
+      // and a request that identifies itself is one they can ask about rather than
+      // simply block. Verified 2026-08-01 that they answer with or without it.
+      "User-Agent": "WatchWhat (+https://github.com/Rassi/watchwhat)",
+    },
+    body: JSON.stringify({ query, variables: variables ?? {} }),
+  });
+
+  // Status and body pass through untouched. The client already treats anything
+  // that is not a well-formed answer as "no extra information", which is the
+  // right behaviour whether JustWatch was down, throttling, or has moved on.
+  return new Response(await upstream.text(), {
+    status: upstream.status,
+    headers: { ...cors, "Content-Type": "application/json" },
+  });
 }
 
 /**
