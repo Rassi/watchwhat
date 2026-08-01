@@ -1,8 +1,6 @@
-/** localStorage-backed settings, Trakt tokens, and per-show preferences. */
+/** localStorage-backed settings and per-show preferences. */
 
 export interface AppSettings {
-  traktClientId: string;
-  traktClientSecret: string;
   tmdbApiKey: string;
   /** OMDb key for IMDb/Rotten Tomatoes ratings (optional). */
   omdbApiKey: string;
@@ -16,12 +14,9 @@ export interface AppSettings {
 }
 
 const SETTINGS_KEY = "watchwhat.settings";
-const TOKENS_KEY = "watchwhat.tokens";
 const NEVER_MARK_PREVIOUS_KEY = "watchwhat.neverMarkPrevious";
 
 const defaults: AppSettings = {
-  traktClientId: "",
-  traktClientSecret: "",
   tmdbApiKey: "",
   omdbApiKey: "",
   staleDays: 30,
@@ -108,70 +103,22 @@ export function saveSettings(patch: Partial<AppSettings>): AppSettings {
 /** What each per-field Reset in Settings restores, and what saveSettings unpins against. */
 export const defaultSettings: Readonly<AppSettings> = defaults;
 
-export function isConfigured(): boolean {
-  const s = getSettings();
-  return s.traktClientId !== "" && s.traktClientSecret !== "";
-}
-
-export interface Tokens {
-  accessToken: string;
-  refreshToken: string;
-  /** epoch ms */
-  expiresAt: number;
-}
-
-export function getTokens(): Tokens | null {
-  return readJson<Tokens>(TOKENS_KEY);
-}
-
-export function saveTokens(tokens: Tokens): void {
-  localStorage.setItem(TOKENS_KEY, JSON.stringify(tokens));
-}
-
-export function clearTokens(): void {
-  localStorage.removeItem(TOKENS_KEY);
-}
-
-export function isAuthenticated(): boolean {
-  return getTokens() !== null;
-}
-
-const TRAKT_UNAVAILABLE_KEY = "watchwhat.traktUnavailable";
-
-export interface TraktUnavailable {
-  at: number;
-  reason: string;
-}
-
 /**
- * Trakt saying it doesn't recognise this app is not a transient failure — it is
- * the answer to every call from now on. Latching it stops the app retrying a
- * dead endpoint on every screen and every mutation. Saving credentials clears
- * the latch, which is the only repair that could ever work anyway.
+ * Clear out what the Trakt integration left in localStorage: an OAuth access
+ * and refresh token, the client id and secret they were issued against, and the
+ * flag that latched the day Trakt started refusing the app. None of it can be
+ * used again — the tokens are dead and the API app was deleted — and a stored
+ * client secret is worth being rid of on principle. Runs once per device; a
+ * no-op on every open after that.
  */
-export function markTraktUnavailable(reason: string): void {
-  if (localStorage.getItem(TRAKT_UNAVAILABLE_KEY)) return; // keep the first reason
-  localStorage.setItem(TRAKT_UNAVAILABLE_KEY, JSON.stringify({ at: Date.now(), reason }));
-}
-
-export function traktUnavailable(): TraktUnavailable | null {
-  return readJson<TraktUnavailable>(TRAKT_UNAVAILABLE_KEY);
-}
-
-export function clearTraktUnavailable(): void {
-  localStorage.removeItem(TRAKT_UNAVAILABLE_KEY);
-}
-
-/**
- * Whether Trakt can be called at all. Trakt deleted the API app in July 2026, so
- * this is false on every device that isn't set up with working credentials —
- * and the app then runs entirely off its IndexedDB mirror: it still renders,
- * still records what you watch, and just doesn't sync anywhere. Every Trakt call
- * site is gated on this rather than on being offline, because a device with no
- * tokens is not a device that failed a request.
- */
-export function isTraktLive(): boolean {
-  return isConfigured() && isAuthenticated() && traktUnavailable() === null;
+export function purgeTraktRemnants(): void {
+  localStorage.removeItem("watchwhat.tokens");
+  localStorage.removeItem("watchwhat.traktUnavailable");
+  const stored = readJson<Record<string, unknown>>(SETTINGS_KEY);
+  if (!stored || !("traktClientId" in stored || "traktClientSecret" in stored)) return;
+  delete stored.traktClientId;
+  delete stored.traktClientSecret;
+  writeStored(stored as Partial<AppSettings>);
 }
 
 /** Shows for which "mark previous episodes?" should never be asked. */

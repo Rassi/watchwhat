@@ -1,27 +1,24 @@
 /**
- * Sync engine. IndexedDB holds the library; Trakt, when reachable, is the
- * source of truth it reconciles against.
+ * Data engine. IndexedDB is the library — there is no server behind it, so a
+ * write that lands here is done, and nothing below should report a failure for
+ * having nowhere to sync to.
  *
- * - `syncLibrary()` is gated on /sync/last_activities so an app open with no
- *   remote changes costs one API call.
- * - Per-show progress (aired/completed/next episode, computed server-side by
- *   Trakt from air dates) is refreshed lazily: when the show's watched state
- *   changed, or a TTL expired (so newly aired episodes show up).
- * - Mutations update the cache optimistically, then hit Trakt, then re-pull
- *   that show's progress; failures trigger a forced resync.
+ * Trakt used to be the source of truth this reconciled against, and computed
+ * two things server-side that had to be reimplemented when it went away:
+ * which episodes have aired (from air dates, now TMDB's) and which episode is
+ * next. Both are recomputed locally, every time, against today's date —
+ * see `refreshShowFromTmdb` and `computeNextEpisode`.
  *
- * Without Trakt (`isTraktLive()` false) the same code runs local-only: reads
- * come from IndexedDB, writes stop at IndexedDB, and the values Trakt would
- * have computed are worked out here instead. That is the normal state since
- * Trakt closed API access, not an error path — nothing below should report a
- * failure just because there is nowhere to sync to.
+ * Stored records are still keyed by `traktId` and still carry `ids.trakt`.
+ * Those are now just opaque local ids: real ones for titles added before the
+ * shutdown, `-tmdbId` for everything since. Renaming them would mean
+ * rewriting every stored record for no functional gain, so they stay.
  */
 
-import * as trakt from "../api/trakt";
-import { fetchMovieExtras, fetchSeasonNumbers, fetchShowExtras, fetchShowImages } from "../api/tmdb";
+import { fetchMovieExtras, fetchSeasonNumbers, fetchShowExtras, fetchShowImages, fetchShowSummary } from "../api/tmdb";
 import { fetchOmdbRatings } from "../api/omdb";
 import { fetchJustWatchOffers } from "../api/justwatch";
-import { dbBulkPut, dbClear, dbGet, dbGetAll, dbPut } from "./db";
+import { dbGet, dbGetAll, dbPut } from "./db";
 import type {
   EpisodesRec,
   Library,
@@ -33,7 +30,7 @@ import type {
   WatchedRec,
   WatchlistEntry,
 } from "./model";
-import { getSettings, isTraktLive } from "./settings";
+import { getSettings } from "./settings";
 
 export const dataEvents = new EventTarget();
 
@@ -42,68 +39,6 @@ function emitChange(): void {
 }
 
 // ---------- conversions ----------
-
-function toShowRec(show: trakt.TraktShow, existing?: ShowRec): ShowRec {
-  return {
-    traktId: show.ids.trakt,
-    ids: show.ids,
-    title: show.title,
-    year: show.year,
-    status: show.status ?? existing?.status,
-    network: show.network ?? existing?.network,
-    // `||` not `??`: Trakt sometimes returns "" — don't clobber a TMDB-sourced overview
-    overview: show.overview || existing?.overview,
-    airedEpisodes: show.aired_episodes ?? existing?.airedEpisodes,
-    genres: show.genres ?? existing?.genres,
-    runtime: show.runtime ?? existing?.runtime,
-    airs: show.airs ? { day: show.airs.day, time: show.airs.time } : existing?.airs,
-    rating: show.rating ?? existing?.rating,
-    firstAired: show.first_aired ?? existing?.firstAired,
-    trailer: show.trailer !== undefined ? show.trailer : existing?.trailer,
-    extRatings: existing?.extRatings,
-    poster: existing?.poster,
-    backdrop: existing?.backdrop,
-    imagesFetchedAt: existing?.imagesFetchedAt,
-  };
-}
-
-function toWatchedRec(w: trakt.WatchedShow): WatchedRec {
-  return {
-    traktId: w.show.ids.trakt,
-    plays: w.plays,
-    lastWatchedAt: w.last_watched_at,
-    lastUpdatedAt: w.last_updated_at,
-  };
-}
-
-function toProgressRec(traktId: number, p: trakt.ShowProgress): ProgressRec {
-  // Recompute totals over regular seasons — Trakt counts specials in its
-  // totals whenever specials are included in the response.
-  const regular = p.seasons.filter((s) => s.number > 0);
-  const nextEp = p.next_episode && p.next_episode.season > 0 ? p.next_episode : null;
-  return {
-    traktId,
-    fetchedAt: Date.now(),
-    aired: regular.reduce((n, s) => n + s.aired, 0),
-    completed: regular.reduce((n, s) => n + s.completed, 0),
-    lastWatchedAt: p.last_watched_at,
-    seasons: p.seasons.map((s) => ({
-      number: s.number,
-      aired: s.aired,
-      completed: s.completed,
-      episodes: s.episodes.map((e) => ({ number: e.number, completed: e.completed, watchedAt: e.last_watched_at ?? null })),
-    })),
-    nextEpisode: nextEp
-      ? {
-          traktId: nextEp.ids.trakt,
-          season: nextEp.season,
-          number: nextEp.number,
-          title: nextEp.title,
-          firstAired: nextEp.first_aired ?? null,
-        }
-      : null,
-  };
-}
 
 /**
  * The next unwatched aired episode, worked out from the cached progress alone.
@@ -232,52 +167,6 @@ export async function loadLibrary(): Promise<Library> {
     watchlist: watchlist ?? [],
     hidden: new Set(hidden ?? []),
   };
-}
-
-/** Pull from Trakt if anything changed remotely. Returns true if the cache was updated. */
-export async function syncLibrary(force = false): Promise<boolean> {
-  if (!isTraktLive()) return false;
-
-  const acts = await trakt.getLastActivities();
-  const prev = await dbGet<trakt.LastActivities>("meta", "lastActivities");
-  const changed =
-    force ||
-    !prev ||
-    prev.episodes.watched_at !== acts.episodes.watched_at ||
-    prev.watchlist.updated_at !== acts.watchlist.updated_at ||
-    prev.shows.hidden_at !== acts.shows.hidden_at;
-
-  if (!changed) return false;
-
-  const [watchedShows, watchlistItems, hiddenShows] = await Promise.all([
-    trakt.getWatchedShows(),
-    trakt.getWatchlistShows(),
-    trakt.getHiddenShows(),
-  ]);
-
-  const existingShows = new Map((await dbGetAll<ShowRec>("shows")).map((s) => [s.traktId, s]));
-
-  const showEntries: [number, ShowRec][] = [];
-  const allShows = [
-    ...watchedShows.map((w) => w.show),
-    ...watchlistItems.map((i) => i.show),
-    ...hiddenShows,
-  ];
-  for (const show of allShows) {
-    showEntries.push([show.ids.trakt, toShowRec(show, existingShows.get(show.ids.trakt))]);
-  }
-
-  await dbClear("watched");
-  await Promise.all([
-    dbBulkPut("shows", showEntries),
-    dbBulkPut("watched", watchedShows.map((w) => [w.show.ids.trakt, toWatchedRec(w)] as [number, WatchedRec])),
-    dbPut("meta", "watchlist", watchlistItems.map((i): WatchlistEntry => ({ traktId: i.show.ids.trakt, listedAt: i.listed_at }))),
-    dbPut("meta", "hidden", hiddenShows.map((s) => s.ids.trakt)),
-    dbPut("meta", "lastActivities", acts),
-  ]);
-
-  emitChange();
-  return true;
 }
 
 // ---------- lazy per-show data ----------
@@ -423,13 +312,6 @@ async function refreshShowFromTmdb(lib: Library, traktId: number): Promise<boole
   return true;
 }
 
-async function refreshShowFromTrakt(lib: Library, traktId: number): Promise<boolean> {
-  const rec = toProgressRec(traktId, await trakt.getShowProgress(traktId));
-  lib.progress.set(traktId, rec);
-  await dbPut("progress", traktId, rec);
-  return true;
-}
-
 export async function ensureProgress(
   lib: Library,
   traktIds: number[],
@@ -439,14 +321,11 @@ export async function ensureProgress(
   const stale = traktIds.filter((id) => progressIsStale(lib, id, opts?.skipFinishedTtl));
   if (stale.length === 0) return;
 
-  const live = isTraktLive();
-  const refresh = live ? refreshShowFromTrakt : refreshShowFromTmdb;
   const notify = batchNotify(onUpdate);
-  // TMDB is happy with more in flight at once than Trakt ever was, and each
-  // show costs two calls there rather than one.
-  await mapWithConcurrency(stale, live ? 2 : 4, async (traktId) => {
+  // Each show costs two TMDB calls, and TMDB is happy with four in flight.
+  await mapWithConcurrency(stale, 4, async (traktId) => {
     try {
-      if (await refresh(lib, traktId)) notify.tick();
+      if (await refreshShowFromTmdb(lib, traktId)) notify.tick();
     } catch {
       // Leave stale/missing; next render tries again.
     }
@@ -544,95 +423,27 @@ async function episodesFromProgress(show: ShowRec): Promise<EpisodesRec> {
   };
 }
 
-/** Episode titles/ids for the show page (24h TTL for airing shows, 7d for ended). */
+/**
+ * Episode titles for the show page (24h TTL for airing shows, 7d for ended).
+ *
+ * Serves what's cached, and builds a skeleton from progress the first time a
+ * show page is opened so it lists episodes rather than erroring. TMDB fills in
+ * titles, stills and air dates — it needs only its own key.
+ */
 export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
   const cached = await dbGet<EpisodesRec>("episodes", show.traktId);
   const ttl = progressTtlMs(show) * 2;
 
-  // No Trakt: serve what's cached, and build a skeleton from progress the first
-  // time a show page is opened so it lists episodes rather than erroring. TMDB
-  // still fills in titles, stills and air dates — it needs only its own key.
-  if (!isTraktLive()) {
-    const rec = cached ?? (await episodesFromProgress(show));
-    const stale = !rec.tmdbMergedAt || Date.now() - rec.tmdbMergedAt > ttl;
-    if (stale && (await mergeTmdbEpisodes(show, rec))) {
-      rec.fetchedAt = Date.now();
-      await dbPut("episodes", show.traktId, rec);
-    }
-    return rec;
-  }
-
-  if (cached && Date.now() - cached.fetchedAt < ttl) {
-    // Cached from before a TMDB key was configured (or before cast/ratings/
-    // person-ids were collected) — enrich it now.
-    const needsMerge =
-      !cached.tmdbMergedAt ||
-      cached.cast === undefined ||
-      cached.cast.some((c) => c.tmdbId === undefined) ||
-      cached.providers === undefined;
-    if (needsMerge && (await mergeTmdbEpisodes(show, cached))) {
-      await dbPut("episodes", show.traktId, cached);
-    }
-    return cached;
-  }
-
-  try {
-    const seasons = await trakt.getSeasons(show.traktId);
-    const rec: EpisodesRec = {
-      traktId: show.traktId,
-      fetchedAt: Date.now(),
-      seasons: seasons.map((s) => ({
-        number: s.number,
-        episodes: s.episodes.map((e) => ({
-          traktId: e.ids.trakt,
-          season: e.season,
-          number: e.number,
-          title: e.title,
-        })),
-      })),
-    };
-    await mergeTmdbEpisodes(show, rec);
+  const rec = cached ?? (await episodesFromProgress(show));
+  const stale = !rec.tmdbMergedAt || Date.now() - rec.tmdbMergedAt > ttl;
+  if (stale && (await mergeTmdbEpisodes(show, rec))) {
+    rec.fetchedAt = Date.now();
     await dbPut("episodes", show.traktId, rec);
-    return rec;
-  } catch (e) {
-    if (cached) return cached; // offline — serve stale
-    throw e;
   }
+  return rec;
 }
 
 // ---------- movies ----------
-
-function toMovieRec(movie: trakt.TraktMovie, existing: MovieRec | undefined, state: Partial<MovieRec>): MovieRec {
-  return {
-    traktId: movie.ids.trakt,
-    ids: movie.ids,
-    title: movie.title,
-    year: movie.year,
-    plays: 0,
-    lastWatchedAt: null,
-    onWatchlist: false,
-    listedAt: null,
-    overview: movie.overview || existing?.overview,
-    runtime: movie.runtime ?? existing?.runtime,
-    rating: movie.rating ?? existing?.rating,
-    genres: movie.genres ?? existing?.genres,
-    released: movie.released ?? existing?.released,
-    trailer: movie.trailer !== undefined ? movie.trailer : existing?.trailer,
-    extRatings: existing?.extRatings,
-    poster: existing?.poster,
-    backdrop: existing?.backdrop,
-    cast: existing?.cast,
-    providers: existing?.providers,
-    // Every TMDB-derived field has to be carried over, not just the obvious ones: a field left
-    // out comes back undefined, which the staleness check reads as "never fetched" and refetches
-    // the whole library from TMDB after every Trakt sync.
-    providersVersion: existing?.providersVersion,
-    digitalRelease: existing?.digitalRelease,
-    streamingRelease: existing?.streamingRelease,
-    tmdbFetchedAt: existing?.tmdbFetchedAt,
-    ...state,
-  };
-}
 
 export async function loadMovies(): Promise<Map<number, MovieRec>> {
   const movies = await dbGetAll<MovieRec>("movies");
@@ -641,67 +452,6 @@ export async function loadMovies(): Promise<Map<number, MovieRec>> {
 
 export async function loadMovieLists(): Promise<MovieListRec[]> {
   return (await dbGet<MovieListRec[]>("meta", "movieLists")) ?? [];
-}
-
-/** Pull movies from Trakt if changed remotely (gated on last_activities like shows). */
-export async function syncMovies(force = false): Promise<boolean> {
-  if (!isTraktLive()) return false;
-
-  const acts = await trakt.getLastActivities();
-  const prev = await dbGet<trakt.LastActivities>("meta", "movieActivities");
-  const changed =
-    force ||
-    !prev ||
-    prev.movies.watched_at !== acts.movies.watched_at ||
-    prev.movies.watchlisted_at !== acts.movies.watchlisted_at ||
-    prev.watchlist.updated_at !== acts.watchlist.updated_at ||
-    prev.lists?.updated_at !== acts.lists?.updated_at;
-  if (!changed) return false;
-
-  const [watched, watchlist, lists] = await Promise.all([
-    trakt.getWatchedMovies(),
-    trakt.getWatchlistMovies(),
-    trakt.getMyLists(),
-  ]);
-  const existing = await loadMovies();
-
-  const entries = new Map<number, MovieRec>();
-  for (const w of watched) {
-    entries.set(
-      w.movie.ids.trakt,
-      toMovieRec(w.movie, existing.get(w.movie.ids.trakt), { plays: w.plays, lastWatchedAt: w.last_watched_at }),
-    );
-  }
-  for (const item of watchlist) {
-    const id = item.movie.ids.trakt;
-    const rec = entries.get(id) ?? toMovieRec(item.movie, existing.get(id), {});
-    rec.onWatchlist = true;
-    rec.listedAt = item.listed_at;
-    entries.set(id, rec);
-  }
-
-  // Custom personal lists: fold their movies in and record membership.
-  for (const list of lists) {
-    const items = await trakt.getListMovies(list.ids.trakt);
-    for (const item of items) {
-      const id = item.movie.ids.trakt;
-      const rec = entries.get(id) ?? toMovieRec(item.movie, existing.get(id), {});
-      rec.listedAt ??= item.listed_at;
-      (rec.customLists ??= []).push(list.ids.trakt);
-      entries.set(id, rec);
-    }
-  }
-
-  await dbClear("movies");
-  await dbBulkPut("movies", [...entries.entries()]);
-  await dbPut(
-    "meta",
-    "movieLists",
-    lists.map((l): MovieListRec => ({ traktId: l.ids.trakt, name: l.name, slug: l.ids.slug })),
-  );
-  await dbPut("meta", "movieActivities", acts);
-  emitChange();
-  return true;
 }
 
 /**
@@ -805,6 +555,7 @@ export async function ensureMovieDetails(
     movie.poster = extras.poster;
     movie.backdrop = extras.backdrop;
     if (!movie.overview && extras.overview) movie.overview = extras.overview;
+    movie.trailer = extras.trailer;
     movie.cast = extras.cast;
     movie.providers = extras.providersByCountry;
     movie.providersVersion = PROVIDERS_VERSION;
@@ -824,35 +575,18 @@ export async function ensureMovieDetails(
 }
 
 export async function setMovieWatched(movies: Map<number, MovieRec>, movie: MovieRec, watched: boolean): Promise<void> {
-  if (isTraktLive()) {
-    if (watched) await trakt.addMovieToHistory(movie.ids);
-    else await trakt.removeMovieFromHistory(movie.ids);
-  }
   movie.plays = watched ? movie.plays + 1 : 0;
   movie.lastWatchedAt = watched ? new Date().toISOString() : null;
   movies.set(movie.traktId, movie);
-  await Promise.all([
-    dbPut("movies", movie.traktId, movie),
-    adoptBaseline("movieActivities", (b, a) => (b.movies.watched_at = a.movies.watched_at)),
-  ]);
+  await dbPut("movies", movie.traktId, movie);
   emitChange();
 }
 
 export async function setMovieOnWatchlist(movies: Map<number, MovieRec>, movie: MovieRec, onList: boolean): Promise<void> {
-  if (isTraktLive()) {
-    if (onList) await trakt.addMovieToWatchlist(movie.ids);
-    else await trakt.removeMovieFromWatchlist(movie.ids);
-  }
   movie.onWatchlist = onList;
   movie.listedAt = onList ? new Date().toISOString() : null;
   movies.set(movie.traktId, movie);
-  await Promise.all([
-    dbPut("movies", movie.traktId, movie),
-    adoptBaseline("movieActivities", (b, a) => {
-      b.movies.watchlisted_at = a.movies.watchlisted_at;
-      b.watchlist.updated_at = a.watchlist.updated_at;
-    }),
-  ]);
+  await dbPut("movies", movie.traktId, movie);
   emitChange();
 }
 
@@ -881,6 +615,40 @@ export async function ensureMovieExtRatings(movies: Map<number, MovieRec>, movie
   return true;
 }
 
+/**
+ * Refresh a show's headline metadata (genres, overview, trailer, status) from
+ * TMDB. Records cached in the Trakt era predate some of these fields, and a
+ * running show's status changes; the show page calls this when it spots a gap.
+ */
+export async function refreshShowSummary(lib: Library, traktId: number): Promise<ShowRec | undefined> {
+  const existing = lib.shows.get(traktId);
+  if (!existing?.ids.tmdb) return existing;
+  try {
+    const summary = await fetchShowSummary(existing.ids.tmdb);
+    if (!summary) return existing;
+    const rec: ShowRec = {
+      ...existing,
+      // `||` not `??`: an empty string from either side must not win over real text.
+      title: summary.title || existing.title,
+      year: summary.year ?? existing.year,
+      status: summary.status ?? existing.status,
+      network: summary.network ?? existing.network,
+      overview: summary.overview || existing.overview,
+      genres: summary.genres ?? existing.genres,
+      runtime: summary.runtime ?? existing.runtime,
+      rating: summary.rating ?? existing.rating,
+      firstAired: summary.firstAired ?? existing.firstAired,
+      trailer: summary.trailer,
+      ids: { ...existing.ids, imdb: summary.imdb ?? existing.ids.imdb },
+    };
+    lib.shows.set(traktId, rec);
+    await dbPut("shows", traktId, rec);
+    return rec;
+  } catch {
+    return existing;
+  }
+}
+
 /** Toggle a movie on/off one of the user's custom lists. */
 export async function setMovieOnCustomList(
   movies: Map<number, MovieRec>,
@@ -888,76 +656,12 @@ export async function setMovieOnCustomList(
   listId: number,
   on: boolean,
 ): Promise<void> {
-  if (isTraktLive()) {
-    if (on) await trakt.addMovieToList(listId, movie.ids);
-    else await trakt.removeMovieFromList(listId, movie.ids);
-  }
   movie.customLists = on
     ? [...(movie.customLists ?? []), listId]
     : (movie.customLists ?? []).filter((id) => id !== listId);
   movies.set(movie.traktId, movie);
-  await Promise.all([
-    dbPut("movies", movie.traktId, movie),
-    adoptBaseline("movieActivities", (b, a) => (b.lists = a.lists)),
-  ]);
+  await dbPut("movies", movie.traktId, movie);
   emitChange();
-}
-
-/** Refresh a movie's Trakt metadata (trailer/genres etc.) into the cache. */
-export async function refreshMovieSummary(movies: Map<number, MovieRec>, traktId: number): Promise<MovieRec | undefined> {
-  const existing = movies.get(traktId);
-  if (!existing) return undefined;
-  if (!isTraktLive()) return existing;
-  try {
-    const summary = await trakt.getMovieSummary(traktId);
-    const rec = toMovieRec(summary, existing, {
-      plays: existing.plays,
-      lastWatchedAt: existing.lastWatchedAt,
-      onWatchlist: existing.onWatchlist,
-      listedAt: existing.listedAt,
-    });
-    movies.set(traktId, rec);
-    await dbPut("movies", traktId, rec);
-    return rec;
-  } catch {
-    return existing;
-  }
-}
-
-/** Refresh a show's Trakt metadata (genres/airs/rating etc.) into the cache. */
-export async function refreshShowSummary(lib: Library, traktId: number): Promise<ShowRec | undefined> {
-  if (!isTraktLive()) return lib.shows.get(traktId);
-  try {
-    const summary = await trakt.getShowSummary(traktId);
-    const rec = toShowRec(summary, lib.shows.get(traktId));
-    if (!rec.overview && rec.ids.tmdb) {
-      const images = await fetchShowImages(rec.ids.tmdb);
-      if (images?.overview) rec.overview = images.overview;
-    }
-    lib.shows.set(traktId, rec);
-    await dbPut("shows", traktId, rec);
-    return rec;
-  } catch {
-    return lib.shows.get(traktId);
-  }
-}
-
-/**
- * After a local mutation, record only the activity fields that mutation
- * touched into the stored baseline. Adopting the whole snapshot would swallow
- * unrelated remote changes (e.g. a show added on trakt.tv minutes earlier)
- * and the next sync would wrongly think there's nothing new.
- */
-async function adoptBaseline(
-  key: "lastActivities" | "movieActivities",
-  merge: (baseline: trakt.LastActivities, acts: trakt.LastActivities) => void,
-): Promise<void> {
-  if (!isTraktLive()) return; // nothing to reconcile against
-  const acts = await trakt.getLastActivities();
-  const baseline = await dbGet<trakt.LastActivities>("meta", key);
-  if (!baseline) return; // no baseline yet — the next sync does a full pull anyway
-  merge(baseline, acts);
-  await dbPut("meta", key, baseline);
 }
 
 // ---------- mutations ----------
@@ -1020,10 +724,7 @@ async function persistShowState(lib: Library, showTraktId: number): Promise<void
   ]);
 }
 
-/**
- * Mark/unmark episodes: optimistic cache update, Trakt write, then a fresh
- * progress pull for the show (correct aired counts + next episode).
- */
+/** Mark/unmark episodes. The cache write is the whole job. */
 export async function setEpisodesWatched(
   lib: Library,
   showTraktId: number,
@@ -1033,78 +734,30 @@ export async function setEpisodesWatched(
   applyLocalWatch(lib, showTraktId, episodes, watched, await dbGet<EpisodesRec>("episodes", showTraktId));
   await persistShowState(lib, showTraktId);
   emitChange();
-
-  if (!isTraktLive()) return; // local-only: the cache write above is the whole job
-
-  try {
-    const ids = episodes.map((e) => e.traktId);
-    if (watched) await trakt.addEpisodesToHistory(ids);
-    else await trakt.removeEpisodesFromHistory(ids);
-  } catch (e) {
-    // Server rejected — rebuild cache from Trakt so we don't drift.
-    await syncLibrary(true).catch(() => {});
-    throw e;
-  }
-
-  try {
-    const rec = toProgressRec(showTraktId, await trakt.getShowProgress(showTraktId));
-    lib.progress.set(showTraktId, rec);
-    // Keep watched/progress lastWatchedAt consistent to avoid an immediate re-fetch.
-    const watchedRec = lib.watched.get(showTraktId);
-    if (watchedRec && rec.lastWatchedAt) watchedRec.lastWatchedAt = rec.lastWatchedAt;
-    await persistShowState(lib, showTraktId);
-    // Adopt only the episode activity as baseline so the next app open doesn't full-resync.
-    await adoptBaseline("lastActivities", (b, a) => (b.episodes.watched_at = a.episodes.watched_at));
-    emitChange();
-  } catch {
-    // Refresh failed; cache is optimistic but close enough. Next sync fixes it.
-  }
 }
 
-export async function addToWatchlist(lib: Library, show: trakt.TraktShow): Promise<void> {
-  if (isTraktLive()) await trakt.addShowToWatchlist(show.ids);
-  const rec = toShowRec(show, lib.shows.get(show.ids.trakt));
+export async function addToWatchlist(lib: Library, show: ShowRec): Promise<void> {
+  // Search hands over either a record already in the library or a freshly
+  // minted one; either way keep whatever the cache already knew.
+  const rec = { ...show, ...lib.shows.get(show.traktId) };
   lib.shows.set(rec.traktId, rec);
   lib.watchlist = [{ traktId: rec.traktId, listedAt: new Date().toISOString() }, ...lib.watchlist];
-  await Promise.all([
-    dbPut("shows", rec.traktId, rec),
-    dbPut("meta", "watchlist", lib.watchlist),
-    adoptBaseline("lastActivities", (b, a) => {
-      b.watchlist.updated_at = a.watchlist.updated_at;
-      b.shows.watchlisted_at = a.shows.watchlisted_at;
-    }),
-  ]);
+  await Promise.all([dbPut("shows", rec.traktId, rec), dbPut("meta", "watchlist", lib.watchlist)]);
   emitChange();
 }
 
-/** Stop/resume tracking a show (Trakt "hidden from progress"; Library's Stopped bucket). */
+/** Stop/resume tracking a show (Library's Stopped bucket). */
 export async function setShowHidden(lib: Library, traktId: number, hidden: boolean): Promise<void> {
-  const show = lib.shows.get(traktId);
-  if (!show) return;
-  if (isTraktLive()) {
-    if (hidden) await trakt.hideShowFromProgress(show.ids);
-    else await trakt.unhideShowFromProgress(show.ids);
-  }
+  if (!lib.shows.has(traktId)) return;
   if (hidden) lib.hidden.add(traktId);
   else lib.hidden.delete(traktId);
-  await Promise.all([
-    dbPut("meta", "hidden", [...lib.hidden]),
-    adoptBaseline("lastActivities", (b, a) => (b.shows.hidden_at = a.shows.hidden_at)),
-  ]);
+  await dbPut("meta", "hidden", [...lib.hidden]);
   emitChange();
 }
 
 export async function removeFromWatchlist(lib: Library, showTraktId: number): Promise<void> {
-  const show = lib.shows.get(showTraktId);
-  if (!show) return;
-  if (isTraktLive()) await trakt.removeShowFromWatchlist(show.ids);
+  if (!lib.shows.has(showTraktId)) return;
   lib.watchlist = lib.watchlist.filter((e) => e.traktId !== showTraktId);
-  await Promise.all([
-    dbPut("meta", "watchlist", lib.watchlist),
-    adoptBaseline("lastActivities", (b, a) => {
-      b.watchlist.updated_at = a.watchlist.updated_at;
-      b.shows.watchlisted_at = a.shows.watchlisted_at;
-    }),
-  ]);
+  await dbPut("meta", "watchlist", lib.watchlist);
   emitChange();
 }

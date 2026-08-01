@@ -1,16 +1,7 @@
 import type { Route } from "../router";
 import { el, toast, dialog, spinner } from "./components";
-import {
-  getSettings,
-  saveSettings,
-  isAuthenticated,
-  isConfigured,
-  defaultSettings,
-  clearTraktUnavailable,
-  traktUnavailable,
-} from "../data/settings";
+import { getSettings, saveSettings, defaultSettings } from "../data/settings";
 import type { AppSettings } from "../data/settings";
-import { requestDeviceCode, pollForDeviceToken, logout, getLastActivities, TraktError, BAD_CLIENT } from "../api/trakt";
 import { applyTheme } from "../theme";
 import { hardReload } from "./refresh";
 import { pickServices } from "./servicePicker";
@@ -76,117 +67,6 @@ export const settingsRoute: Route = {
   title: "Settings · WatchWhat",
   render(container) {
     const settings = getSettings();
-
-    // --- Trakt API app credentials ---
-    const clientId = textInput(settings.traktClientId, "Client ID");
-    const clientSecret = textInput(settings.traktClientSecret, "Client Secret");
-    const saveTraktBtn = el("button", { class: "btn primary" }, "Save");
-    saveTraktBtn.addEventListener("click", () => {
-      saveSettings({ traktClientId: clientId.value.trim(), traktClientSecret: clientSecret.value.trim() });
-      // New credentials deserve a fresh try, whatever the old ones did.
-      clearTraktUnavailable();
-      toast("Trakt credentials saved");
-      renderConnectCard();
-    });
-
-    const traktHelp = el("p", {});
-    traktHelp.innerHTML =
-      `One-time setup: create your own (free) API app at ` +
-      `<a href="https://app.trakt.tv/settings/apps/api" target="_blank" rel="noopener"><b>app.trakt.tv/settings/apps/api</b></a>. ` +
-      `Name: anything (e.g. WatchWhat). Redirect URI: <code>urn:ietf:wg:oauth:2.0:oob</code>. ` +
-      `Then paste the Client ID and Secret here — they stay in this browser only.`;
-
-    const traktCard = el(
-      "div",
-      { class: "card" },
-      el("h2", {}, "Trakt API app"),
-      traktHelp,
-      field("Client ID", clientId),
-      field("Client Secret", clientSecret),
-      saveTraktBtn,
-    );
-
-    // --- Connect / login ---
-    const connectCard = el("div", { class: "card" });
-
-    function renderConnectCard(): void {
-      connectCard.replaceChildren(el("h2", {}, "Trakt account"));
-      const dead = traktUnavailable();
-      if (dead) {
-        // Retrying is pointless until the credentials change, so say what state
-        // the app is in rather than offering a button that cannot work.
-        connectCard.append(
-          el("p", {}, dead.reason),
-          el(
-            "p",
-            {},
-            `Since ${new Date(dead.at).toLocaleDateString()}, everything runs from the library stored on this ` +
-              `device: your shows, movies and history are all here, and marking things watched still works — it ` +
-              `just stays on this device. Use Export below to carry it to another one. Saving new credentials ` +
-              `above will try Trakt again.`,
-          ),
-        );
-        const forgetBtn = el("button", { class: "btn" }, "Disconnect Trakt");
-        forgetBtn.addEventListener("click", () => {
-          logout();
-          toast("Disconnected from Trakt");
-          renderConnectCard();
-        });
-        connectCard.append(forgetBtn);
-        return;
-      }
-      if (!isConfigured()) {
-        connectCard.append(el("p", {}, "Save your Trakt API credentials above first."));
-        return;
-      }
-      if (isAuthenticated()) {
-        const status = el("p", {}, "Connected ✓ (verifying…)");
-        getLastActivities()
-          .then(() => (status.textContent = "Connected ✓"))
-          .catch((e: unknown) => {
-            // A dead Client ID also comes back as a 401, but reconnecting can't fix that one.
-            if (e instanceof TraktError && e.message === BAD_CLIENT) status.textContent = BAD_CLIENT;
-            else status.textContent = e instanceof TraktError && e.status === 401 ? "Session expired — reconnect below." : "Connected, but Trakt could not be reached right now.";
-          });
-        const disconnectBtn = el("button", { class: "btn danger" }, "Disconnect");
-        disconnectBtn.addEventListener("click", () => {
-          logout();
-          toast("Disconnected from Trakt");
-          renderConnectCard();
-        });
-        connectCard.append(status, disconnectBtn);
-        return;
-      }
-      const connectBtn = el("button", { class: "btn primary" }, "Connect to Trakt");
-      const info = el("div", {});
-      connectBtn.addEventListener("click", async () => {
-        connectBtn.disabled = true;
-        try {
-          const code = await requestDeviceCode();
-          info.replaceChildren(
-            el("p", {}, "Go to the link below (on any device) and enter this code:"),
-            el("div", { class: "device-code" }, code.user_code),
-            (() => {
-              const p = el("p", { style: "text-align:center" });
-              const a = el("a", { href: code.verification_url, target: "_blank", rel: "noopener" }, code.verification_url);
-              (a as HTMLElement).style.color = "var(--accent)";
-              p.append(a);
-              return p;
-            })(),
-            el("p", { style: "text-align:center" }, "Waiting for approval…"),
-          );
-          await pollForDeviceToken(code);
-          toast("Connected to Trakt ✓");
-          renderConnectCard();
-        } catch (e) {
-          toast(e instanceof Error ? e.message : "Login failed", "error");
-          connectBtn.disabled = false;
-          info.replaceChildren();
-        }
-      });
-      connectCard.append(connectBtn, info);
-    }
-    renderConnectCard();
 
     // --- TMDB ---
     const tmdbKey = textInput(settings.tmdbApiKey, "TMDB API key");
@@ -560,8 +440,8 @@ export const settingsRoute: Route = {
     clearBtn.addEventListener("click", async () => {
       const choice = await dialog(
         "Clear this device's data?",
-        "Everything WatchWhat has stored here is deleted. With no Trakt connection there is nothing to rebuild " +
-          "it from, so export first unless another device has a copy.",
+        "Everything WatchWhat has stored here is deleted. There is no server to rebuild it from, so export " +
+          "first unless another device has a copy.",
         [
           { label: "Clear", value: "yes", kind: "danger" },
           { label: "Cancel", value: "no" },
@@ -597,6 +477,6 @@ export const settingsRoute: Route = {
       reloadBtn,
     );
 
-    container.append(traktCard, connectCard, tmdbCard, omdbCard, prefsCard, justWatchCard, transferCard, dataCard, versionCard);
+    container.append(tmdbCard, omdbCard, prefsCard, justWatchCard, transferCard, dataCard, versionCard);
   },
 };

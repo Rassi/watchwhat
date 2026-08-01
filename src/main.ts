@@ -11,6 +11,7 @@ import { applyTheme } from "./theme";
 import { ensureUnlocked } from "./gate";
 import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
 import { dbDelete } from "./data/db";
+import { purgeTraktRemnants } from "./data/settings";
 
 applyTheme();
 stripReloadParam();
@@ -18,6 +19,8 @@ installPullToRefresh();
 // The Upcoming tab is gone; drop the calendar it cached so it stops riding
 // along in every export. A no-op once it has run.
 void dbDelete("meta", "upcoming");
+// Same for what the Trakt integration left behind in localStorage.
+purgeTraktRemnants();
 await ensureUnlocked();
 
 registerRoute(watchlistRoute);

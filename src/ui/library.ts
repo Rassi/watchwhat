@@ -1,9 +1,8 @@
 /** All shows, grouped like TV Time's "All shows" page — purely from the local cache. */
 
 import type { Route } from "../router";
-import { el, posterCard, sectionHeader, spinner } from "./components";
+import { el, posterCard, sectionHeader } from "./components";
 import { ensureImages, ensureProgress, loadLibrary } from "../data/sync";
-import { isTraktLive } from "../data/settings";
 import type { Library, ShowRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { homeTabs } from "./hometabs";
@@ -29,15 +28,15 @@ const INFO: Record<Bucket, string[]> = {
     "As soon as a new episode airs, the show moves back to Watching.",
   ],
   finished: [
-    "Shows you've watched every aired episode of, and that have ended or been cancelled on Trakt.",
+    "Shows you've watched every aired episode of, and that have ended or been cancelled.",
     "Nothing more is coming, so these stay here.",
   ],
   stopped: [
     'Shows you hid with "Stop tracking" — the equivalent of removing a show in TV Time.',
-    "They're kept out of Watch next and the other groups, but not deleted from Trakt.",
+    "They're kept out of Watch next and the other groups, but nothing is deleted.",
   ],
   notStarted: [
-    "Shows on your Trakt watchlist that you haven't watched a single episode of yet.",
+    "Shows on your watchlist that you haven't watched a single episode of yet.",
     "Watching one episode moves the show to Watching.",
   ],
 };
@@ -123,9 +122,7 @@ export const libraryRoute: Route = {
         content.append(
           lib.shows.size > 0
             ? el("div", { class: "empty-note" }, "No shows yet — add some via Search.")
-            : isTraktLive()
-              ? spinner("Loading your shows…")
-              : el("div", { class: "empty-note" }, "No shows here yet — import your data from Settings, or add some via Search."),
+            : el("div", { class: "empty-note" }, "No shows here yet — import your data from Settings, or add some via Search."),
         );
       }
     };

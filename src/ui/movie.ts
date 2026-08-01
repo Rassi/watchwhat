@@ -2,15 +2,7 @@
 
 import type { Route } from "../router";
 import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
-import {
-  ensureMovieDetails,
-  ensureMovieExtRatings,
-  loadMovieLists,
-  loadMovies,
-  refreshMovieSummary,
-  setMovieWatched,
-  syncMovies,
-} from "../data/sync";
+import { ensureMovieDetails, ensureMovieExtRatings, loadMovieLists, loadMovies, setMovieWatched } from "../data/sync";
 import { isTmdbKeyed, type MovieListRec, type MovieRec } from "../data/model";
 import { backdropUrl, fetchMovieSummary } from "../api/tmdb";
 import { castStripCard, movieListsDropdown, whereToWatchCard } from "./shared";
@@ -56,8 +48,6 @@ export const movieRoute: Route = {
         movies.set(traktId, movie);
       }
       document.title = `${movie.title} · WatchWhat`;
-      // Cached before the trailer field existed — refresh Trakt metadata once.
-      if (movie.trailer === undefined) movie = (await refreshMovieSummary(movies, traktId)) ?? movie;
       const lists = await loadMovieLists();
       // Draw from cache first. Waiting on TMDB before the first paint made every visit as slow
       // as the network, to change nothing at all on the usual visit where the cache was current.
@@ -177,7 +167,7 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
       el("h2", {}, "About"),
       (() => {
         const bits = [
-          movie.rating ? `★ ${movie.rating.toFixed(1)} Trakt` : null,
+          movie.rating ? `★ ${movie.rating.toFixed(1)} TMDB` : null,
           movie.extRatings?.imdb ? `IMDb ${movie.extRatings.imdb}` : null,
           movie.extRatings?.rottenTomatoes ? `🍅 ${movie.extRatings.rottenTomatoes}` : null,
         ].filter(Boolean);
@@ -239,15 +229,4 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
   }
 
   renderContent();
-  // Refresh state in the background in case another device changed it.
-  void syncMovies().then(async (changed) => {
-    if (changed) {
-      const fresh = (await loadMovies()).get(movie.traktId);
-      if (fresh) {
-        movie = fresh;
-        movies.set(movie.traktId, movie);
-        renderContent();
-      }
-    }
-  });
 }

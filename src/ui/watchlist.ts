@@ -1,7 +1,7 @@
 import type { Route } from "../router";
-import { el, posterCard, sectionHeader, spinner, toast } from "./components";
+import { el, posterCard, sectionHeader } from "./components";
 import { getSettings } from "../data/settings";
-import { ensureImages, ensureProgress, loadLibrary, syncLibrary } from "../data/sync";
+import { ensureImages, ensureProgress, loadLibrary } from "../data/sync";
 import type { Library, ProgressRec, ShowRec, WatchedRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { homeTabs } from "./hometabs";
@@ -170,7 +170,7 @@ export const watchlistRoute: Route = {
           sectionHeader("Haven't started", {
             title: "Haven't started",
             points: [
-              "Shows on your Trakt watchlist that you haven't watched a single episode of yet.",
+              "Shows on your watchlist that you haven't watched a single episode of yet.",
               "Newest addition first.",
               "Watching one episode moves the show up into Watch next.",
             ],
@@ -193,7 +193,7 @@ export const watchlistRoute: Route = {
       if (grids.childElementCount === 0) {
         grids.append(
           lib.watched.size === 0 && lib.watchlist.length === 0
-            ? spinner("Loading your shows from Trakt…")
+            ? el("div", { class: "empty-note" }, "Nothing here yet — import your data from Settings, or add a show via Search.")
             : el("div", { class: "empty-note" }, "All caught up — nothing to watch right now 🎉"),
         );
       }
@@ -211,16 +211,5 @@ export const watchlistRoute: Route = {
 
     renderContent();
     kickLazyLoads();
-
-    try {
-      const changed = await syncLibrary();
-      if (changed) {
-        lib = await loadLibrary();
-        renderContent();
-        kickLazyLoads();
-      }
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "Sync with Trakt failed", "error");
-    }
   },
 };

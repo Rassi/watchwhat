@@ -1,34 +1,50 @@
-import type { TraktIds } from "../api/trakt";
+/**
+ * External ids for a title. `trakt` is the store key and no longer means
+ * anything to anyone: real Trakt ids for titles added before the API shut
+ * down, `-tmdbId` for everything since. `tmdb` is the one that still resolves,
+ * and every record carries it — that's what makes the `trakt` field safe to
+ * leave alone rather than migrating 577 stored records to rename a key.
+ */
+export interface TitleIds {
+  trakt: number;
+  slug?: string;
+  tvdb?: number | null;
+  imdb?: string | null;
+  tmdb?: number | null;
+}
 
 /**
- * Records found through TMDB have no Trakt id and never will — Trakt stopped
- * issuing them to this app. They are keyed by the negation of their TMDB id,
- * which cannot collide with a real Trakt id, so titles from both eras sit in
- * one store and every `traktId` field keeps working as "the record's key" until
- * the full re-key onto TMDB ids happens. The real id is always in `ids.tmdb`.
+ * Records found through TMDB are keyed by the negation of their TMDB id, which
+ * cannot collide with a real Trakt id, so titles from both eras sit in one
+ * store and every `traktId` field keeps working as "the record's key".
  */
 export const tmdbKey = (tmdbId: number): number => -tmdbId;
 
 export const isTmdbKeyed = (key: number): boolean => key < 0;
 
-/** Cached show metadata (from Trakt ?extended=full) + TMDB artwork. */
+/** Cached show metadata + TMDB artwork. */
 export interface ShowRec {
   traktId: number;
-  ids: TraktIds;
+  ids: TitleIds;
   title: string;
   year: number | null;
-  /** Trakt status: "returning series" | "ended" | "canceled" | "in production" | ... */
+  /** Lowercased: "returning series" | "ended" | "canceled" | "in production" | ... */
   status?: string;
   network?: string;
   overview?: string;
   airedEpisodes?: number;
   genres?: string[];
   runtime?: number | null;
+  /**
+   * Weekly broadcast slot. The one field with no replacement — TMDB doesn't
+   * publish it — so it survives only on records cached while Trakt was alive
+   * and is never set again.
+   */
   airs?: { day: string | null; time: string | null } | null;
-  /** Trakt community rating 0..10 */
+  /** Community rating 0..10 (TMDB's; Trakt's on records not refreshed since). */
   rating?: number | null;
   firstAired?: string | null;
-  /** YouTube trailer URL from Trakt (null = none; undefined = not fetched yet) */
+  /** YouTube trailer URL (null = none found; undefined = not looked up yet) */
   trailer?: string | null;
   /** IMDb / Rotten Tomatoes ratings from OMDb. */
   extRatings?: { imdb: string | null; rottenTomatoes: string | null; fetchedAt: number };
@@ -44,11 +60,7 @@ export interface CastMemberRec {
   profile: string | null;
 }
 
-/**
- * Per-show watched summary from /sync/watched/shows. Per-episode watched
- * state lives in ProgressRec (Trakt's 2026 API removed seasons from the
- * watched list endpoint).
- */
+/** Per-show watched summary. Per-episode state lives in ProgressRec. */
 export interface WatchedRec {
   traktId: number;
   plays: number;
@@ -65,10 +77,10 @@ export interface NextEpisodeRec {
 }
 
 /**
- * Per-episode watched flags + aired counts from /shows/:id/progress/watched.
- * Seasons include specials (season 0); the aired/completed totals here are
- * recomputed client-side over non-special seasons only. Episode lists contain
- * only episodes that have aired.
+ * Per-episode watched flags + aired counts, rebuilt from TMDB air dates.
+ * Seasons include specials (season 0); the aired/completed totals here count
+ * non-special seasons only. Episode lists contain only episodes that have
+ * aired — plus any watched episode TMDB has since stopped listing.
  */
 export interface ProgressRec {
   traktId: number;
@@ -99,10 +111,7 @@ export interface EpisodeInfo {
   rating?: number | null;
 }
 
-/**
- * Episode titles/ids per season from /shows/:id/seasons?extended=episodes,
- * enriched with TMDB stills/overviews/air dates when available.
- */
+/** Episode titles per season, with TMDB stills/overviews/air dates. */
 export interface EpisodesRec {
   traktId: number;
   fetchedAt: number;
@@ -123,19 +132,18 @@ export interface WatchlistEntry {
   listedAt: string;
 }
 
-/** A movie: watch state + Trakt metadata + TMDB artwork/cast/providers, one record. */
+/** A movie: watch state + metadata + TMDB artwork/cast/providers, one record. */
 export interface MovieRec {
   traktId: number;
-  ids: TraktIds;
+  ids: TitleIds;
   title: string;
   year: number | null;
   plays: number;
   lastWatchedAt: string | null;
   onWatchlist: boolean;
   listedAt: string | null;
-  /** Trakt ids of custom personal lists containing this movie. */
+  /** Keys of the custom personal lists containing this movie. */
   customLists?: number[];
-  // Trakt ?extended=full
   overview?: string;
   runtime?: number | null;
   rating?: number | null;

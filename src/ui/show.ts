@@ -155,15 +155,15 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
   };
 
   const mutate = async (episodes: EpisodeRef[], watched: boolean): Promise<void> => {
-    // The local cache is updated synchronously inside setEpisodesWatched, so the
-    // checkmarks can flip immediately; Trakt confirms in the background.
+    // The cache is updated synchronously inside setEpisodesWatched, so the
+    // checkmarks flip immediately; only the IndexedDB write is still in flight.
     const op = setEpisodesWatched(lib, show.traktId, episodes, watched);
     rerender();
     try {
       await withSyncIndicator(op);
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Update failed — Trakt rejected the change", "error");
-      // The cache was rebuilt from Trakt on failure — reload it so the UI rolls back.
+      toast(e instanceof Error ? e.message : "Update failed", "error");
+      // Storage refused the write — reload so the UI rolls back to what's saved.
       const fresh = await loadLibrary();
       lib.shows = fresh.shows;
       lib.watched = fresh.watched;
@@ -332,7 +332,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
   /**
    * Next unwatched aired episodes, in watch order (for the Continue tracking strip).
    *
-   * Anchored to `firstOpen` — where Trakt says you're up to — rather than the earliest
+   * Anchored to `firstOpen` — where you're up to — rather than the earliest
    * unwatched episode anywhere, so a show you dip into out of order (45 seasons of
    * Location, Location, Location) offers the current season instead of S01E01. Marking
    * an episode watched nulls `nextEpisode` until the next refetch, so the anchor is the
@@ -488,7 +488,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
         el("p", { class: "about-meta" }, meta.join(" • ")),
         (() => {
           const bits = [
-            show.rating ? `★ ${show.rating.toFixed(1)} Trakt` : null,
+            show.rating ? `★ ${show.rating.toFixed(1)} TMDB` : null,
             show.extRatings?.imdb ? `IMDb ${show.extRatings.imdb}` : null,
             show.extRatings?.rottenTomatoes ? `🍅 ${show.extRatings.rottenTomatoes}` : null,
           ].filter(Boolean);
@@ -531,7 +531,7 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
 
     if (onList) {
       manageButtons.push(
-        makeButton("Remove from watchlist", "Removes this show from your Trakt watchlist", "danger", async () => {
+        makeButton("Remove from watchlist", "Removes this show from your watchlist", "danger", async () => {
           const choice = await dialog(
             `Remove "${show.title}"?`,
             "It will be removed from your watchlist. Nothing else is affected.",
@@ -547,8 +547,8 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       );
     } else if (!started && !isHidden) {
       manageButtons.push(
-        makeButton("Add to watchlist", "Adds this show to your Trakt watchlist (Haven't started)", "primary", async () => {
-          await addToWatchlist(lib, { title: show.title, year: show.year, ids: show.ids });
+        makeButton("Add to watchlist", "Adds this show to your watchlist (Haven't started)", "primary", async () => {
+          await addToWatchlist(lib, show);
           toast(`Added "${show.title}" to your watchlist`);
         }),
       );
@@ -563,10 +563,10 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       );
     } else if (started) {
       manageButtons.push(
-        makeButton("Stop tracking", "Hides this show from your watch list — history stays on Trakt", "danger", async () => {
+        makeButton("Stop tracking", "Hides this show from your watch list — your history is kept", "danger", async () => {
           const choice = await dialog(
             `Stop tracking "${show.title}"?`,
-            "It disappears from your watch list and moves to Stopped in the Library. Your watch history stays on Trakt, and you can resume any time.",
+            "It disappears from your watch list and moves to Stopped in the Library. Your watch history is kept, and you can resume any time.",
             [
               { label: "Stop tracking", value: "yes", kind: "danger" },
               { label: "Cancel", value: "no" },

@@ -1,4 +1,4 @@
-/** TMDB lookups for posters/backdrops (Trakt serves no images). */
+/** TMDB: search, metadata, episode lists, artwork, cast and watch providers. */
 
 import { getSettings } from "../data/settings";
 
@@ -8,7 +8,7 @@ const IMG = "https://image.tmdb.org/t/p/";
 export interface ShowImages {
   poster: string | null; // TMDB path like "/abc.jpg"
   backdrop: string | null;
-  /** TMDB description — fallback when Trakt's overview is empty. */
+  /** TMDB description — fallback when the record has no overview yet. */
   overview: string | null;
 }
 
@@ -26,6 +26,7 @@ export interface TmdbMovieExtras {
   poster: string | null;
   backdrop: string | null;
   overview: string | null;
+  trailer: string | null;
   cast: TmdbCastMember[];
   providersByCountry: Record<string, TmdbCountryProviders>;
   /** Earliest un-noted digital release — when it can be bought or rented. */
@@ -48,7 +49,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
   const { tmdbApiKey } = getSettings();
   if (!tmdbApiKey) return null;
   const res = await fetch(
-    `${API}/movie/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=credits,watch/providers,release_dates`,
+    `${API}/movie/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=credits,watch/providers,release_dates,videos`,
   );
   if (!res.ok) return null;
   interface RawProviderEntry {
@@ -69,6 +70,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
     release_dates?: {
       results?: { iso_3166_1: string; release_dates?: { release_date: string; type: number; note?: string }[] }[];
     };
+    videos?: RawVideos;
   };
 
   // TMDB files two different events under type 4 (Digital): the buy/rent drop, and the date it
@@ -105,6 +107,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
     poster: data.poster_path,
     backdrop: data.backdrop_path,
     overview: data.overview || null,
+    trailer: trailerFrom(data.videos),
     cast: (data.credits?.cast ?? [])
       .slice(0, 15)
       .map((c) => ({ tmdbId: c.id, name: c.name, character: c.character ?? null, profile: c.profile_path })),
@@ -204,7 +207,24 @@ export interface TmdbShowSummary {
   rating?: number | null;
   firstAired?: string | null;
   imdb?: string | null;
+  trailer: string | null;
   seasonNumbers: number[];
+}
+
+interface RawVideos {
+  results?: { key: string; site: string; type: string; official?: boolean }[];
+}
+
+/**
+ * Pick a YouTube trailer, official first. Returns null rather than undefined
+ * when there is none: undefined means "never looked", and the show page uses
+ * that to decide whether to backfill — so an unset value would make every
+ * trailer-less title refetch on every open, forever.
+ */
+function trailerFrom(videos: RawVideos | undefined): string | null {
+  const clips = (videos?.results ?? []).filter((v) => v.site === "YouTube" && v.type === "Trailer");
+  const pick = clips.find((v) => v.official) ?? clips[0];
+  return pick ? `https://www.youtube.com/watch?v=${pick.key}` : null;
 }
 
 /**
@@ -218,7 +238,7 @@ const normaliseStatus = (s: string | null | undefined): string | undefined => s?
 export async function fetchShowSummary(tmdbId: number): Promise<TmdbShowSummary | null> {
   const { tmdbApiKey } = getSettings();
   if (!tmdbApiKey) return null;
-  const res = await fetch(`${API}/tv/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=external_ids`);
+  const res = await fetch(`${API}/tv/${tmdbId}?api_key=${encodeURIComponent(tmdbApiKey)}&append_to_response=external_ids,videos`);
   if (!res.ok) return null;
   const data = (await res.json()) as {
     name?: string;
@@ -231,6 +251,7 @@ export async function fetchShowSummary(tmdbId: number): Promise<TmdbShowSummary 
     vote_average?: number;
     seasons?: { season_number: number }[];
     external_ids?: { imdb_id?: string | null };
+    videos?: RawVideos;
   };
   return {
     title: data.name ?? "",
@@ -243,6 +264,7 @@ export async function fetchShowSummary(tmdbId: number): Promise<TmdbShowSummary 
     rating: data.vote_average ?? null,
     firstAired: data.first_air_date || null,
     imdb: data.external_ids?.imdb_id ?? null,
+    trailer: trailerFrom(data.videos),
     seasonNumbers: (data.seasons ?? []).map((s) => s.season_number).sort((a, b) => a - b),
     // Deliberately no episode count: TMDB's `number_of_episodes` counts every
     // episode it knows about, including unaired ones, where `airedEpisodes`

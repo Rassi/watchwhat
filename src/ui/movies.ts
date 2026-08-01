@@ -1,11 +1,10 @@
 /** Movies tab: WATCH LIST | WATCHED top tabs; the watch-list side can show
- * the Trakt watchlist or any custom personal list. */
+ * the watchlist or any custom personal list. */
 
 import type { Route } from "../router";
-import { el, posterCard, sectionHeader, spinner, toast } from "./components";
+import { el, posterCard, sectionHeader } from "./components";
 
-import { ensureMovieDetails, loadMovieLists, loadMovies, syncMovies } from "../data/sync";
-import { isTraktLive } from "../data/settings";
+import { ensureMovieDetails, loadMovieLists, loadMovies } from "../data/sync";
 import type { MovieListRec, MovieRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { watchBadge } from "./shared";
@@ -49,9 +48,7 @@ export const moviesRoute: Route = {
 
     // With nothing to sync from, an empty library is empty — not still loading.
     const nothingYet = (): HTMLElement =>
-      isTraktLive()
-        ? spinner("Loading your movies from Trakt…")
-        : el("div", { class: "empty-note" }, "No movies here yet — import your data from Settings, or add some via Search.");
+      el("div", { class: "empty-note" }, "No movies here yet — import your data from Settings, or add some via Search.");
 
     const renderContent = (): void => {
       const all = [...movies.values()];
@@ -69,7 +66,7 @@ export const moviesRoute: Route = {
         return;
       }
 
-      // Watch-list view: picker between the Trakt watchlist and custom lists.
+      // Watch-list view: picker between the watchlist and custom lists.
       const stored = sessionStorage.getItem(ACTIVE_LIST_KEY) ?? "watchlist";
       const activeList: MovieListRec | undefined = lists.find((l) => String(l.traktId) === stored);
 
@@ -106,7 +103,7 @@ export const moviesRoute: Route = {
         }
       } else {
         // Custom lists hide watched movies (same rule as the watchlist); the movie
-        // stays on the Trakt list, so unmarking it brings it back here.
+        // stays on the list, so unmarking it brings it back here.
         const onList = all.filter((m) => m.customLists?.includes(activeList.traktId));
         const items = onList.filter((m) => m.plays === 0).sort((a, b) => addedAt(b).localeCompare(addedAt(a)));
         if (items.length > 0) {
@@ -121,7 +118,7 @@ export const moviesRoute: Route = {
               { class: "empty-note" },
               onList.length > 0
                 ? `You've watched everything on "${activeList.name}".`
-                : `"${activeList.name}" has no movies yet — add them on trakt.tv.`,
+                : `"${activeList.name}" has no movies yet — add them from a film's page.`,
             ),
           );
         }
@@ -134,17 +131,5 @@ export const moviesRoute: Route = {
 
     renderContent();
     kickLazyLoads();
-
-    try {
-      const changed = await syncMovies();
-      if (changed) {
-        movies = await loadMovies();
-        lists = await loadMovieLists();
-        renderContent();
-        kickLazyLoads();
-      }
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "Sync with Trakt failed", "error");
-    }
   },
 };
