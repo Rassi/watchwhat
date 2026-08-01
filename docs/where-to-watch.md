@@ -43,6 +43,33 @@ directly:
   removed**: an entry TMDB has and JustWatch does not is far more likely to be a
   search miss than a delisting.
 
+### ⚠️ The top-up does not work in production (found 2026-08-01)
+
+**JustWatch sends no `Access-Control-Allow-Origin` for `https://rassi.github.io`,
+while allowing `http://localhost:5173`.** So the top-up has only ever worked on
+the dev server, and the deployed app has always been TMDB-only.
+
+It fails silently by design — a failed top-up means "no extra information" and
+TMDB's answer stands — so nothing looked broken. It surfaced as *The Drama*
+reading "rent only" on the live site and green on localhost, and even a manual
+refresh could not fix it.
+
+Confirmed rather than inferred, from the app's own health record on each origin:
+
+| Origin | `stage` | `detail` |
+|---|---|---|
+| `http://localhost:5173` | `ok` | The Drama: offers in DK, US, GB, SE, NO, AU |
+| `https://rassi.github.io` | `reach` | TypeError: Failed to fetch |
+
+A `mode: "no-cors"` probe from production returns an opaque response, so the
+network reaches JustWatch perfectly well — it is CORS refusing to expose the
+answer, not a block or an outage.
+
+**The fix, if wanted:** proxy it through the sync Worker, which already exists,
+already has the allowed-origin logic, and is server-side so CORS does not apply
+to its own outbound call. Until then, the deployed app lags TMDB's ingest around
+a release, which is exactly when it matters. **Not built.**
+
 Because that endpoint can change under us without warning, Settings can run
 `checkJustWatch` — a canary against *The Devil Wears Prada* (2006, chosen because
 its sequel makes it a real test of confirming by id rather than by title). It
