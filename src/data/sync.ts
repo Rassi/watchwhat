@@ -135,29 +135,66 @@ function computeNextEpisode(progress: ProgressRec, episodes?: EpisodesRec): Next
   return null;
 }
 
+/** Watched episodes of one show, keyed season×number, valued by when. */
+type WatchedEpisodes = Map<string, string | null>;
+
+const epKey = (season: number, number: number): string => `${season}x${number}`;
+
+function watchedEpisodesOf(progress: ProgressRec | undefined): WatchedEpisodes {
+  const out: WatchedEpisodes = new Map();
+  for (const season of progress?.seasons ?? []) {
+    for (const ep of season.episodes) if (ep.completed) out.set(epKey(season.number, ep.number), ep.watchedAt ?? null);
+  }
+  return out;
+}
+
 /**
- * An empty progress record for a show Trakt never computed one for. Counts only
- * episodes that have aired — TMDB lists unaired ones too, and treating those as
- * aired would make every progress bar read short of where it should.
+ * A progress record built from episode air dates rather than from Trakt.
+ * Counts only episodes that have aired — TMDB lists unaired ones too, and
+ * treating those as aired would make every progress bar read short.
+ *
+ * `watched` carries the existing watch state across a rebuild. An episode in it
+ * is kept even when TMDB gives no air date: the watch happened, whatever TMDB
+ * thinks, and dropping it would quietly erase history.
  */
-function progressFromEpisodes(traktId: number, episodes: EpisodesRec): ProgressRec {
+function progressFromEpisodes(traktId: number, episodes: EpisodesRec, watched?: WatchedEpisodes): ProgressRec {
   const today = new Date().toISOString().slice(0, 10);
   const hasAired = (airDate: string | null | undefined): boolean => !!airDate && airDate <= today;
   const seasons = episodes.seasons.map((s) => {
-    const aired = s.episodes.filter((e) => hasAired(e.airDate));
-    return {
-      number: s.number,
-      aired: aired.length,
-      completed: 0,
-      episodes: aired.map((e) => ({ number: e.number, completed: false, watchedAt: null })),
-    };
+    const kept = s.episodes.filter((e) => hasAired(e.airDate) || watched?.has(epKey(s.number, e.number)));
+    const eps = kept.map((e) => {
+      const at = watched?.get(epKey(s.number, e.number));
+      return { number: e.number, completed: at !== undefined, watchedAt: at ?? null };
+    });
+    return { number: s.number, aired: eps.length, completed: eps.filter((e) => e.completed).length, episodes: eps };
   });
+
+  // Last line of defence for watch history. TMDB does not always list what
+  // Trakt did — it has no specials for Silo, for instance — and an episode
+  // whose whole season disappeared would otherwise be dropped here without
+  // trace. Whatever was watched stays counted, even if nothing can describe it.
+  const covered = new Set(seasons.flatMap((s) => s.episodes.map((e) => epKey(s.number, e.number))));
+  for (const [key, at] of watched ?? []) {
+    if (covered.has(key)) continue;
+    const [sn, en] = key.split("x").map(Number);
+    let season = seasons.find((s) => s.number === sn);
+    if (!season) {
+      season = { number: sn, aired: 0, completed: 0, episodes: [] };
+      seasons.push(season);
+    }
+    season.episodes.push({ number: en, completed: true, watchedAt: at });
+    season.episodes.sort((a, b) => a.number - b.number);
+    season.aired++;
+    season.completed++;
+  }
+  seasons.sort((a, b) => a.number - b.number);
+
   const regular = seasons.filter((s) => s.number > 0);
   return {
     traktId,
     fetchedAt: Date.now(),
     aired: regular.reduce((n, s) => n + s.aired, 0),
-    completed: 0,
+    completed: regular.reduce((n, s) => n + s.completed, 0),
     lastWatchedAt: null,
     seasons,
     nextEpisode: null,
@@ -311,23 +348,105 @@ function batchNotify(onUpdate?: () => void): { tick: () => void; done: () => voi
  * Fetches in the background with limited concurrency; `onUpdate` fires after
  * each batch of updates so the UI can re-render progressively.
  */
+/**
+ * Rebuild a show's episode list and progress from TMDB.
+ *
+ * This is what replaces Trakt's server-side progress. Trakt decided which
+ * episodes had aired, so without it a cached progress record freezes: episodes
+ * that air later stay greyed out as unaired and can never be ticked, and whole
+ * new seasons never appear at all. Air dates come from TMDB instead, and
+ * aired-ness is recomputed against today's date every time this runs.
+ *
+ * Watch state is carried across, keyed on season×number rather than on any id,
+ * because episodes added from TMDB have no Trakt id to match on.
+ */
+async function refreshShowFromTmdb(lib: Library, traktId: number): Promise<boolean> {
+  const show = lib.shows.get(traktId);
+  if (!show?.ids.tmdb) return false;
+
+  const seasonNumbers = await fetchSeasonNumbers(show.ids.tmdb);
+  if (seasonNumbers.length === 0) return false;
+  const extras = await fetchShowExtras(show.ids.tmdb, seasonNumbers);
+  if (extras.episodesBySeason.size === 0) return false;
+
+  const cached = await dbGet<EpisodesRec>("episodes", traktId);
+  // Trakt's episode ids are no longer obtainable, so keep the ones already held.
+  const knownIds = new Map<string, number>();
+  for (const s of cached?.seasons ?? []) {
+    for (const e of s.episodes) if (e.traktId) knownIds.set(epKey(s.number, e.number), e.traktId);
+  }
+
+  const episodes: EpisodesRec = {
+    traktId,
+    fetchedAt: Date.now(),
+    tmdbMergedAt: Date.now(),
+    cast: extras.cast.length > 0 ? extras.cast : cached?.cast,
+    providers: Object.keys(extras.providersByCountry).length > 0 ? extras.providersByCountry : cached?.providers,
+    seasons: seasonNumbers.map((number) => ({
+      number,
+      episodes: (extras.episodesBySeason.get(number) ?? []).map((t) => ({
+        traktId: knownIds.get(epKey(number, t.episode_number)) ?? 0,
+        season: number,
+        number: t.episode_number,
+        title: t.name,
+        overview: t.overview,
+        still: t.still_path,
+        airDate: t.air_date,
+        rating: t.vote_average ?? null,
+      })),
+    })),
+  };
+
+  const previous = lib.progress.get(traktId);
+  const watched = watchedEpisodesOf(previous);
+
+  // Keep watched episodes TMDB no longer lists, with their titles and stills, so
+  // they still render rather than surviving only as a number in the totals.
+  const present = new Set(episodes.seasons.flatMap((s) => s.episodes.map((e) => epKey(s.number, e.number))));
+  for (const s of cached?.seasons ?? []) {
+    for (const e of s.episodes) {
+      if (!watched.has(epKey(s.number, e.number)) || present.has(epKey(s.number, e.number))) continue;
+      const season = episodes.seasons.find((x) => x.number === s.number);
+      if (season) season.episodes.push(e);
+      else episodes.seasons.push({ number: s.number, episodes: [e] });
+    }
+  }
+  for (const s of episodes.seasons) s.episodes.sort((a, b) => a.number - b.number);
+  episodes.seasons.sort((a, b) => a.number - b.number);
+
+  const progress = progressFromEpisodes(traktId, episodes, watched);
+  progress.lastWatchedAt = lib.watched.get(traktId)?.lastWatchedAt ?? previous?.lastWatchedAt ?? null;
+  progress.nextEpisode = computeNextEpisode(progress, episodes);
+
+  lib.progress.set(traktId, progress);
+  await Promise.all([dbPut("episodes", traktId, episodes), dbPut("progress", traktId, progress)]);
+  return true;
+}
+
+async function refreshShowFromTrakt(lib: Library, traktId: number): Promise<boolean> {
+  const rec = toProgressRec(traktId, await trakt.getShowProgress(traktId));
+  lib.progress.set(traktId, rec);
+  await dbPut("progress", traktId, rec);
+  return true;
+}
+
 export async function ensureProgress(
   lib: Library,
   traktIds: number[],
   onUpdate?: () => void,
   opts?: { skipFinishedTtl?: boolean },
 ): Promise<void> {
-  if (!isTraktLive()) return; // progress is whatever the cache says; nothing to refresh it from
   const stale = traktIds.filter((id) => progressIsStale(lib, id, opts?.skipFinishedTtl));
   if (stale.length === 0) return;
 
+  const live = isTraktLive();
+  const refresh = live ? refreshShowFromTrakt : refreshShowFromTmdb;
   const notify = batchNotify(onUpdate);
-  await mapWithConcurrency(stale, 2, async (traktId) => {
+  // TMDB is happy with more in flight at once than Trakt ever was, and each
+  // show costs two calls there rather than one.
+  await mapWithConcurrency(stale, live ? 2 : 4, async (traktId) => {
     try {
-      const rec = toProgressRec(traktId, await trakt.getShowProgress(traktId));
-      lib.progress.set(traktId, rec);
-      await dbPut("progress", traktId, rec);
-      notify.tick();
+      if (await refresh(lib, traktId)) notify.tick();
     } catch {
       // Leave stale/missing; next render tries again.
     }
