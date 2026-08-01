@@ -1,5 +1,5 @@
 import "./styles.css";
-import { registerRoute, startRouter } from "./router";
+import { refreshRouteInPlace, registerRoute, startRouter } from "./router";
 import { watchlistRoute } from "./ui/watchlist";
 import { libraryRoute } from "./ui/library";
 import { showRoute } from "./ui/show";
@@ -12,7 +12,7 @@ import { ensureUnlocked } from "./gate";
 import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
 import { dbDelete } from "./data/db";
 import { purgeTraktRemnants } from "./data/settings";
-import { installFlushTriggers } from "./data/outbox";
+import { installSyncTriggers, syncEvents } from "./data/replay";
 
 applyTheme();
 stripReloadParam();
@@ -35,5 +35,9 @@ registerRoute(settingsRoute);
 startRouter(document.getElementById("app")!);
 
 // After the gate and the router, so a queue left over from last session drains
-// in the background rather than delaying first paint.
-installFlushTriggers();
+// and anything the other device did arrives in the background, rather than
+// delaying first paint. The screen is already on-screen by then, so a pull that
+// changes anything has to redraw it — otherwise a sync looks like it did
+// nothing until you navigate away and back.
+syncEvents.addEventListener("applied", () => void refreshRouteInPlace());
+installSyncTriggers();

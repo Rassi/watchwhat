@@ -57,3 +57,15 @@ export function startRouter(appContainer: HTMLElement): void {
 export function refreshRoute(): void {
   void dispatch();
 }
+
+/**
+ * Re-render in place, keeping the scroll position — for data that arrived on its
+ * own, like a sync pull, rather than from something the user just tapped.
+ * `dispatch` scrolls to the top on anything it doesn't recognise as a back/
+ * forward traversal, which would yank the page out from under you mid-scroll.
+ */
+export async function refreshRouteInPlace(): Promise<void> {
+  const y = window.scrollY;
+  await dispatch();
+  window.scrollTo(0, y);
+}

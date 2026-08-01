@@ -8,6 +8,7 @@ import { pickServices } from "./servicePicker";
 import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
 import { downloadBackup, exportBackup, importBackup, parseBackup, summarize } from "../data/transfer";
 import { flush, getCursor, pendingCount } from "../data/outbox";
+import { syncNow } from "../data/replay";
 import { syncConfigured, testConnection } from "../api/syncserver";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
@@ -115,6 +116,7 @@ export const settingsRoute: Route = {
     const syncUrlInput = textInput(settings.syncUrl, "https://…workers.dev");
     const syncTokenInput = textInput(settings.syncToken, "Sync token");
     const saveSyncBtn = el("button", { class: "btn primary" }, "Save");
+    const syncNowBtn = el("button", { class: "btn" }, "Sync now");
     const testSyncBtn = el("button", { class: "btn" }, "Test");
     const syncStatus = el("p", { class: "diff-summary" }, "");
 
@@ -134,6 +136,26 @@ export const settingsRoute: Route = {
       // A token arriving is often the reason a queue exists at all.
       await flush();
       await refreshSyncStatus();
+    });
+
+    syncNowBtn.addEventListener("click", async () => {
+      if (!syncConfigured()) {
+        toast("Enter a URL and token, then Save first");
+        return;
+      }
+      syncNowBtn.textContent = "Syncing…";
+      try {
+        const { pushed, applied, skipped } = await syncNow();
+        const parts = [
+          pushed ? `${pushed} uploaded` : "",
+          applied ? `${applied} applied` : "",
+          skipped ? `${skipped} skipped` : "",
+        ].filter(Boolean);
+        toast(parts.length ? `Synced — ${parts.join(", ")}` : "Synced — already up to date");
+      } finally {
+        syncNowBtn.textContent = "Sync now";
+        await refreshSyncStatus();
+      }
     });
 
     testSyncBtn.addEventListener("click", async () => {
@@ -163,7 +185,7 @@ export const settingsRoute: Route = {
       syncHelp,
       field("Server URL", syncUrlInput),
       field("Token", syncTokenInput),
-      el("div", { class: "field-row" }, saveSyncBtn, testSyncBtn),
+      el("div", { class: "field-row" }, saveSyncBtn, syncNowBtn, testSyncBtn),
       syncStatus,
     );
 

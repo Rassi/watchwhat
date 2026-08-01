@@ -128,17 +128,3 @@ export async function flush(): Promise<number> {
   }
   return sent;
 }
-
-/**
- * Try to drain the queue whenever there is a plausible reason to think it might
- * work: at startup, when the network comes back, and when the app is brought to
- * the foreground — the phone case, where the tab was suspended mid-flush and no
- * `online` event ever fires.
- */
-export function installFlushTriggers(): void {
-  void flush();
-  addEventListener("online", () => void flush());
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void flush();
-  });
-}
