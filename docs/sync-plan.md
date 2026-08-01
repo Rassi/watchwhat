@@ -197,16 +197,19 @@ from a single device, and both reported a clean sync while losing data.
   showed up only as a `plays` count drifting above `completed`. Fixed by creating
   the season and episode on the spot.
 
-**The log is not the union of the libraries.** Only the phone was seeded, so
-watches that exist solely on another device were never appended and cannot
-propagate — the live site has at least one Location episode the log does not.
-Seeding again from the desktop fixes this: the ids are derived from the fact, so
-a second seed appends only what is genuinely new.
+**The log started as the phone's library, not the union.** Only the phone was
+seeded, so a watch existing solely on another device was never appended and
+could not propagate — the live site had a Location episode the log did not.
+**Resolved the same day** by seeding a second time from the desktop, which
+appended nothing: `seq` stayed at 4196, so the desktop held nothing the log was
+missing once that one episode had been unwatched by hand. The log is the union.
+This is what the deterministic seed ids are for — a second seed is a safe no-op
+when there is nothing new to say.
 
-## Still to do
-
-- Re-seed from the desktop so the log becomes the union of both libraries.
-- Re-tick the stragglers from the phone export.
+**Re-ticking "stragglers" is moot.** That step assumed the desktop would seed and
+the phone's recent ticks would need re-entering by hand. The phone seeded
+instead, so its ticks were in the log from the start and the gap ran the other
+way — closed by the re-seed above rather than by hand.
 
 ## Gotchas
 
@@ -273,6 +276,11 @@ a second seed appends only what is genuinely new.
 - **Headroom:** the 3,764-event backfill is ~4% of one day's write allowance
   (~450 KB); steady state is a handful of events a day and reads that usually
   return nothing.
+- **Measured on the day it all happened:** two full seeds, several full re-pulls
+  across three devices and a day of testing came to **63K rows read and 17K
+  written** — 1.3% of the read budget and 17% of the write budget. Reads and
+  writes are separate allowances, and it is the *write* one that is 100K; a full
+  re-pull is ~4,200 row reads, which is nothing against 5M.
 - **Every record already carries `ids.tmdb`** — all 232 shows and all 344 movies,
   measured directly from IndexedDB. This is why no re-keying is needed and why
   event bodies can use TMDB ids immediately.
