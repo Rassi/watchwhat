@@ -84,7 +84,60 @@ function serviceVerdicts(): (name: string, country: string) => ServiceVerdict {
   };
 }
 
-export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLElement | null {
+/**
+ * Roughly how old the cached answer is. Deliberately vague at the top end: the
+ * only decision it informs is whether re-checking is worth a request, and "6
+ * days ago" and "6 days and 4 hours ago" answer that identically. The exact
+ * timestamp is on the tooltip for when it does matter.
+ */
+function agoLabel(at: number): string {
+  const mins = Math.round((Date.now() - at) / 60000);
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} minutes ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+export interface WhereToWatchOpts {
+  /** When this device last fetched the provider data, for the freshness line. */
+  fetchedAt?: number | null;
+  /**
+   * Re-check now, ignoring the TTL. The caller owns what "changed" means, so it
+   * also owns saying nothing moved; this only reports a request that failed.
+   */
+  onRefresh?: () => Promise<void>;
+}
+
+/**
+ * The refresh control. Providers are the one part of a title that goes stale
+ * invisibly — a film moving from rental to a subscription you already pay for
+ * looks exactly like a film that has not moved, and the cache can be a week old.
+ */
+function refreshButton(onRefresh: () => Promise<void>): HTMLElement {
+  const btn = el(
+    "button",
+    { class: "wtw-refresh", type: "button", title: "Check the providers again now, ignoring the cache" },
+    "↻",
+  );
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.classList.add("busy");
+    void onRefresh()
+      .catch(() => toast("Could not refresh the provider data", "error"))
+      .finally(() => {
+        // A refresh that changed anything has already replaced this button along
+        // with the rest of the page, so these touch a detached node and do no harm.
+        btn.disabled = false;
+        btn.classList.remove("busy");
+      });
+  });
+  return btn;
+}
+
+export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: WhereToWatchOpts): HTMLElement | null {
   if (!providers) return null;
   const countries = watchCountries();
   const verdict = serviceVerdicts();
@@ -176,12 +229,28 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined): HTMLEl
     rows.push(el("div", { class: "wtw-country" }, el("span", { class: "wtw-flag", title: cc }, flag(cc)), chips));
   }
   if (rows.length === 0) return null;
+
+  const attrib = el("p", { class: "wtw-attrib" }, "Streaming data by JustWatch via TMDB");
+  if (opts?.fetchedAt) {
+    attrib.append(
+      el(
+        "span",
+        { class: "wtw-updated", title: `This device last checked ${new Date(opts.fetchedAt).toLocaleString()}` },
+        ` · checked ${agoLabel(opts.fetchedAt)}`,
+      ),
+    );
+  }
   return el(
     "div",
     { class: "card" },
-    el("h2", {}, "Where to watch"),
+    el(
+      "div",
+      { class: "wtw-head" },
+      el("h2", {}, "Where to watch"),
+      opts?.onRefresh ? refreshButton(opts.onRefresh) : null,
+    ),
     ...rows,
-    el("p", { class: "wtw-attrib" }, "Streaming data by JustWatch via TMDB"),
+    attrib,
   );
 }
 

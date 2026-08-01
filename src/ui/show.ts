@@ -79,7 +79,23 @@ export const showRoute: Route = {
       await ensureImages(lib, [traktId]);
       document.title = `${show.title} · WatchWhat`;
       const [episodesRec] = await Promise.all([ensureEpisodes(show), ensureProgress(lib, [traktId])]);
-      renderPage(body, lib, show, episodesRec);
+
+      // Re-check the providers on demand, ignoring the TTL. A show's providers hang off
+      // its episodes record, so this is the episode cache being refreshed — cheap, since
+      // it is the same request that fills the card in the first place.
+      //
+      // The fresh record is handed back rather than repainted here: this page keeps real
+      // state in the DOM — which tab is open, which seasons are expanded — and rebuilding
+      // it would drop you back on Episodes, having closed the card you just pressed.
+      const current = show;
+      let rec = episodesRec;
+      const refreshProviders = async (): Promise<EpisodesRec> => {
+        const before = JSON.stringify(rec.providers);
+        rec = await ensureEpisodes(current, { force: true });
+        if (JSON.stringify(rec.providers) === before) toast("No change — that is still the latest listing");
+        return rec;
+      };
+      renderPage(body, lib, current, rec, refreshProviders);
     } catch (e) {
       body.replaceChildren(
         el("div", { class: "empty-note" }, e instanceof Error ? e.message : "Could not load this show."),
@@ -92,7 +108,13 @@ type SeasonEntry = EpisodesRec["seasons"][number];
 type BandKind = "watched" | "fresh";
 type Band = { band: BandKind; seasons: SeasonEntry[] };
 
-function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec: EpisodesRec): void {
+function renderPage(
+  body: HTMLElement,
+  lib: Library,
+  show: ShowRec,
+  episodesRec: EpisodesRec,
+  onRefreshProviders?: () => Promise<EpisodesRec>,
+): void {
   const expanded = new Set<number>();
   const expandedEpisodes = new Set<string>(); // "season:number" rows showing their description
   const unfolded = new Set<number>(); // seasons pulled out of a collapsed band
@@ -500,8 +522,17 @@ function renderPage(body: HTMLElement, lib: Library, show: ShowRec, episodesRec:
       ),
     );
 
-    const wtw = whereToWatchCard(episodesRec.providers);
-    if (wtw) wrap.append(wtw);
+    // The card replaces itself in place after a refresh, so nothing else on the page moves.
+    const wtwSlot = el("div", {});
+    const fillWtw = (rec: EpisodesRec): void => {
+      const card = whereToWatchCard(rec.providers, {
+        fetchedAt: rec.tmdbMergedAt,
+        onRefresh: onRefreshProviders && (async () => fillWtw(await onRefreshProviders())),
+      });
+      wtwSlot.replaceChildren(...(card ? [card] : []));
+    };
+    fillWtw(episodesRec);
+    wrap.append(wtwSlot);
 
     const castCard = castStripCard(episodesRec.cast);
     if (castCard) wrap.append(castCard);

@@ -448,12 +448,12 @@ async function episodesFromProgress(show: ShowRec): Promise<EpisodesRec> {
  * show page is opened so it lists episodes rather than erroring. TMDB fills in
  * titles, stills and air dates — it needs only its own key.
  */
-export async function ensureEpisodes(show: ShowRec): Promise<EpisodesRec> {
+export async function ensureEpisodes(show: ShowRec, opts?: { force?: boolean }): Promise<EpisodesRec> {
   const cached = await dbGet<EpisodesRec>("episodes", show.traktId);
   const ttl = progressTtlMs(show) * 2;
 
   const rec = cached ?? (await episodesFromProgress(show));
-  const stale = !rec.tmdbMergedAt || Date.now() - rec.tmdbMergedAt > ttl;
+  const stale = opts?.force || !rec.tmdbMergedAt || Date.now() - rec.tmdbMergedAt > ttl;
   if (stale && (await mergeTmdbEpisodes(show, rec))) {
     rec.fetchedAt = Date.now();
     await dbPut("episodes", show.traktId, rec);
@@ -576,11 +576,14 @@ export async function ensureMovieDetails(
   movies: Map<number, MovieRec>,
   traktIds: number[],
   onUpdate?: () => void,
-  opts?: { skipWatchedRefresh?: boolean },
+  opts?: { skipWatchedRefresh?: boolean; force?: boolean },
 ): Promise<void> {
   const stale = traktIds.filter((id) => {
     const movie = movies.get(id);
     if (!movie?.ids.tmdb) return false;
+    // Asked for by hand, so the TTL has no say: the point of the button is that
+    // the cached answer is the thing being disputed.
+    if (opts?.force) return true;
     if (movie.tmdbFetchedAt == null) return true;
     // Bulk refreshes leave watched movies alone — their details are fetched
     // once and only re-fetched when the movie page itself is opened.
@@ -608,7 +611,9 @@ export async function ensureMovieDetails(
     movie.streamingRelease = extras.streamingRelease;
     // Only near a release, and only with the dates TMDB just returned: this is the one window
     // where TMDB is known to be behind, and it keeps the extra request off the other ~340 titles.
-    if (movie.ids.tmdb && nearRelease(movie)) {
+    // A hand-asked refresh always tops up, whatever the dates say — someone pressing the button
+    // is reporting that TMDB looks wrong, which is the entire reason this fallback exists.
+    if (movie.ids.tmdb && (opts?.force || nearRelease(movie))) {
       const offers = await fetchJustWatchOffers(movie.title, movie.ids.tmdb, watchCountryList());
       if (offers) movie.providers = mergeJustWatch(movie.providers ?? {}, offers);
     }

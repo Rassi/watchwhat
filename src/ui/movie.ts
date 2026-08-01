@@ -49,26 +49,46 @@ export const movieRoute: Route = {
       }
       document.title = `${movie.title} · WatchWhat`;
       const lists = await loadMovieLists();
-      // Draw from cache first. Waiting on TMDB before the first paint made every visit as slow
-      // as the network, to change nothing at all on the usual visit where the cache was current.
-      renderPage(body, movies, movie, lists);
-
-      // Then refresh in the background and redraw in place if anything actually came back
+      // Refresh in the background and redraw in place if anything actually came back
       // different. Scroll position is restored because the redraw replaces the whole page, and
       // having it jump under you while reading is worse than showing the old providers a moment
       // longer. A no-op refresh must not repaint at all, or it steals the selection and any
       // open dropdown for nothing.
       const snapshot = (m: MovieRec | undefined): string => JSON.stringify([m?.providers, m?.cast, m?.poster, m?.backdrop, m?.digitalRelease, m?.streamingRelease, m?.extRatings]);
       let last = snapshot(movies.get(traktId));
-      const redraw = (): void => {
+
+      const paint = (): void => {
         const fresh = movies.get(traktId);
-        const next = snapshot(fresh);
-        if (!fresh || next === last) return;
-        last = next;
+        if (!fresh) return;
+        last = snapshot(fresh);
         const y = window.scrollY;
-        renderPage(body, movies, fresh, lists);
+        // The callback has to be handed over again: a repaint rebuilds the card from
+        // scratch, and without it the refresh button vanishes the first time it works.
+        renderPage(body, movies, fresh, lists, refreshProviders);
         window.scrollTo(0, y);
       };
+      const redraw = (): void => {
+        const fresh = movies.get(traktId);
+        if (!fresh || snapshot(fresh) === last) return;
+        paint();
+      };
+
+      // Re-check the providers on demand, ignoring the TTL. Whether anything moved is
+      // decided here rather than in the card, because the snapshot is what knows.
+      const refreshProviders = async (): Promise<void> => {
+        await ensureMovieDetails(movies, [traktId], undefined, { force: true });
+        const changed = snapshot(movies.get(traktId)) !== last;
+        // Always repaint, unlike the background refresh: "checked just now" is itself
+        // the answer to the button, and leaving it reading "5 hours ago" after a
+        // successful check is the one thing the freshness line must never do.
+        paint();
+        if (!changed) toast("No change — that is still the latest listing");
+      };
+
+      // Draw from cache first. Waiting on TMDB before the first paint made every visit as slow
+      // as the network, to change nothing at all on the usual visit where the cache was current.
+      renderPage(body, movies, movie, lists, refreshProviders);
+
       void ensureMovieDetails(movies, [traktId], redraw)
         .then(() => ensureMovieExtRatings(movies, movies.get(traktId) ?? movie).catch(() => false))
         .then(redraw)
@@ -79,7 +99,13 @@ export const movieRoute: Route = {
   },
 };
 
-function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: MovieRec, movieLists: MovieListRec[]): void {
+function renderPage(
+  body: HTMLElement,
+  movies: Map<number, MovieRec>,
+  movie: MovieRec,
+  movieLists: MovieListRec[],
+  onRefreshProviders?: () => Promise<void>,
+): void {
   function renderContent(): void {
     const back = el("a", { class: "back-link", href: "#/movies" }, "‹");
     back.addEventListener("click", (e) => {
@@ -221,7 +247,7 @@ function renderPage(body: HTMLElement, movies: Map<number, MovieRec>, movie: Mov
     );
 
     const pieces: HTMLElement[] = [header, actions, about];
-    const wtw = whereToWatchCard(movie.providers);
+    const wtw = whereToWatchCard(movie.providers, { fetchedAt: movie.tmdbFetchedAt, onRefresh: onRefreshProviders });
     if (wtw) pieces.push(wtw);
     const cast = castStripCard(movie.cast);
     if (cast) pieces.push(cast);

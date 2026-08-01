@@ -1408,6 +1408,57 @@ a.cast-card {
   color: var(--text-dim);
 }
 
+/* The refresh control sits on the heading's baseline rather than in the row of chips: it acts on
+   the whole card, and every country's answer comes from the one request. */
+.wtw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.wtw-head h2 {
+  margin: 0;
+}
+
+.wtw-refresh {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 999px;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.wtw-refresh:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.wtw-refresh:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.wtw-refresh.busy {
+  animation: wtw-spin 0.9s linear infinite;
+}
+
+@keyframes wtw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Muted even against the attribution it follows — it is a footnote to a footnote, there to be
+   looked for rather than read. */
+.wtw-updated {
+  opacity: 0.75;
+}
+
 /* ---------- passcode gate ---------- */
 .lock-screen {
   position: fixed;
