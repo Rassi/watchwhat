@@ -5,3 +5,7 @@ node_modules/
 dist/
 *.local
 .DS_Store
+
+# The local sync token, and wrangler's local D1 + build state.
+.dev.vars
+.wrangler/

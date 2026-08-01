@@ -1,0 +1,15 @@
+name = "watchwhat-sync"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+# Replace `database_id` with the one `wrangler d1 create watchwhat` prints — see
+# README.md. The all-zero placeholder is only there because `wrangler dev` refuses
+# to start without *some* value; local D1 ignores it, and a deploy against it fails
+# loudly rather than writing somewhere unexpected.
+#
+# It is an identifier, not a credential: the token is the only secret, and it lives
+# in `wrangler secret put SYNC_TOKEN`, never in this file.
+[[d1_databases]]
+binding = "DB"
+database_name = "watchwhat"
+database_id = "00000000-0000-0000-0000-000000000000"

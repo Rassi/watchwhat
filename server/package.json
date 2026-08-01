@@ -1,0 +1,17 @@
+{
+  "name": "watchwhat-sync",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc",
+    "schema": "wrangler d1 execute watchwhat --remote --file=./schema.sql",
+    "schema:local": "wrangler d1 execute watchwhat --local --file=./schema.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260730.1",
+    "typescript": "^5.8.0",
+    "wrangler": "^4.0.0"
+  }
+}
