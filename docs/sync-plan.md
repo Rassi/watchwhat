@@ -157,6 +157,23 @@ episode ticks themselves stayed correct. Three consecutive full replays now
 leave the numbers alone. If either counter ever starts climbing, this is the
 first place to look.
 
+## Not sync problems (checked 2026-08-01)
+
+Three things looked like sync discrepancies after the first real seed and none
+of them were. Worth knowing before chasing the next one.
+
+- **`localhost:5173` is a different device.** It is a separate browser origin
+  from `rassi.github.io`, so a separate IndexedDB *and* a separate Settings —
+  including its own sync token, which it does not have. It will keep showing a
+  pre-sync library, in a different order, until it is configured too. Compare the
+  live site against the phone, not the dev server.
+- **Providers are never synced.** "Where to watch" is per-device TMDB/JustWatch
+  cache on a TTL, so the same title can read free on one device and rent on
+  another. That is cache age, not drift, and syncing it would be wrong — it is
+  derived metadata, not something the user did.
+- **A stale `nextEpisode.firstAired` moves shows between sections.** Fixed in
+  `refreshNextEpisode`; see the gotcha below.
+
 ## Gotchas
 
 - **The repo is public.** The sync token must never be committed. It lives as a
@@ -179,6 +196,14 @@ first place to look.
   `wrangler.toml` — as pasting the real id after `d1 create` does — silently
   points `wrangler dev` at a fresh, empty database. Re-run `npm run schema:local`
   or every request 500s with `no such table: events`.
+- **`nextEpisode` is only as good as the episode cache was when progress last
+  rebuilt.** The two caches refresh on independent schedules, so a show whose
+  progress rebuilt before its page had ever been opened gets a next episode with
+  no air date — which silently disables the untouched-new-season rule and drops a
+  season that just landed into "Haven't watched for a while". `ensureEpisodes`
+  now recomputes it (`refreshNextEpisode`). This is device-local and has nothing
+  to do with sync, but it presents exactly like a sync bug: two devices showing
+  the same show in different sections.
 - **A store is only ever created in `onupgradeneeded`.** A database that reaches
   a version without one can otherwise never gain it, and every read throws
   `NotFoundError` forever — which happened once while building step 2, cause
