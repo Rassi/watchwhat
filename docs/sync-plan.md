@@ -112,8 +112,13 @@ mutation functions, advance the cursor.
    the seven mutations, and a Sync card in Settings. Verified in Chrome against a
    local Worker, including that events queued while it was down went out on the
    next flush.
-3. **Client read path.** Cursor + replay through the existing local functions.
-4. **Backfill.** One-off: turn the desktop library into ~3,764 events and push.
+3. ~~**Client read path.**~~ — done 2026-08-01, `src/data/replay.ts`. Cursor +
+   replay through the existing local mutations, which now take a `MutationOpts`
+   of `{ replay, at }`. Verified with a second origin (`127.0.0.1:5173` vs
+   `localhost:5173`, separate IndexedDB) standing in for a second device: an
+   empty library rebuilt itself from the log alone.
+4. **Backfill** — the only step left. One-off: turn the desktop library into
+   ~3,764 events and push.
    Then the phone pulls from `seq: 0`. **Export the phone to a file before this
    step** — that file is the only copy of whatever it has marked since
    2026-07-30, and `importBackup` clears each store before writing. Diffing it
@@ -159,7 +164,11 @@ Rough effort: 1–2 evenings for 1–3, plus a careful hour on the backfill.
   access ended on 2026-07-30, so the divergence is about two days' worth and is
   cheaper to re-enter by hand than to reconcile in code.
 - Whether the Settings sync card also exposes a "force full re-pull" for
-  recovery, or whether clearing the cursor is enough.
+  recovery, or whether clearing the cursor is enough. **Not built, and clearing
+  the cursor alone is not sufficient:** replay skips events whose `device`
+  matches this one, so a device re-pulling from 0 would skip its own history.
+  Clearing site data does work, because that drops the `watchwhat.deviceId` in
+  localStorage too and the device comes back under a new name.
 
 ## Verified facts (2026-08-01)
 
