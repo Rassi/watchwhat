@@ -755,6 +755,19 @@ export const settingsRoute: Route = {
       reloadBtn,
     );
 
-    container.append(tmdbCard, omdbCard, syncCard, prefsCard, justWatchCard, transferCard, dataCard, versionCard);
+    // Ordered by how often a card is actually wanted, not by how fundamental it is.
+    // Reload is the most-used control on this screen — it is the only way to pick up
+    // a new build on an iPhone home-screen app — and the credentials are the least
+    // used, being typed once per device and never again now that they sync.
+    container.append(
+      versionCard,
+      prefsCard,
+      justWatchCard,
+      tmdbCard,
+      omdbCard,
+      syncCard,
+      transferCard,
+      dataCard,
+    );
   },
 };
