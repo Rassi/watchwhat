@@ -48,6 +48,15 @@ const defaults: AppSettings = {
   omdbApiKey: "",
   staleDays: 30,
   theme: "auto",
+  // Every name here is TMDB's own spelling, because matching is exact — see matchServiceRule.
+  // This list is meant to be edited with "Choose from my library…", not by hand; that picker
+  // only ever offers names TMDB actually sent, so it cannot produce one that matches nothing.
+  //
+  // Tiers and resellers are separate providers to TMDB, so a subscription needs one entry per
+  // variant: Prime is three, Paramount+ is seven. Tedious to type and trivial to pick, which is
+  // the whole reason the picker exists. Cutting one is a real decision, not tidying — dropping
+  // "HBO Max Amazon Channel" means titles listed only under it stop counting as yours.
+  //
   // Free-to-air services are left out on purpose: TMDB reports them as free/ads, so they are
   // marked from the data. Listing them here would only claim you pay for them.
   // "@US/DK" limits an account to the countries it can actually play in; see parseServiceRules.
@@ -62,7 +71,15 @@ const defaults: AppSettings = {
   // Tubi is absent on purpose: genuinely free where it plays, so it stays yellow and you judge
   // the country row.
   myServices:
-    "Disney+@US/DK, Netflix@US/DK, Prime@US/DK, Hulu@US, Paramount+@US, HBO Max@US/DK, Apple TV+@DK, " +
+    "Disney Plus@US/DK, " +
+    "Netflix@US/DK, Netflix Standard with Ads@US/DK, Netflix Kids@US/DK, " +
+    "Amazon Prime Video@US/DK, Amazon Prime Video with Ads@US/DK, Amazon Prime Video Free with Ads@US/DK, " +
+    "Hulu@US, " +
+    "Paramount Plus@US, Paramount Plus Premium@US, Paramount Plus Essential@US, " +
+    "Paramount Plus Basic with Ads@US, Paramount+ Amazon Channel@US, " +
+    "Paramount+ Roku Premium Channel@US, Paramount Plus Apple TV Channel@US, " +
+    "HBO Max@US/DK, HBO Max Amazon Channel@US/DK, " +
+    "Apple TV@DK, " +
     "-Kanopy, -Hoopla, -YouTube Free, -Cineasterna, -Filmoteket, -Beamafilm, -FXNow, -Adult Swim, " +
     "-The Roku Channel, -Plex@SE/NO/US/GB/AU",
   // The order here is the order the rows appear in on a title page, so it runs from where you

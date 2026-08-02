@@ -11,7 +11,12 @@ export type ProvidersRecord = Record<
   { link: string | null; providers: { name: string; logo: string | null; kind: string }[] }
 >;
 
-/** Loose provider-name match: lowercase, strip punctuation/spaces, "plus" -> "+". */
+/**
+ * Compare provider names ignoring spelling, not identity: lowercase, strip
+ * punctuation and spaces, "plus" -> "+". This is what lets an entry written
+ * "Paramount+" match TMDB's "Paramount Plus" — the same service, spelled two
+ * ways — while still keeping it distinct from "Paramount Plus Premium".
+ */
 export function normalizeService(name: string): string {
   return name
     .toLowerCase()
@@ -62,14 +67,18 @@ export function serviceRules(): ServiceRule[] {
  * The entry that decides a provider in a country, or null for "no opinion". A subscription is
  * not worldwide — a Netflix account in one country is no help in another — so an entry may be
  * limited with "Netflix@DK/US"; a bare entry counts everywhere. A block wins over a plain
- * match, so a narrow "-YouTube Free" still overrides a broad "YouTube".
+ * match, so "-Paramount Plus Basic with Ads" still overrides a plain "Paramount Plus".
+ *
+ * **Names must match exactly** (after `normalizeService`). This used to be a substring test in
+ * either direction, so that a hand-written "Prime" could stand for all three Amazon variants —
+ * convenient to type, but it made an entry's reach invisible: "Paramount+" quietly claimed
+ * seven providers including resellers, and "Max" would claim Cinemax. The picker now writes
+ * TMDB's own spellings, one entry per provider, so there is nothing left to guess at.
  */
 export function matchServiceRule(rules: ServiceRule[], name: string, country: string): ServiceRule | null {
   const normalized = normalizeService(name);
   const hits = rules.filter(
-    (r) =>
-      (normalized.includes(r.name) || r.name.includes(normalized)) &&
-      (r.countries === null || r.countries.includes(country)),
+    (r) => r.name === normalized && (r.countries === null || r.countries.includes(country)),
   );
   return hits.find((r) => r.blocked) ?? hits[0] ?? null;
 }

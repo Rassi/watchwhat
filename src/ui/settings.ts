@@ -5,6 +5,7 @@ import type { AppSettings } from "../data/settings";
 import { applyTheme } from "../theme";
 import { hardReload } from "./refresh";
 import { pickServices } from "./servicePicker";
+import { parseServiceRules } from "./shared";
 import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
 import { downloadBackup, exportBackup, importBackup, parseBackup, summarize } from "../data/transfer";
 import { flush, getCursor, pendingCount } from "../data/outbox";
@@ -282,8 +283,38 @@ export const settingsRoute: Route = {
     for (const [value, label] of [["auto", "Auto (follow system)"], ["dark", "Dark"], ["light", "Light"]] as const) {
       themeSelect.append(el("option", { value }, label));
     }
-    const servicesInput = textInput("", "Netflix, Disney+, …");
+    // Still the draft's source of truth, so every Reset/Save/diff path keeps working
+    // unchanged — but no longer the thing you look at. It lives behind "Edit as text"
+    // now that the picker writes TMDB's exact spellings and hand-editing them is a
+    // good way to produce an entry that matches nothing.
+    const servicesInput = textInput("", "Netflix, Disney Plus, …");
     const countriesInput = textInput("", "DK, US, GB");
+    const servicesChips = el("div", { class: "service-chips" });
+
+    /** The services draft as chips: what is yours, and where it counts. */
+    function renderServiceChips(): void {
+      const rules = parseServiceRules(servicesInput.value);
+      if (rules.length === 0) {
+        servicesChips.replaceChildren(el("span", { class: "service-chip-empty" }, "No services chosen"));
+        return;
+      }
+      // Sort on the displayed name, not the raw entry: "@US/DK" and a leading "-"
+      // would otherwise decide the order and scatter a service's variants apart.
+      const label = (text: string): string => text.replace(/^-/, "").split("@")[0].trim();
+      const sorted = [...rules].sort(
+        (a, b) => Number(a.blocked) - Number(b.blocked) || label(a.text).localeCompare(label(b.text)),
+      );
+      servicesChips.replaceChildren(
+        ...sorted.map((r) =>
+          el(
+            "span",
+            { class: `service-chip${r.blocked ? " blocked" : ""}`, title: r.text },
+            el("span", { class: "service-chip-name" }, label(r.text)),
+            r.countries ? el("span", { class: "service-chip-cc" }, r.countries.join("/")) : null,
+          ),
+        ),
+      );
+    }
 
     // Each control's draft value, normalised exactly as it would be stored, so comparing
     // against the saved value and the default is a plain equality check.
@@ -372,6 +403,9 @@ export const settingsRoute: Route = {
 
     /** Reset lights up when a field differs from its default, Save when anything is unsaved. */
     function syncPrefButtons(): void {
+      // Every path that changes the draft — typing, Reset, Save, the picker, a value
+      // arriving from another device — already ends here, so the chips redraw from one place.
+      renderServiceChips();
       const saved = getSettings();
       let dirty = false;
       for (const p of prefs) {
@@ -472,15 +506,33 @@ export const settingsRoute: Route = {
         'Controls when a show drops out of Watch next. Shows with a new episode waiting stay regardless. Tap the ⓘ next to any section heading to see exactly what lands in it.',
       ),
       prefField("Theme", themeSelect, "theme"),
-      prefField("My streaming services (comma-separated — highlighted under Where to watch)", servicesInput, "myServices"),
+      el(
+        "div",
+        { class: "field" },
+        el("label", {}, "My streaming services (highlighted under Where to watch)"),
+        el("div", { class: "field-row" }, servicesChips, resetBtns.get("myServices")!),
+      ),
       el("div", { class: "button-row" }, pickBtn),
       el(
         "p",
         { class: "field-help" },
-        'A subscription only counts in the countries it works in: write "Netflix@DK/US" to limit one; ' +
-          "a plain name counts everywhere. Put a minus in front of one you can't actually use — " +
-          '"-Kanopy" — and it never counts as yours or as free, however TMDB lists it. ' +
-          "Free-to-air services need no entry at all; they're detected automatically.",
+        "Struck-through chips are ones you've blocked: they never count as yours or as free, " +
+          "however TMDB lists them. The code after a name is the countries it counts in — a " +
+          "subscription in one country is no help in another. Free-to-air services need no entry " +
+          "at all; they're detected automatically.",
+      ),
+      el(
+        "details",
+        { class: "service-raw" },
+        el("summary", {}, "Edit as text"),
+        el(
+          "p",
+          { class: "field-help" },
+          'Comma-separated. Names must match TMDB\'s spelling exactly, which is why the picker is ' +
+            'the better way in — "Prime" matches nothing; "Amazon Prime Video" does. Add "@DK/US" ' +
+            'to limit an entry to those countries, or a leading "-" to block it.',
+        ),
+        servicesInput,
       ),
       prefField("Where-to-watch countries (ISO codes, comma-separated)", countriesInput, "watchCountries"),
       el(

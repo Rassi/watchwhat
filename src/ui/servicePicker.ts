@@ -7,7 +7,7 @@
 import { el, dialog } from "./components";
 import { providerCatalogue } from "../data/providers";
 import type { ProviderSighting } from "../data/providers";
-import { normalizeService, parseServiceRules, matchServiceRule } from "./shared";
+import { normalizeService, parseServiceRules } from "./shared";
 
 type PickState = "mine" | "blocked" | "neutral";
 
@@ -22,8 +22,21 @@ interface Pick {
 const entryKey = (entry: string): string =>
   normalizeService((entry.startsWith("-") ? entry.slice(1) : entry).split("@")[0]);
 
+/**
+ * `order` is the countries the provider was actually sighted in, and only those get
+ * a button — but an entry may name others, and **those must survive being edited**.
+ * A country is dropped from the buttons the moment no cached title lists that
+ * provider there, which says nothing about whether the subscription covers it:
+ * "Amazon Prime Video with Ads" simply hasn't turned up in DK yet. Filtering the
+ * set down to `order` would have quietly deleted DK on the next unrelated edit, and
+ * the entry would then stop counting the day the provider did appear there.
+ */
 function serialize(pick: Pick, order: string[]): string {
-  const scope = pick.countries.size > 0 ? `@${order.filter((c) => pick.countries.has(c)).join("/")}` : "";
+  const kept = [
+    ...order.filter((c) => pick.countries.has(c)),
+    ...[...pick.countries].filter((c) => !order.includes(c)).sort(),
+  ];
+  const scope = kept.length > 0 ? `@${kept.join("/")}` : "";
   return `${pick.state === "blocked" ? "-" : ""}${pick.name}${scope}`;
 }
 
@@ -71,7 +84,14 @@ export async function pickServices(current: string, watchCountries: string): Pro
   const picks = new Map<string, Pick>();
 
   const list = el("div", { class: "picker-list" });
-  const rows: { sighting: ProviderSighting; node: HTMLElement }[] = [];
+  interface Row {
+    sighting: ProviderSighting;
+    node: HTMLElement;
+    pick: Pick;
+    setState: (s: PickState) => void;
+    setCountry: (cc: string, on: boolean) => void;
+  }
+  const rows: Row[] = [];
 
   for (const sighting of catalogue) {
     const key = normalizeService(sighting.name);
@@ -99,25 +119,20 @@ export async function pickServices(current: string, watchCountries: string): Pro
             : `Doesn't count in ${cc} — click to add`
           : `Seen in ${cc}`;
       }
+      // Countries the entry names but that have no button, because nothing cached
+      // lists this provider there. They are kept on save, so say so rather than
+      // letting the row imply the entry is narrower than it is.
+      const unsighted = [...pick.countries].filter((c) => !sighting.countries.includes(c)).sort();
       hint.textContent =
         pick.state === "neutral"
-          ? coveredBy()
+          ? ""
           : pick.countries.size === 0
             ? pick.state === "mine"
               ? "Counts in every country"
               : "Blocked in every country"
-            : "";
-    }
-
-    /** Why a row can read "no opinion" and still be green in the app. */
-    function coveredBy(): string {
-      for (const cc of sighting.countries) {
-        const rule = matchServiceRule(rules, sighting.name, cc);
-        if (rule && entryKey(rule.text) !== key) {
-          return `Already ${rule.blocked ? "blocked" : "covered"} by "${rule.text}"`;
-        }
-      }
-      return "";
+            : unsighted.length > 0
+              ? `Also kept for ${unsighted.join(", ")} — not seen in your titles there yet`
+              : "";
     }
 
     const countryRow = el("div", { class: "picker-countries" });
@@ -162,16 +177,100 @@ export async function pickServices(current: string, watchCountries: string): Pro
       hint,
     );
     paint();
-    rows.push({ sighting, node });
+    rows.push({
+      sighting,
+      node,
+      pick,
+      setState: (s) => {
+        pick.state = s;
+        touch();
+      },
+      setCountry: (cc, on) => {
+        if (!sighting.countries.includes(cc) || pick.state === "neutral") return;
+        if (on) pick.countries.add(cc);
+        else pick.countries.delete(cc);
+        touch();
+      },
+    });
     list.append(node);
   }
 
   const search = el("input", { type: "search", class: "picker-search", placeholder: "Filter services…", autocomplete: "off" });
+
+  /**
+   * Bulk actions over whatever the filter is currently showing.
+   *
+   * This is what replaced the hand-written shorthand. One entry called "Prime"
+   * used to stand for all three Amazon variants; now that names are exact, three
+   * entries are needed — so filtering to "prime" and pressing ✓ once has to be as
+   * quick as typing it was. Deliberately tied to a non-empty filter: the same bar
+   * over an unfiltered list is a one-click way to declare all 130 services yours.
+   */
+  const bulkCount = el("span", { class: "picker-bulk-count" });
+  const bulkStates = el("div", { class: "picker-states" });
+  const bulkCountries = el("div", { class: "picker-countries" });
+  const bulkNote = el("p", { class: "picker-hint" });
+  const bulk = el(
+    "div",
+    { class: "picker-bulk hidden" },
+    bulkCount,
+    el("div", { class: "picker-controls" }, bulkCountries, bulkStates),
+    bulkNote,
+  );
+
+  const shownRows = (): Row[] => rows.filter((r) => !r.node.classList.contains("hidden"));
+
+  for (const [s, label, title] of [
+    ["mine", "✓", "Mark every service shown as one of mine"],
+    ["blocked", "✗", "Mark every service shown as one I can't use"],
+    ["neutral", "–", "Clear the opinion on every service shown"],
+  ] as const) {
+    const btn = el("button", { class: `picker-state ${s}`, type: "button", title }, label);
+    btn.addEventListener("click", () => {
+      for (const row of shownRows()) row.setState(s);
+      paintBulk();
+    });
+    bulkStates.append(btn);
+  }
+
+  function paintBulk(): void {
+    const shown = shownRows();
+    const filtering = search.value.trim() !== "";
+    bulk.classList.toggle("hidden", !filtering || shown.length === 0);
+    if (!filtering || shown.length === 0) return;
+
+    bulkCount.textContent = `Apply to all ${shown.length} shown`;
+    // Only rows with an opinion can be scoped, so the country half is about them.
+    const scopable = shown.filter((r) => r.pick.state !== "neutral");
+    const countries = [...new Set(shown.flatMap((r) => r.sighting.countries))];
+
+    bulkCountries.replaceChildren();
+    for (const cc of countries) {
+      const holders = scopable.filter((r) => r.sighting.countries.includes(cc));
+      const all = holders.length > 0 && holders.every((r) => r.pick.countries.has(cc));
+      const btn = el("button", { class: `picker-cc${all ? " on" : ""}`, type: "button" }, cc);
+      btn.disabled = holders.length === 0;
+      btn.title = holders.length === 0
+        ? `Set ✓ or ✗ first — there is nothing to scope to ${cc}`
+        : all
+          ? `Counts in ${cc} for all ${holders.length} — click to drop`
+          : `Click to add ${cc} to all ${holders.length}`;
+      btn.addEventListener("click", () => {
+        for (const row of holders) row.setCountry(cc, !all);
+        paintBulk();
+      });
+      bulkCountries.append(btn);
+    }
+
+    bulkNote.textContent = scopable.length === 0 ? "Set ✓ or ✗ before choosing countries." : "";
+  }
+
   search.addEventListener("input", () => {
     const q = search.value.trim().toLowerCase();
     for (const { sighting, node } of rows) {
       node.classList.toggle("hidden", q !== "" && !sighting.name.toLowerCase().includes(q));
     }
+    paintBulk();
   });
 
   const body = el(
@@ -184,7 +283,14 @@ export async function pickServices(current: string, watchCountries: string): Pro
         "titles it turns up on. Block the ones you can't actually use — a library service you " +
         "have no card for, or an app that isn't on your box — and they stop counting as free.",
     ),
+    el(
+      "p",
+      {},
+      "Tiers and resellers are separate services here, because that is how TMDB sends them. " +
+        "Filter for one — \"prime\", \"paramount\" — and the bar that appears sets all of them at once.",
+    ),
     search,
+    bulk,
     list,
   );
 

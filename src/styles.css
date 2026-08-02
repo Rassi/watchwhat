@@ -1520,6 +1520,73 @@ a.cast-card {
   margin-top: 10px;
 }
 
+/* ---------- chosen services, as chips ---------- */
+.service-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-row);
+}
+
+.service-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--green);
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* Blocked reads as struck-out rather than merely dim: it is an assertion ("not
+   mine, whatever the data says"), not a weaker version of the green one. */
+.service-chip.blocked {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+/* inline-block so the blocked chip's line-through stops at the name. A descendant
+   cannot switch an ancestor's text-decoration off; it has to leave its inline box. */
+.service-chip-cc {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+/* The chip block is tall, so keep Reset beside its first row rather than floating
+   against the vertical middle of it. */
+.field-row:has(> .service-chips) {
+  align-items: flex-start;
+}
+
+.service-chip-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.service-raw summary {
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.service-raw input {
+  width: 100%;
+}
+
 /* ---------- service picker ---------- */
 /* Wider than a confirm dialog: each row carries a name, its countries and three states. */
 .modal:has(.picker) {
@@ -1596,6 +1663,30 @@ a.cast-card {
   align-items: center;
   gap: 8px;
   margin-top: 6px;
+}
+
+/* The bulk bar. Tinted rather than white so it reads as acting on the list
+   below it, not as one more row in it. */
+.picker-bulk {
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.picker-bulk.hidden {
+  display: none;
+}
+
+.picker-bulk-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: #111;
+}
+
+.picker-bulk .picker-controls {
+  margin-top: 4px;
 }
 
 .picker-countries {
