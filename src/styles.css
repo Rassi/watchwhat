@@ -1290,9 +1290,24 @@ a.cast-card {
   border-top: 1px solid var(--border);
 }
 
-.wtw-flag {
-  font-size: 20px;
+/* Fixed width so the chip columns line up down the card whatever the code is. */
+.wtw-cc {
+  flex: none;
+  width: 26px;
+  font-size: 12px;
+  font-weight: 700;
   line-height: 28px;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+
+.wtw-cc.link {
+  text-decoration: none;
+}
+
+.wtw-cc.link:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .wtw-chips {

@@ -123,7 +123,7 @@ export async function openServiceChoice(
       ? el(
           "p",
           { class: "field-help" },
-          el("a", { href: link, target: "_blank", rel: "noopener" }, `Open ${country} listings on JustWatch ↗`),
+          el("a", { href: link, target: "_blank", rel: "noopener" }, `All ${country} listings for this title on TMDB ↗`),
         )
       : null,
   );

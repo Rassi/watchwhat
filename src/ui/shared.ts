@@ -173,8 +173,17 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
   if (!providers) return null;
   const countries = watchCountries();
   const verdict = serviceVerdicts();
-  const flag = (cc: string): string =>
-    cc.length === 2 ? String.fromCodePoint(...[...cc].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65)) : cc;
+
+  /**
+   * The country code, deliberately as text rather than a flag emoji.
+   *
+   * It used to be a regional-indicator pair — correct Unicode, and Apple draws it
+   * as a flag — but Windows ships no national flag glyphs at all, so the same two
+   * characters fell back to reading as "DK" there. One device showing a picture and
+   * another showing letters is worse than both showing letters, and DK, NO and SE
+   * are three red-and-white crosses that nobody can tell apart at 20px anyway.
+   */
+  const label = (cc: string): string => cc;
 
   const rows: HTMLElement[] = [];
   for (const cc of countries) {
@@ -219,23 +228,16 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
               : p.kind === "ads"
                 ? " (free, with ads)"
                 : "";
-        // A rental chip stays a plain link: "one of mine" means a subscription, and
+        // A rental chip is a plain label: "one of mine" means a subscription, and
         // there is nothing useful to say about a store you buy single films from.
         // Everything else is a button, because deciding whether a service is yours
         // is a question that arrives *here*, looking at a title, far more often than
-        // it arrives in Settings. The link it used to carry is not lost — it was the
-        // same country-wide JustWatch page on every chip in the row, and it now sits
-        // inside the dialog where it reads as the one destination it always was.
+        // it arrives in Settings. Neither carries the listing link any more — that
+        // belongs to the country, and now sits on the row's code.
         const chip = el(
-          rent ? "a" : "button",
+          rent ? "span" : "button",
           rent
-            ? {
-                class: "provider-chip rent",
-                href: entry.link ?? "#",
-                target: "_blank",
-                rel: "noopener",
-                title: `${p.name}${suffix} — details on JustWatch`,
-              }
+            ? { class: "provider-chip rent", title: `${p.name}${suffix}` }
             : {
                 class: `provider-chip ${v === "mine" ? "have" : free ? "free" : ""}`,
                 type: "button",
@@ -279,7 +281,23 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
         chips.append(group, toggle);
       }
     }
-    rows.push(el("div", { class: "wtw-country" }, el("span", { class: "wtw-flag", title: cc }, flag(cc)), chips));
+    // The country code carries the listing link, because that is what the link
+    // actually is: one TMDB page per country, not per service. It sat on every chip
+    // in the row before, which both repeated it and mislabelled it as JustWatch.
+    const prefix = entry?.link
+      ? el(
+          "a",
+          {
+            class: "wtw-cc link",
+            href: entry.link,
+            target: "_blank",
+            rel: "noopener",
+            title: `All ${cc} listings for this title on TMDB`,
+          },
+          label(cc),
+        )
+      : el("span", { class: "wtw-cc" }, label(cc));
+    rows.push(el("div", { class: "wtw-country" }, prefix, chips));
   }
   if (rows.length === 0) return null;
 
