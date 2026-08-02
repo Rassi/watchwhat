@@ -30,14 +30,29 @@ offers no way to detect this, because watch providers never appear in its
 `/changes` feed. So around a release, and only there, the source is asked
 directly:
 
-- Fires when `nearRelease(movie)` — within 30 days of a known release date — or
-  whenever a refresh is asked for by hand.
+- **Movies only.** `fetchJustWatchOffers` has exactly one call site, inside
+  `ensureMovieDetails`. A show's providers are TMDB's answer and nothing else,
+  including when the ↻ is pressed — so do not go looking for a broken top-up on
+  a show page. There isn't one to break.
+- Fires when `nearRelease(movie)`, or whenever a refresh is asked for by hand.
 - `apis.justwatch.com/graphql`, which is **JustWatch's own web API, not a
   published one**: no versioning, no contract. Every caller must treat failure as
   "no extra information" and keep TMDB's answer.
 - There is no lookup by TMDB id, so the title is searched and the result
   **confirmed by the `tmdbId` it reports back** — never by title text, which
   would happily match a remake or a sequel.
+
+**The window is wider than "30 days" suggests.** `nearRelease` is ±30 days of
+*any* known date, and there are up to three — theatrical `released`,
+`digitalRelease.date`, `streamingRelease.date`. That is up to three 60-day
+windows, which for a staggered rollout can add up to roughly six months of
+eligibility, in bursts rather than one stretch. It is still nearly always
+inactive: for a library of mostly older films, only a handful qualify at once.
+
+**One top-up is 2–3 requests, not one.** A search against US, then against the
+first configured country if US missed, then a single offers query with every
+country aliased into it. Six round trips per title would have made this too
+expensive to do automatically, which is why the aliasing exists.
 - It only ever *adds* a provider TMDB is missing, or *downgrades* a kind when
   JustWatch says something is cheaper than TMDB thinks. **Nothing is ever
   removed**: an entry TMDB has and JustWatch does not is far more likely to be a
@@ -121,11 +136,12 @@ or old caches silently keep answering with less than they should.
 ## Refreshing by hand
 
 The TTL is the reason a title can read "rent" on one device and green on
-another for up to a week. The **↻ on the card** ignores it: one TMDB request,
-plus a JustWatch top-up regardless of the release dates, because someone
-pressing the button is reporting that TMDB looks wrong and that is exactly what
-the fallback is for. The attribution line says when this device last checked,
-with the exact timestamp on its tooltip.
+another for up to a week. The **↻ on the card** ignores it. On a movie that
+means one TMDB request *plus* a JustWatch top-up regardless of the release
+dates, because someone pressing the button is reporting that TMDB looks wrong
+and that is exactly what the fallback is for. **On a show it is the TMDB request
+alone** — shows have no JustWatch path at all. The attribution line says when
+this device last checked, with the exact timestamp on its tooltip.
 
 Two behaviours worth not "fixing" later:
 
@@ -138,10 +154,16 @@ Two behaviours worth not "fixing" later:
   freshness line still reading "5 hours ago" straight after a successful check is
   the one thing it must never say.
 
-Rate limits are a non-issue at this scale: it is one request per press, against
-TMDB, on a single title. The thing to never build is a "refresh everything"
-sweep — ~340 films through the unofficial JustWatch endpoint is how you get
-blocked.
+Rate limits are a non-issue at this scale: one press is one TMDB request and, on
+a movie, 2–3 JustWatch ones, on a single title, at human speed.
+
+**The thing to never build is a "refresh everything" sweep.** Note *why* that is
+worse than it sounds: a sweep would force, and forcing is what skips the
+`nearRelease` check — so it would not be "the near-release handful", it would be
+every film in the library, ~340 of them at 2–3 requests each, in a burst from one
+IP, against an unofficial endpoint, now via a Worker whose address also carries
+sync. Automatic top-ups are rare by construction; only a sweep would make them
+frequent.
 
 ## How a chip is decided
 
@@ -190,6 +212,8 @@ disc as a rental.
 - **Providers are not in the sync log and should not be.** Syncing them would
   propagate one device's stale answer to a device that had a fresher one.
 - **A show's providers live on the episodes record**, not the show record.
+- **Shows never call JustWatch.** If a show's providers look wrong, TMDB is the
+  only thing to blame and the only thing to fix.
 - **The JustWatch endpoint has no contract.** If top-ups quietly stop, run the
   Settings check before assuming the network is at fault — a field rename fails
   silently and looks exactly like "no extra offers".
