@@ -260,3 +260,5 @@ disc as a rental.
   Settings check before assuming the network is at fault — a field rename fails
   silently and looks exactly like "no extra offers".
 - **Never sweep.** Every refresh path is per-title and on demand for a reason.
+- **`dependencies.md`** has the measured load across all four external services,
+  the TTL table that governs it, and how to re-measure it.
