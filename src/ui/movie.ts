@@ -254,6 +254,8 @@ function renderPage(
       fetchedAt: movie.tmdbFetchedAt,
       topUp: movie.topUp,
       onRefresh: onRefreshProviders,
+      // Same record, redrawn: the providers didn't move, the verdict about them did.
+      onServicesChanged: () => renderContent(),
     });
     if (wtw) pieces.push(wtw);
     const cast = castStripCard(movie.cast);

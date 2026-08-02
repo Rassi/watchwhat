@@ -5,6 +5,7 @@ import { getSettings } from "../data/settings";
 import { posterUrl } from "../api/tmdb";
 import { setMovieOnCustomList, setMovieOnWatchlist } from "../data/sync";
 import type { CastMemberRec, MovieListRec, MovieRec } from "../data/model";
+import { openServiceChoice } from "./serviceChoice";
 
 export type ProvidersRecord = Record<
   string,
@@ -122,6 +123,8 @@ export interface WhereToWatchOpts {
    * also owns saying nothing moved; this only reports a request that failed.
    */
   onRefresh?: () => Promise<void>;
+  /** A chip changed `myServices`, so the whole card's colours are stale. */
+  onServicesChanged?: () => void;
 }
 
 /**
@@ -216,15 +219,28 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
               : p.kind === "ads"
                 ? " (free, with ads)"
                 : "";
+        // A rental chip stays a plain link: "one of mine" means a subscription, and
+        // there is nothing useful to say about a store you buy single films from.
+        // Everything else is a button, because deciding whether a service is yours
+        // is a question that arrives *here*, looking at a title, far more often than
+        // it arrives in Settings. The link it used to carry is not lost — it was the
+        // same country-wide JustWatch page on every chip in the row, and it now sits
+        // inside the dialog where it reads as the one destination it always was.
         const chip = el(
-          "a",
-          {
-            class: `provider-chip ${rent ? "rent" : v === "mine" ? "have" : free ? "free" : ""}`,
-            href: entry.link ?? "#",
-            target: "_blank",
-            rel: "noopener",
-            title: `${p.name}${suffix} — details on JustWatch`,
-          },
+          rent ? "a" : "button",
+          rent
+            ? {
+                class: "provider-chip rent",
+                href: entry.link ?? "#",
+                target: "_blank",
+                rel: "noopener",
+                title: `${p.name}${suffix} — details on JustWatch`,
+              }
+            : {
+                class: `provider-chip ${v === "mine" ? "have" : free ? "free" : ""}`,
+                type: "button",
+                title: `${p.name}${suffix} — tap to say whether it's one of yours`,
+              },
           p.logo
             ? (() => {
                 const img = el("img", { loading: "lazy", alt: "" });
@@ -236,8 +252,16 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
           rent ? el("span", { class: "chip-rent", title: "Costs extra — rent or buy" }, "$") : null,
           free ? el("span", { class: "chip-free" }, p.kind === "ads" ? "FREE · ADS" : "FREE") : null,
         );
-        if (rent) rentChips.push(chip);
-        else chips.append(chip);
+        if (rent) {
+          rentChips.push(chip);
+        } else {
+          chip.addEventListener("click", () => {
+            void openServiceChoice(p.name, cc, entry.link).then((changed) => {
+              if (changed) opts?.onServicesChanged?.();
+            });
+          });
+          chips.append(chip);
+        }
       }
       // Rentals are the longest and least useful part of a row, so they always fold away — even
       // in the countries where renting is all there is. Leaving those expanded used to be

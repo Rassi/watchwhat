@@ -528,6 +528,8 @@ function renderPage(
       const card = whereToWatchCard(rec.providers, {
         fetchedAt: rec.tmdbMergedAt,
         onRefresh: onRefreshProviders && (async () => fillWtw(await onRefreshProviders())),
+        // Same record, redrawn: the providers didn't move, the verdict about them did.
+        onServicesChanged: () => fillWtw(rec),
       });
       wtwSlot.replaceChildren(...(card ? [card] : []));
     };

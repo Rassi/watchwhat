@@ -1302,6 +1302,8 @@ a.cast-card {
   flex: 1;
 }
 
+/* Both an <a> (rentals) and a <button> (everything else), so the font and the
+   button's default background have to be reset for the two to look identical. */
 .provider-chip {
   display: inline-flex;
   align-items: center;
@@ -1311,8 +1313,30 @@ a.cast-card {
   color: var(--text);
   border-radius: 999px;
   padding: 4px 12px 4px 4px;
+  font-family: inherit;
   font-size: 12px;
   font-weight: 600;
+  text-align: left;
+}
+
+button.provider-chip {
+  cursor: pointer;
+}
+
+/* The checkbox that widens a chip's answer from one country to all of them. */
+.svc-everywhere {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.svc-everywhere input {
+  width: 16px;
+  height: 16px;
+  flex: none;
 }
 
 .provider-chip img {
