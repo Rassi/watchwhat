@@ -18,7 +18,8 @@ import { pullEvents, syncConfigured, type RemoteEvent } from "../api/syncserver"
 import { dbPut } from "./db";
 import { tmdbKey, type Library, type MovieRec, type ShowRec } from "./model";
 import { flush, getCursor, setCursor } from "./outbox";
-import { getDeviceId } from "./settings";
+import { getDeviceId, getSettings, type CloudKey } from "./settings";
+import { reconcileSettings } from "./cloudsettings";
 import {
   addToWatchlist,
   ensureProgress,
@@ -37,6 +38,8 @@ export interface SyncResult {
   applied: number;
   /** Events that named a title TMDB could not resolve — skipped, cursor still advanced. */
   skipped: number;
+  /** Cloud-backed settings this device adopted from the server. */
+  settings: CloudKey[];
 }
 
 /** Everything one replay run needs, loaded once rather than per event. */
@@ -243,6 +246,11 @@ let pulling = false;
  */
 export async function pull(): Promise<{ applied: number; skipped: number }> {
   if (pulling || !syncConfigured()) return { applied: 0, skipped: 0 };
+  // Without a TMDB key this can only do harm: every title this device has not
+  // seen fails to resolve, gets skipped, and the cursor advances past it anyway,
+  // so the events are gone for good. Waiting is always better — the key arrives
+  // with the settings reconcile, and until then there is nothing lost by idling.
+  if (!getSettings().tmdbApiKey.trim()) return { applied: 0, skipped: 0 };
   pulling = true;
 
   const device = getDeviceId();
@@ -271,15 +279,30 @@ export async function pull(): Promise<{ applied: number; skipped: number }> {
   } finally {
     pulling = false;
   }
-  if (applied > 0) syncEvents.dispatchEvent(new Event("applied"));
+  if (applied > 0) syncEvents.dispatchEvent(new CustomEvent("applied", { detail: { settingsOnly: false } }));
   return { applied, skipped: ctx?.skipped ?? 0 };
 }
 
-/** Push what's queued, then pull what's new. Push first so this device's own work can't be clobbered by a slow round-trip. */
+/**
+ * Settings first, then push what's queued, then pull what's new.
+ *
+ * Settings lead because `pull` needs the TMDB key to resolve a title this device
+ * has never seen, and a fresh device has no key until this call brings it. Push
+ * before pull so this device's own work can't be clobbered by a slow round-trip.
+ */
 export async function syncNow(): Promise<SyncResult> {
+  const settings = await reconcileSettings();
   const pushed = await flush();
   const { applied, skipped } = await pull();
-  return { pushed, applied, skipped };
+  // `pull` fires this itself when it applied something, but a settings-only
+  // change is invisible to it — and a new services list or stale-days cutoff
+  // changes what every open screen should be showing. Flagged as settings-only,
+  // and carrying which fields moved, so the Settings screen can update just those
+  // controls in place instead of being redrawn out from under an unsaved edit.
+  if (settings.length > 0 && applied === 0) {
+    syncEvents.dispatchEvent(new CustomEvent("applied", { detail: { settingsOnly: true, keys: settings } }));
+  }
+  return { pushed, applied, skipped, settings };
 }
 
 /**

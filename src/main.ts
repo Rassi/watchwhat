@@ -11,7 +11,7 @@ import { applyTheme } from "./theme";
 import { ensureUnlocked } from "./gate";
 import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
 import { dbDelete } from "./data/db";
-import { purgeTraktRemnants } from "./data/settings";
+import { purgeTraktRemnants, seedCloudStamps } from "./data/settings";
 import { installSyncTriggers, syncEvents } from "./data/replay";
 
 applyTheme();
@@ -22,6 +22,9 @@ installPullToRefresh();
 void dbDelete("meta", "upcoming");
 // Same for what the Trakt integration left behind in localStorage.
 purgeTraktRemnants();
+// Settings this device already had predate the sync stamps, so give them one —
+// otherwise nothing would ever seed a server that has never held any. Once only.
+seedCloudStamps();
 await ensureUnlocked();
 
 registerRoute(watchlistRoute);
@@ -39,5 +42,15 @@ startRouter(document.getElementById("app")!);
 // delaying first paint. The screen is already on-screen by then, so a pull that
 // changes anything has to redraw it — otherwise a sync looks like it did
 // nothing until you navigate away and back.
-syncEvents.addEventListener("applied", () => void refreshRouteInPlace());
+syncEvents.addEventListener("applied", (e) => {
+  // One exception to redrawing: settings that arrived from another device, while
+  // the Settings screen is the one open. Its preference fields are an unsaved
+  // draft, and re-rendering would throw away whatever is half-typed in them —
+  // that screen listens for this itself and updates only the controls the user
+  // is not currently editing. Every other screen renders straight from stored
+  // data and loses nothing.
+  const detail = (e as CustomEvent<{ settingsOnly?: boolean }>).detail;
+  if (detail?.settingsOnly && location.hash.replace(/^#\/?/, "").split("/")[0] === "settings") return;
+  void refreshRouteInPlace();
+});
 installSyncTriggers();

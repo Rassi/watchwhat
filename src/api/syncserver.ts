@@ -6,7 +6,7 @@
  * "succeeded" after a 500 would drop the events it was holding.
  */
 
-import { getSettings } from "../data/settings";
+import { getSettings, type CloudEntry } from "../data/settings";
 
 /** An event as the server hands it back — the same shape plus its assigned seq. */
 export interface RemoteEvent {
@@ -72,6 +72,28 @@ export async function pushEvents(events: OutgoingEvent[]): Promise<{ accepted: n
 /** One page of events after the cursor. */
 export async function pullEvents(since: number): Promise<EventPage> {
   return (await request(`/events?since=${since}`)) as EventPage;
+}
+
+/** Every setting the server holds. Five fields, so there is nothing to paginate. */
+export async function pullSettings(): Promise<Record<string, CloudEntry>> {
+  const body = (await request("/settings")) as { settings?: Record<string, CloudEntry> };
+  return body.settings ?? {};
+}
+
+/**
+ * Upsert settings and get back the full post-write state.
+ *
+ * The server refuses any field whose `updated` is older than what it holds, so a
+ * device flushing a stale offline edit cannot clobber a newer one — and the
+ * response says who won, which is why this returns rather than being fire-and-forget.
+ */
+export async function pushSettings(settings: Record<string, CloudEntry>): Promise<Record<string, CloudEntry>> {
+  const body = (await request("/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ settings }),
+  })) as { settings?: Record<string, CloudEntry> };
+  return body.settings ?? {};
 }
 
 /**

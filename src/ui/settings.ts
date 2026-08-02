@@ -8,9 +8,10 @@ import { pickServices } from "./servicePicker";
 import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
 import { downloadBackup, exportBackup, importBackup, parseBackup, summarize } from "../data/transfer";
 import { flush, getCursor, pendingCount } from "../data/outbox";
-import { syncNow } from "../data/replay";
+import { syncEvents, syncNow } from "../data/replay";
 import { describePlan, planBackfill, pushBackfill } from "../data/backfill";
 import { syncConfigured, testConnection } from "../api/syncserver";
+import { reconcileSettings } from "../data/cloudsettings";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -72,12 +73,28 @@ export const settingsRoute: Route = {
   render(container) {
     const settings = getSettings();
 
+    /**
+     * What each control was last *filled with*, as opposed to typed into.
+     *
+     * A field counts as edited exactly when its current value differs from this,
+     * which is the test for whether settings arriving from another device may
+     * overwrite it. Comparing against the stored value instead would be wrong:
+     * by the time that event fires the new value is already stored, so every
+     * field that changed remotely would look edited and none would ever update.
+     */
+    const shown = new Map<string, unknown>();
+
     // --- TMDB ---
     const tmdbKey = textInput(settings.tmdbApiKey, "TMDB API key");
+    shown.set("tmdbApiKey", settings.tmdbApiKey);
     const saveTmdbBtn = el("button", { class: "btn primary" }, "Save");
     saveTmdbBtn.addEventListener("click", () => {
       saveSettings({ tmdbApiKey: tmdbKey.value.trim() });
+      shown.set("tmdbApiKey", tmdbKey.value.trim());
       toast("TMDB key saved");
+      // Straight away rather than at the next sync: this is the one field the
+      // other devices cannot do anything without.
+      void reconcileSettings();
     });
     const tmdbHelp = el("p", {});
     tmdbHelp.innerHTML =
@@ -99,10 +116,13 @@ export const settingsRoute: Route = {
 
     // --- OMDb (optional ratings) ---
     const omdbKey = textInput(settings.omdbApiKey, "OMDb API key");
+    shown.set("omdbApiKey", settings.omdbApiKey);
     const saveOmdbBtn = el("button", { class: "btn primary" }, "Save");
     saveOmdbBtn.addEventListener("click", () => {
       saveSettings({ omdbApiKey: omdbKey.value.trim() });
+      shown.set("omdbApiKey", omdbKey.value.trim());
       toast("OMDb key saved");
+      void reconcileSettings();
     });
     const omdbHelp = el("p", {});
     omdbHelp.innerHTML =
@@ -113,7 +133,9 @@ export const settingsRoute: Route = {
 
     // --- Sync ---
     // The token is per-device on purpose: the repo is public, so it can only ever
-    // live in localStorage. The URL is not a secret and ships as a default.
+    // live in localStorage. The URL is not a secret and ships as a default. Those
+    // two are also the only settings that *cannot* come from the server, being how
+    // it is reached — which is what makes them the whole of a new device's setup.
     const syncUrlInput = textInput(settings.syncUrl, "https://…workers.dev");
     const syncTokenInput = textInput(settings.syncToken, "Sync token");
     const saveSyncBtn = el("button", { class: "btn primary" }, "Save");
@@ -146,12 +168,18 @@ export const settingsRoute: Route = {
       }
       syncNowBtn.textContent = "Syncing…";
       try {
-        const { pushed, applied, skipped } = await syncNow();
+        const { pushed, applied, skipped, settings: changedSettings } = await syncNow();
         const parts = [
           pushed ? `${pushed} uploaded` : "",
           applied ? `${applied} applied` : "",
           skipped ? `${skipped} skipped` : "",
+          changedSettings.length ? `${changedSettings.length} setting${changedSettings.length === 1 ? "" : "s"} updated` : "",
         ].filter(Boolean);
+        // The background redraw deliberately skips this screen so it can't eat a
+        // half-typed draft, which leaves the inputs stale after an explicit Sync
+        // now. Putting the arrived values back is safe here: only the fields that
+        // actually changed are touched, and the user asked for this.
+        if (changedSettings.length) showSavedValues(changedSettings);
         toast(parts.length ? `Synced — ${parts.join(", ")}` : "Synced — already up to date");
       } finally {
         syncNowBtn.textContent = "Sync now";
@@ -225,11 +253,18 @@ export const settingsRoute: Route = {
       `Keeps this device and the others in step through your own Cloudflare Worker. Every change is saved locally ` +
       `first and queued, so marking something watched offline still works — the queue uploads next time the app has ` +
       `a connection. <b>Test</b> checks the saved values, so Save first if you have just edited them.`;
+    const syncScopeHelp = el(
+      "p",
+      {},
+      "Your API keys and preferences ride along too, so setting up a new device is just these two fields — " +
+        "everything else arrives on the first sync. The theme stays per-device.",
+    );
     const syncCard = el(
       "div",
       { class: "card" },
       el("h2", {}, "Sync"),
       syncHelp,
+      syncScopeHelp,
       field("Server URL", syncUrlInput),
       field("Token", syncTokenInput),
       el("div", { class: "field-row" }, saveSyncBtn, syncNowBtn, testSyncBtn),
@@ -313,6 +348,25 @@ export const settingsRoute: Route = {
       resetBtns.set(p.key, btn);
     }
 
+    /** Put the stored value of named fields back into their controls. */
+    function showSavedValues(keys: readonly string[]): void {
+      const saved = getSettings();
+      if (keys.includes("tmdbApiKey")) shown.set("tmdbApiKey", (tmdbKey.value = saved.tmdbApiKey));
+      if (keys.includes("omdbApiKey")) shown.set("omdbApiKey", (omdbKey.value = saved.omdbApiKey));
+      for (const p of prefs) {
+        if (!keys.includes(p.key)) continue;
+        (p.show as (v: unknown) => void)(saved[p.key]);
+        shown.set(p.key, saved[p.key]);
+      }
+      syncPrefButtons();
+    }
+
+    /** Whether the user has changed a control since it was last filled from storage. */
+    function edited(key: string, current: unknown): boolean {
+      return shown.has(key) && current !== shown.get(key);
+    }
+
+
     /** Fields whose draft value would change if the defaults were put back. */
     const offDefault = (): typeof prefs => prefs.filter((p) => p.draft() !== defaultSettings[p.key]);
 
@@ -355,7 +409,10 @@ export const settingsRoute: Route = {
       syncPrefButtons();
     });
 
-    for (const p of prefs) (p.show as (v: unknown) => void)(settings[p.key]);
+    for (const p of prefs) {
+      (p.show as (v: unknown) => void)(settings[p.key]);
+      shown.set(p.key, settings[p.key]);
+    }
     for (const input of [staleInput, servicesInput, countriesInput]) {
       input.addEventListener("input", syncPrefButtons);
     }
@@ -369,10 +426,16 @@ export const settingsRoute: Route = {
       const patch: Partial<AppSettings> = {};
       for (const p of prefs) (patch as Record<string, unknown>)[p.key] = p.draft();
       saveSettings(patch);
-      for (const p of prefs) (p.show as (v: unknown) => void)(patch[p.key]); // reflect trimming/clamping
+      for (const p of prefs) {
+        (p.show as (v: unknown) => void)(patch[p.key]); // reflect trimming/clamping
+        shown.set(p.key, patch[p.key]);
+      }
       applyTheme();
       syncPrefButtons();
       toast("Preferences saved");
+      // Everything here except the theme is shared, and only what actually
+      // changed carries a new timestamp, so a Save that touched nothing sends nothing.
+      void reconcileSettings();
     });
     syncPrefButtons();
 
@@ -423,10 +486,42 @@ export const settingsRoute: Route = {
       el(
         "p",
         { class: "field-help" },
-        "Reset restores a field to its default. Fields left on their default follow along when the app ships new ones.",
+        "Reset restores a field to its default. Fields left on their default follow along when the app ships new ones, " +
+          "on every device — a reset travels like any other change. Saving here syncs to your other devices; the most " +
+          "recent edit of a given field wins.",
       ),
       el("div", { class: "button-row" }, saveBtn, resetAllBtn),
     );
+
+    /**
+     * Settings that arrived from another device while this screen is open.
+     *
+     * `main.ts` deliberately does not redraw the route for these, because the
+     * preference controls hold an unsaved draft. So update just the fields that
+     * moved, and of those only the ones sitting on their saved value — a field
+     * being edited keeps what is typed in it, and its Save button stays lit, so
+     * the user's own edit still wins if they go through with it.
+     */
+    const onRemoteSettings = (e: Event): void => {
+      const detail = (e as CustomEvent<{ settingsOnly?: boolean; keys?: string[] }>).detail;
+      if (!detail?.settingsOnly || !detail.keys?.length) return;
+      // The router replaces the container's children without unmounting anything,
+      // so this listener outlives the screen it belongs to. Retiring it once the
+      // card is detached stops them stacking up one per visit to Settings.
+      if (!prefsCard.isConnected) {
+        syncEvents.removeEventListener("applied", onRemoteSettings);
+        return;
+      }
+      const quiet = detail.keys.filter((key) => {
+        const pref = prefs.find((p) => p.key === key);
+        if (pref) return !edited(key, pref.draft());
+        if (key === "tmdbApiKey") return !edited(key, tmdbKey.value.trim());
+        if (key === "omdbApiKey") return !edited(key, omdbKey.value.trim());
+        return true;
+      });
+      if (quiet.length) showSavedValues(quiet);
+    };
+    syncEvents.addEventListener("applied", onRemoteSettings);
 
     // --- JustWatch top-ups ---
     // Two halves on purpose. The passive line is what real top-ups did, which is the only thing

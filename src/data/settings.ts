@@ -21,7 +21,27 @@ export interface AppSettings {
 }
 
 const SETTINGS_KEY = "watchwhat.settings";
+const SETTINGS_STAMPS_KEY = "watchwhat.settingsUpdated";
+const SETTINGS_SEEDED_KEY = "watchwhat.settingsSeeded";
 const NEVER_MARK_PREVIOUS_KEY = "watchwhat.neverMarkPrevious";
+
+/**
+ * Settings kept on the sync server rather than only in this browser, so a new
+ * device needs nothing typed into it but the sync URL and token.
+ *
+ * The rest are deliberately excluded. `syncUrl` and `syncToken` are how you
+ * reach the server, so they cannot come from it; `theme` is left per-device
+ * because a phone in dark and a desktop in light is a reasonable thing to want.
+ */
+export const CLOUD_KEYS = ["tmdbApiKey", "omdbApiKey", "staleDays", "myServices", "watchCountries"] as const;
+
+export type CloudKey = (typeof CLOUD_KEYS)[number];
+
+/** One field as it travels. `value: null` means "explicitly back on the default". */
+export interface CloudEntry {
+  value: unknown;
+  updated: string;
+}
 
 const defaults: AppSettings = {
   tmdbApiKey: "",
@@ -96,6 +116,11 @@ function readStored(): Partial<AppSettings> {
   // not just this read: a key left behind would look unpinned only while the two happened to
   // agree, then silently take over again the next time the default moved. Reset and Save are
   // both greyed out in that state, so nothing else would ever clear it.
+  //
+  // Stamps are deliberately left alone here. Dropping a pin that has caught up
+  // with the default does not change the effective value, so there is nothing to
+  // tell the other device about — and stamping it would mean a background read
+  // could race a real edit made elsewhere.
   let pruned = false;
   for (const key of Object.keys(stored) as (keyof AppSettings)[]) {
     if (stored[key] === defaults[key]) {
@@ -115,16 +140,127 @@ export function getSettings(): AppSettings {
   return { ...defaults, ...readStored() };
 }
 
+/**
+ * When each cloud-backed field was last changed *on this device*, ISO 8601.
+ *
+ * This doubles as the queue: a field whose stamp is newer than the server's is
+ * one the server has not accepted yet, so an edit made offline is pushed by the
+ * next reconcile rather than being lost. That is why there is no outbox for
+ * settings — the stamp is the record that something is owed.
+ */
+function readStamps(): Record<string, string> {
+  return readJson<Record<string, string>>(SETTINGS_STAMPS_KEY) ?? {};
+}
+
+function writeStamps(stamps: Record<string, string>): void {
+  localStorage.setItem(SETTINGS_STAMPS_KEY, JSON.stringify(stamps));
+}
+
 export function saveSettings(patch: Partial<AppSettings>): AppSettings {
+  const before = getSettings();
   const stored: Record<string, unknown> = { ...readStored() };
+  const stamps = readStamps();
+  const now = new Date().toISOString();
+  let stamped = false;
+
   for (const key of Object.keys(patch) as (keyof AppSettings)[]) {
     const value = patch[key];
     if (value === undefined) continue;
     if (value === defaults[key]) delete stored[key];
     else stored[key] = value;
+    // Only a real change is stamped. Settings' "Save preferences" writes all four
+    // fields whether or not they were touched, and stamping those would push
+    // unchanged values that could then win against a genuine edit elsewhere.
+    if (value !== before[key] && (CLOUD_KEYS as readonly string[]).includes(key)) {
+      stamps[key] = now;
+      stamped = true;
+    }
   }
+
   writeStored(stored as Partial<AppSettings>);
+  if (stamped) writeStamps(stamps);
   return { ...defaults, ...(stored as Partial<AppSettings>) };
+}
+
+/**
+ * Give the settings this device already had a stamp, so they reach a server that
+ * has never held any.
+ *
+ * Without this nothing would ever seed it: stamps are new, so no existing device
+ * has one, and a field with neither a local stamp nor a remote row is read as
+ * "no opinion anywhere" and left alone — leaving a TMDB key sitting in a browser
+ * that the new device was supposed to inherit it from.
+ *
+ * Only pinned fields are stamped. A field still on its default is not an
+ * opinion, and asserting it would pin the default everywhere, which is the
+ * opposite of what "left alone follows future defaults" is for.
+ *
+ * Runs once per device. If two devices seed different values for the same field,
+ * the one that opened later wins — same rule as any other edit.
+ */
+export function seedCloudStamps(): void {
+  if (localStorage.getItem(SETTINGS_SEEDED_KEY)) return;
+  localStorage.setItem(SETTINGS_SEEDED_KEY, new Date().toISOString());
+
+  const stored = readStored() as Record<string, unknown>;
+  const stamps = readStamps();
+  const now = new Date().toISOString();
+  let seeded = false;
+  for (const key of CLOUD_KEYS) {
+    if (!(key in stored) || stamps[key]) continue;
+    stamps[key] = now;
+    seeded = true;
+  }
+  if (seeded) writeStamps(stamps);
+}
+
+/**
+ * A remote value is only adopted if it is the same shape as the default. The
+ * server stores opaque JSON by design, so this is the one place that can stop a
+ * wrong type — `staleDays` arriving as a string, say — from reaching code that
+ * assumes otherwise. A mismatch is dropped rather than coerced.
+ */
+function acceptable(key: CloudKey, value: unknown): boolean {
+  if (value === null) return true; // an unpin, back to the default
+  return typeof value === typeof defaults[key];
+}
+
+/**
+ * Fold the server's settings into this device's, newest write per field wins.
+ *
+ * Returns the fields that need pushing — ones this device changed since the
+ * server last heard, and ones the server has never seen at all.
+ */
+export function mergeCloudSettings(remote: Record<string, CloudEntry>): {
+  changed: CloudKey[];
+  push: Record<string, CloudEntry>;
+} {
+  const stored: Record<string, unknown> = { ...readStored() };
+  const stamps = readStamps();
+  const changed: CloudKey[] = [];
+  const push: Record<string, CloudEntry> = {};
+
+  for (const key of CLOUD_KEYS) {
+    const mine = stamps[key];
+    const theirs = remote[key];
+
+    if (theirs && (!mine || theirs.updated > mine)) {
+      if (!acceptable(key, theirs.value)) continue;
+      if (theirs.value === null || theirs.value === defaults[key]) delete stored[key];
+      else stored[key] = theirs.value;
+      stamps[key] = theirs.updated;
+      changed.push(key);
+    } else if (mine && (!theirs || mine > theirs.updated)) {
+      push[key] = { value: key in stored ? stored[key] : null, updated: mine };
+    }
+    // Equal stamps are the same write coming back; nothing to do either way.
+  }
+
+  if (changed.length) {
+    writeStored(stored as Partial<AppSettings>);
+    writeStamps(stamps);
+  }
+  return { changed, push };
 }
 
 /** What each per-field Reset in Settings restores, and what saveSettings unpins against. */

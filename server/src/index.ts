@@ -1,5 +1,5 @@
 /**
- * WatchWhat sync — an append-only event log on Cloudflare D1.
+ * WatchWhat sync — an append-only event log on Cloudflare D1, plus settings.
  *
  * The server never interprets an event. It appends what it is handed and returns
  * what it holds after a cursor; every decision about what an event *means* stays
@@ -10,6 +10,11 @@
  * The one thing it does enforce is shape. A malformed row would survive in the
  * log forever and break replay on every device that pulls it, so a batch is
  * rejected whole rather than half-written.
+ *
+ * `/settings` is the exception to "append-only", and only that: it stores named
+ * values that get overwritten, so that a new device needs nothing typed into it
+ * but this Worker's URL and token. It still does not interpret — a key is a
+ * string and a value is opaque JSON, so adding a setting needs no deploy here.
  */
 
 export interface Env {
@@ -51,6 +56,15 @@ const JUSTWATCH_ENDPOINT = "https://apis.justwatch.com/graphql";
 /** A GraphQL document from this client is a few hundred bytes; this is only a sanity bound. */
 const MAX_QUERY_CHARS = 8192;
 
+/**
+ * Sanity bounds for `/settings`. The real list is five fields, the longest of
+ * which is a ~200-character service list, so these are far above anything the
+ * app sends and exist only to stop the table being used as storage.
+ */
+const MAX_SETTING_KEYS = 100;
+const MAX_SETTING_KEY_CHARS = 64;
+const MAX_SETTING_VALUE_CHARS = 4096;
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get("Origin");
@@ -62,7 +76,9 @@ export default {
 
     const url = new URL(request.url);
     const route = url.pathname;
-    if (route !== "/events" && route !== "/justwatch") return json({ error: "Not found" }, 404, cors);
+    if (route !== "/events" && route !== "/justwatch" && route !== "/settings") {
+      return json({ error: "Not found" }, 404, cors);
+    }
 
     if (!(await authorized(request, env))) {
       return json({ error: "Unauthorized" }, 401, cors);
@@ -72,6 +88,11 @@ export default {
       if (route === "/justwatch") {
         if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, cors);
         return await handleJustWatch(request, cors);
+      }
+      if (route === "/settings") {
+        if (request.method === "GET") return await handleGetSettings(env, cors);
+        if (request.method === "PUT") return await handlePutSettings(request, env, cors);
+        return json({ error: "Method not allowed" }, 405, cors);
       }
       if (request.method === "GET") return await handleGet(url, env, cors);
       if (request.method === "POST") return await handlePost(request, env, cors);
@@ -161,6 +182,95 @@ async function handlePost(request: Request, env: Env, cors: HeadersInit): Promis
 
   const row = await env.DB.prepare("SELECT MAX(seq) AS seq FROM events").first<{ seq: number | null }>();
   return json({ accepted: events.length, seq: row?.seq ?? 0 }, 200, cors);
+}
+
+/** Every setting the server holds, keyed by name. Small enough to never paginate. */
+async function handleGetSettings(env: Env, cors: HeadersInit): Promise<Response> {
+  return json({ settings: await readSettings(env) }, 200, cors);
+}
+
+/**
+ * Upsert named settings, last write wins per field.
+ *
+ * The `WHERE excluded.updated > settings.updated` guard is what makes that
+ * actually true rather than merely usual: a device that edited offline and
+ * flushes an hour later cannot overwrite a newer value, and because the guard
+ * lives in the statement there is no read-modify-write window to lose a race in.
+ *
+ * The response carries the full post-write state, so a client whose value lost
+ * learns the winner in the same round trip instead of staying wrong until its
+ * next poll.
+ */
+async function handlePutSettings(request: Request, env: Env, cors: HeadersInit): Promise<Response> {
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return json({ error: "Body must be JSON" }, 400, cors);
+  }
+
+  const incoming = (payload as { settings?: unknown })?.settings;
+  if (typeof incoming !== "object" || incoming === null || Array.isArray(incoming)) {
+    return json({ error: "Expected { settings: { key: { value, updated } } }" }, 400, cors);
+  }
+
+  const entries = Object.entries(incoming as Record<string, unknown>);
+  if (entries.length > MAX_SETTING_KEYS) {
+    return json({ error: `At most ${MAX_SETTING_KEYS} settings per request` }, 400, cors);
+  }
+
+  const rows: { key: string; value: string; updated: string }[] = [];
+  for (const [key, candidate] of entries) {
+    if (!key.trim() || key.length > MAX_SETTING_KEY_CHARS) {
+      return json({ error: `\`${key}\`: key must be non-empty and at most ${MAX_SETTING_KEY_CHARS} characters` }, 400, cors);
+    }
+    if (typeof candidate !== "object" || candidate === null) {
+      return json({ error: `\`${key}\`: must be an object` }, 400, cors);
+    }
+    const { value, updated } = candidate as { value?: unknown; updated?: unknown };
+    // `value` is deliberately unconstrained apart from size — null included, which
+    // is how a Reset travels. Only `updated` has to mean something here, because
+    // the merge is decided on it.
+    if (typeof updated !== "string" || Number.isNaN(Date.parse(updated))) {
+      return json({ error: `\`${key}\`: \`updated\` must be an ISO 8601 timestamp` }, 400, cors);
+    }
+    if (value === undefined) return json({ error: `\`${key}\`: \`value\` is required (use null to unset)` }, 400, cors);
+    let encoded: string;
+    try {
+      encoded = JSON.stringify(value);
+    } catch {
+      return json({ error: `\`${key}\`: \`value\` must be JSON-serialisable` }, 400, cors);
+    }
+    if (encoded.length > MAX_SETTING_VALUE_CHARS) {
+      return json({ error: `\`${key}\`: \`value\` is too long` }, 400, cors);
+    }
+    rows.push({ key, value: encoded, updated });
+  }
+
+  if (rows.length) {
+    const upsert = env.DB.prepare(
+      "INSERT INTO settings (key, value, updated) VALUES (?, ?, ?) " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = excluded.updated " +
+        "WHERE excluded.updated > settings.updated",
+    );
+    await env.DB.batch(rows.map((r) => upsert.bind(r.key, r.value, r.updated)));
+  }
+
+  return json({ settings: await readSettings(env) }, 200, cors);
+}
+
+async function readSettings(env: Env): Promise<Record<string, { value: unknown; updated: string }>> {
+  const { results } = await env.DB.prepare("SELECT key, value, updated FROM settings").all<{
+    key: string;
+    value: string;
+    updated: string;
+  }>();
+
+  const out: Record<string, { value: unknown; updated: string }> = {};
+  for (const row of results ?? []) {
+    out[row.key] = { value: JSON.parse(row.value) as unknown, updated: row.updated };
+  }
+  return out;
 }
 
 /**
@@ -261,7 +371,7 @@ async function authorized(request: Request, env: Env): Promise<boolean> {
 
 function corsHeaders(origin: string | null): Record<string, string> {
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
     "Access-Control-Max-Age": "86400",
     // The response body varies by caller, so caches must not share it across origins.
