@@ -1301,6 +1301,13 @@ a.cast-card {
   color: var(--text-dim);
 }
 
+/* A flag is a picture, so it wants none of the code's small-caps treatment. */
+.wtw-cc.flag {
+  font-size: 20px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
 .wtw-cc.link {
   text-decoration: none;
 }

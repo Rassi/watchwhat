@@ -25,6 +25,33 @@ export function normalizeService(name: string): string {
     .replace(/[^a-z0-9+]/g, "");
 }
 
+/**
+ * Whether this device can actually *draw* a flag, measured rather than guessed.
+ *
+ * There are no flag characters in Unicode. "🇩🇰" is two regional indicators, D and
+ * K, which a font may choose to fuse into one flag glyph — Apple's do, and Windows
+ * ships none at all, so the pair falls back to two boxed letters reading as "DK".
+ * A user-agent test would be answering a different question; this asks the only one
+ * that matters by measuring the pair against a single indicator. Fused, it is one
+ * glyph and about as wide as one; unfused it is two. Measured on Windows: 1.90.
+ *
+ * Anything ambiguous falls to the country code, which is the harmless answer —
+ * legible everywhere, and what half these devices were showing regardless.
+ */
+let flagSupport: boolean | null = null;
+
+function drawsFlagEmoji(): boolean {
+  if (flagSupport === null) {
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx) return (flagSupport = false);
+    ctx.font = "16px sans-serif";
+    const pair = ctx.measureText("\u{1F1E9}\u{1F1F0}").width;
+    const one = ctx.measureText("\u{1F1E9}").width;
+    flagSupport = one > 0 && pair < one * 1.5;
+  }
+  return flagSupport;
+}
+
 function watchCountries(): string[] {
   return getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
 }
@@ -174,16 +201,12 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
   const countries = watchCountries();
   const verdict = serviceVerdicts();
 
-  /**
-   * The country code, deliberately as text rather than a flag emoji.
-   *
-   * It used to be a regional-indicator pair — correct Unicode, and Apple draws it
-   * as a flag — but Windows ships no national flag glyphs at all, so the same two
-   * characters fell back to reading as "DK" there. One device showing a picture and
-   * another showing letters is worse than both showing letters, and DK, NO and SE
-   * are three red-and-white crosses that nobody can tell apart at 20px anyway.
-   */
-  const label = (cc: string): string => cc;
+  // A flag on the devices that can draw one, the plain code on the rest.
+  const flags = drawsFlagEmoji();
+  const label = (cc: string): string =>
+    flags && cc.length === 2
+      ? String.fromCodePoint(...[...cc].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65))
+      : cc;
 
   const rows: HTMLElement[] = [];
   for (const cc of countries) {
@@ -288,7 +311,7 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
       ? el(
           "a",
           {
-            class: "wtw-cc link",
+            class: `wtw-cc link${flags ? " flag" : ""}`,
             href: entry.link,
             target: "_blank",
             rel: "noopener",
@@ -296,7 +319,7 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
           },
           label(cc),
         )
-      : el("span", { class: "wtw-cc" }, label(cc));
+      : el("span", { class: `wtw-cc${flags ? " flag" : ""}`, title: cc }, label(cc));
     rows.push(el("div", { class: "wtw-country" }, prefix, chips));
   }
   if (rows.length === 0) return null;
