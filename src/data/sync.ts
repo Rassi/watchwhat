@@ -614,8 +614,11 @@ export async function ensureMovieDetails(
     // A hand-asked refresh always tops up, whatever the dates say — someone pressing the button
     // is reporting that TMDB looks wrong, which is the entire reason this fallback exists.
     if (movie.ids.tmdb && (opts?.force || nearRelease(movie))) {
-      const offers = await fetchJustWatchOffers(movie.title, movie.ids.tmdb, watchCountryList());
+      const { offers, outcome } = await fetchJustWatchOffers(movie.title, movie.ids.tmdb, watchCountryList());
       if (offers) movie.providers = mergeJustWatch(movie.providers ?? {}, offers);
+      // Kept per title rather than read from the global health record afterwards: this loop runs
+      // four movies at once, so the shared record belongs to whichever finished last.
+      movie.topUp = outcome;
     }
     movie.tmdbFetchedAt = Date.now();
     await dbPut("movies", traktId, movie);

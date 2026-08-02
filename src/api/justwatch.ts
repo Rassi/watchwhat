@@ -224,17 +224,39 @@ export async function checkJustWatch(countries: string[]): Promise<JustWatchChec
 }
 
 /**
- * Offers per country for one title, or null if anything at all went wrong. Countries are aliased
- * into a single query rather than requested one at a time — six round trips per title would make
- * this too expensive to do automatically.
+ * What happened, for the caller to store against the title it asked about.
+ *
+ * The global health record cannot answer this: `ensureMovieDetails` refreshes several movies
+ * concurrently, so reading the shared record after a call would happily attribute one film's
+ * failure to another. Per-title outcomes have to come back with the result.
+ */
+export interface JustWatchOutcome {
+  at: number;
+  stage: JustWatchHealth["stage"];
+}
+
+export interface JustWatchResult {
+  offers: Record<string, JustWatchOffer[]> | null;
+  outcome: JustWatchOutcome;
+}
+
+/**
+ * Offers per country for one title; `offers` is null if anything at all went wrong. Countries are
+ * aliased into a single query rather than requested one at a time — six round trips per title
+ * would make this too expensive to do automatically.
  */
 export async function fetchJustWatchOffers(
   title: string,
   tmdbId: number,
   countries: string[],
-): Promise<Record<string, JustWatchOffer[]> | null> {
+): Promise<JustWatchResult> {
+  const done = (stage: JustWatchHealth["stage"], offers: Record<string, JustWatchOffer[]> | null): JustWatchResult => ({
+    offers,
+    outcome: { at: Date.now(), stage },
+  });
   const wanted = countries.map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
-  if (wanted.length === 0) return null;
+  // No countries configured is not a JustWatch problem, so it must not be recorded as one.
+  if (wanted.length === 0) return { offers: null, outcome: { at: Date.now(), stage: "ok" } };
   try {
     // US first: the largest catalogue, so the likeliest to know a title at all.
     const searchIn = [...new Set(["US", ...wanted])];
@@ -243,7 +265,7 @@ export async function fetchJustWatchOffers(
       // Not necessarily breakage: a title genuinely absent from JustWatch looks the same as a
       // renamed search field. Which it is shows up in whether *every* title starts failing.
       recordHealth({ at: Date.now(), ok: false, stage: "search", detail: `No JustWatch match for "${title}"` });
-      return null;
+      return done("search", null);
     }
 
     const aliases = wanted
@@ -263,7 +285,7 @@ export async function fetchJustWatchOffers(
     );
     if (!data?.node) {
       recordHealth({ at: Date.now(), ok: false, stage: "offers", detail: "Offers query returned no node" });
-      return null;
+      return done("offers", null);
     }
 
     const unknownKinds = new Set<string>();
@@ -300,7 +322,10 @@ export async function fetchJustWatchOffers(
           : `${title}: matched, but no usable offers in any watch country`,
       ...(unknownKinds.size > 0 ? { unknownKinds: [...unknownKinds] } : {}),
     });
-    return countries.length > 0 ? out : null;
+    // "Matched, but nothing on offer here" is a real answer, not a breakage — a film genuinely
+    // absent from every configured country looks exactly like this. So the per-title outcome is
+    // `ok` even where the global health record calls it a miss: nothing needs the user's attention.
+    return done("ok", countries.length > 0 ? out : null);
   } catch (e) {
     // Unofficial API: a failure just means TMDB's answer stands.
     recordHealth({
@@ -309,6 +334,6 @@ export async function fetchJustWatchOffers(
       stage: "reach",
       detail: e instanceof Error ? `${e.name}: ${e.message}` : "Request failed",
     });
-    return null;
+    return done("reach", null);
   }
 }

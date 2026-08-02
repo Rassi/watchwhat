@@ -104,10 +104,30 @@ export interface WhereToWatchOpts {
   /** When this device last fetched the provider data, for the freshness line. */
   fetchedAt?: number | null;
   /**
+   * How the last JustWatch top-up went, for movies that attempted one. Shows never
+   * have this — they have no JustWatch path at all.
+   */
+  topUp?: { at: number; stage: "reach" | "search" | "offers" | "ok" } | null;
+  /**
    * Re-check now, ignoring the TTL. The caller owns what "changed" means, so it
    * also owns saying nothing moved; this only reports a request that failed.
    */
   onRefresh?: () => Promise<void>;
+}
+
+/**
+ * Why a failed top-up is worth saying out loud here rather than only in Settings: a stale listing
+ * is invisible by construction. A film that moved onto a subscription looks exactly like a film
+ * that did not, so nothing prompts you to go and check — the card has to volunteer it.
+ *
+ * Only genuine breakage warns. "JustWatch has no match for this title" is routine and would cry
+ * wolf on a good share of an older library, so it downgrades to a neutral note on the freshness
+ * line: enough to tell a verified listing from an unverified one, not enough to alarm.
+ */
+function topUpWarning(stage: "reach" | "search" | "offers" | "ok"): string | null {
+  if (stage === "reach") return "Couldn't reach JustWatch — this is TMDB's listing alone, and may be behind.";
+  if (stage === "offers") return "JustWatch answered in a shape this app didn't understand — this is TMDB's listing alone, and may be behind.";
+  return null;
 }
 
 /**
@@ -240,6 +260,19 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
       ),
     );
   }
+  // A search miss says something real — this listing was never confirmed against JustWatch — but
+  // it is not a fault, so it rides the freshness line instead of a warning.
+  if (opts?.topUp?.stage === "search") {
+    attrib.append(
+      el(
+        "span",
+        { class: "wtw-updated", title: "JustWatch had no match for this title, so this is TMDB's listing alone" },
+        " · TMDB only",
+      ),
+    );
+  }
+
+  const warning = opts?.topUp ? topUpWarning(opts.topUp.stage) : null;
   return el(
     "div",
     { class: "card" },
@@ -249,6 +282,13 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
       el("h2", {}, "Where to watch"),
       opts?.onRefresh ? refreshButton(opts.onRefresh) : null,
     ),
+    warning
+      ? el(
+          "p",
+          { class: "wtw-warn", title: `Last attempted ${new Date(opts!.topUp!.at).toLocaleString()}` },
+          warning,
+        )
+      : null,
     ...rows,
     attrib,
   );

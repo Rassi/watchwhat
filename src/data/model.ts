@@ -163,6 +163,12 @@ export interface MovieRec {
   providers?: Record<string, { link: string | null; providers: { name: string; logo: string | null; kind: string }[] }>;
   /** Which provider kinds the cached `providers` were fetched with; see PROVIDERS_VERSION. */
   providersVersion?: number;
+  /**
+   * How the last JustWatch top-up for this title went, so the card can say when its listing is
+   * TMDB's alone. Absent means never attempted, which is the normal state — the top-up only runs
+   * near a release or on demand. Per-device like `providers` themselves, and for the same reason.
+   */
+  topUp?: { at: number; stage: "reach" | "search" | "offers" | "ok" };
   tmdbFetchedAt?: number;
 }
 

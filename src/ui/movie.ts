@@ -54,7 +54,10 @@ export const movieRoute: Route = {
       // having it jump under you while reading is worse than showing the old providers a moment
       // longer. A no-op refresh must not repaint at all, or it steals the selection and any
       // open dropdown for nothing.
-      const snapshot = (m: MovieRec | undefined): string => JSON.stringify([m?.providers, m?.cast, m?.poster, m?.backdrop, m?.digitalRelease, m?.streamingRelease, m?.extRatings]);
+      // `topUp.stage` but never `topUp.at`: the stage appearing or clearing changes what the card
+      // says and must repaint, while the timestamp moves on every attempt and would make "no
+      // change" impossible to detect on exactly the titles that top up most often.
+      const snapshot = (m: MovieRec | undefined): string => JSON.stringify([m?.providers, m?.cast, m?.poster, m?.backdrop, m?.digitalRelease, m?.streamingRelease, m?.extRatings, m?.topUp?.stage]);
       let last = snapshot(movies.get(traktId));
 
       const paint = (): void => {
@@ -247,7 +250,11 @@ function renderPage(
     );
 
     const pieces: HTMLElement[] = [header, actions, about];
-    const wtw = whereToWatchCard(movie.providers, { fetchedAt: movie.tmdbFetchedAt, onRefresh: onRefreshProviders });
+    const wtw = whereToWatchCard(movie.providers, {
+      fetchedAt: movie.tmdbFetchedAt,
+      topUp: movie.topUp,
+      onRefresh: onRefreshProviders,
+    });
     if (wtw) pieces.push(wtw);
     const cast = castStripCard(movie.cast);
     if (cast) pieces.push(cast);

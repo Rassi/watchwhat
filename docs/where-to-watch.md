@@ -165,6 +165,42 @@ IP, against an unofficial endpoint, now via a Worker whose address also carries
 sync. Automatic top-ups are rare by construction; only a sweep would make them
 frequent.
 
+## Saying when a listing is unverified
+
+A stale listing is invisible by construction: a film that moved onto a
+subscription looks exactly like one that did not, so nothing prompts you to go
+and check. Settings can report the last top-up's health, but that is where you
+look once you already suspect something — which is the wrong trigger. So the
+card volunteers it, from `movie.topUp` (`{ at, stage }`, set wherever a top-up is
+attempted).
+
+| `topUp` | Card shows | Because |
+|---|---|---|
+| absent | nothing | Never attempted — the normal state for most of the library |
+| `ok` | nothing | Confirmed against JustWatch |
+| `search` | `· TMDB only` on the freshness line | Routine. JustWatch has no match; TMDB's listing stands |
+| `reach` / `offers` | a warning above the rows | Actionable: unreachable, or the API changed shape |
+
+Only real breakage warns. A search miss would cry wolf across a good share of an
+older library, so it downgrades to a neutral note — enough to tell a verified
+listing from an unverified one, not enough to alarm.
+
+Three things here are load-bearing:
+
+- **The outcome comes back from `fetchJustWatchOffers`, not from the global
+  health record.** `ensureMovieDetails` refreshes four movies at once, so reading
+  the shared record after the call would attribute one film's failure to another.
+- **"Matched, but no offers in any watch country" is `ok`, not `offers`.** A film
+  genuinely absent from every country you watch in is a real answer. The global
+  health record does count it as a miss; the per-title outcome deliberately does
+  not, because nothing needs your attention.
+- **`topUp.stage` is in the movie page's change snapshot; `topUp.at` is not.** The
+  stage appearing or clearing changes what the card says and must repaint. The
+  timestamp moves on every attempt, and including it would make "no change"
+  impossible to detect on exactly the titles that top up most often.
+
+Shows never set this, having no JustWatch path at all.
+
 ## How a chip is decided
 
 Two settings drive the whole card:
@@ -209,6 +245,12 @@ disc as a rental.
 - **Two devices disagreeing is usually cache age, not a bug.** Check the "checked
   …" line before investigating anything else, and press ↻ before concluding
   something is wrong.
+- **A warning on one device means nothing about another.** `topUp` is per-device,
+  like `providers` and for the same reason — the phone can top up fine while the
+  desktop cannot reach JustWatch at all.
+- **A warning does not clear on its own** unless the title is still near a
+  release. It is stating something that stays true — this listing was never
+  confirmed — so the ↻ is what clears it.
 - **Providers are not in the sync log and should not be.** Syncing them would
   propagate one device's stale answer to a device that had a fresher one.
 - **A show's providers live on the episodes record**, not the show record.
