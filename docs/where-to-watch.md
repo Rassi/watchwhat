@@ -43,11 +43,11 @@ directly:
   removed**: an entry TMDB has and JustWatch does not is far more likely to be a
   search miss than a delisting.
 
-### ⚠️ The top-up does not work in production (found 2026-08-01)
+### The top-up did not work in production (found 2026-08-01, fixed 2026-08-02)
 
 **JustWatch sends no `Access-Control-Allow-Origin` for `https://rassi.github.io`,
-while allowing `http://localhost:5173`.** So the top-up has only ever worked on
-the dev server, and the deployed app has always been TMDB-only.
+while allowing `http://localhost:5173`.** So for the app's whole life the top-up
+worked only on the dev server, and the deployed app was TMDB-only.
 
 It fails silently by design — a failed top-up means "no extra information" and
 TMDB's answer stands — so nothing looked broken. It surfaced as *The Drama*
@@ -74,6 +74,13 @@ The proxy is deliberately **not** general: the destination is fixed in the Worke
 and never taken from the request, and the bearer token is still required. An open
 relay against someone else's API, on someone else's quota, is a fine way to get
 the Worker's address blocked.
+
+Deployed and verified on the live site 2026-08-02: *The Drama* picked up its
+HBO Max chips and the Settings check passes from `https://rassi.github.io`.
+**A device with no sync token configured still cannot top up in production** —
+it falls back to calling JustWatch directly, which is exactly the request CORS
+refuses. That is the intended trade, but it means the Settings check failing on
+a new device is a missing token before it is anything else.
 
 *The Drama* was the case that exposed all of this. TMDB listed it rent/buy only
 in the US while JustWatch reported `FLATRATE` on HBO Max — so localhost showed it
