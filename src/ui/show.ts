@@ -17,12 +17,36 @@ import {
   setEpisodesWatched,
   type EpisodeRef,
 } from "../data/sync";
-import { isTmdbKeyed, type EpisodeInfo, type EpisodesRec, type Library, type ShowRec } from "../data/model";
+import { isTmdbKeyed, type EpisodeInfo, type EpisodesRec, type Library, type ProgressRec, type ShowRec } from "../data/model";
 import { backdropUrl, fetchShowSummary, stillUrl } from "../api/tmdb";
 
 function epCode(season: number, number: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `S${pad(season)} | E${pad(number)}`;
+}
+
+/** Position in watch order, for comparing two episodes of the same show. */
+const watchOrder = (ep: { season: number; number: number }): number => ep.season * 10_000 + ep.number;
+
+/**
+ * The episode you most recently watched — the anchor for "what's next".
+ *
+ * Not the same as the first gap in the show: someone who has followed Location,
+ * Location, Location as it airs leaves S01E01 unwatched forever, and what they
+ * want next is the episode after the S42 they just saw. Watch times decide it
+ * where they exist; imported history that carries none falls back to order.
+ */
+function lastWatchedPoint(progress: ProgressRec | undefined): { season: number; number: number } | null {
+  let best: { season: number; number: number; at: string } | null = null;
+  for (const season of progress?.seasons ?? []) {
+    if (season.number === 0) continue; // a special says nothing about where you're up to
+    for (const ep of season.episodes) {
+      if (!ep.completed) continue;
+      const cand = { season: season.number, number: ep.number, at: ep.watchedAt ?? "" };
+      if (!best || cand.at > best.at || (cand.at === best.at && watchOrder(cand) > watchOrder(best))) best = cand;
+    }
+  }
+  return best && { season: best.season, number: best.number };
 }
 
 /** TV Time-style countdown: big number over a small "days" label. Null if the date passed. */
@@ -136,16 +160,9 @@ function renderPage(
     if (updated) renderContent();
   });
   const progress0 = lib.progress.get(show.traktId);
-  // Skip specials when guessing where you're up to — on a show you haven't started they
-  // sort first, and opening the page onto 80-odd specials helps nobody.
-  const firstOpen =
-    progress0?.nextEpisode?.season ?? progress0?.seasons.find((s) => s.number > 0 && s.completed < s.aired)?.number;
-  if (firstOpen != null) expanded.add(firstOpen);
-  // The season you'd watch next never folds away, so a show you haven't started can't
-  // collapse into nothing but bands. Without progress that's simply the first season.
-  const numbered = episodesRec.seasons.filter((s) => s.number > 0 && s.episodes.length > 0).map((s) => s.number);
-  const startHere = firstOpen || (numbered.length > 0 ? Math.min(...numbered) : null);
-  if (startHere != null) unfolded.add(startHere);
+  // Where you're up to, captured once: the strip then just advances as episodes get
+  // ticked off, instead of jumping about when you fill in an old gap further down.
+  const upTo = lastWatchedPoint(progress0);
 
   const rerender = (): void => renderContent();
 
@@ -354,27 +371,31 @@ function renderPage(
   /**
    * Next unwatched aired episodes, in watch order (for the Continue tracking strip).
    *
-   * Anchored to `firstOpen` — where you're up to — rather than the earliest
-   * unwatched episode anywhere, so a show you dip into out of order (45 seasons of
-   * Location, Location, Location) offers the current season instead of S01E01. Marking
-   * an episode watched nulls `nextEpisode` until the next refetch, so the anchor is the
-   * one captured at page load; the strip then just advances as episodes get ticked off.
+   * Anchored to the episode you last watched rather than the earliest unwatched one
+   * anywhere, so a show followed out of order (45 seasons of Location, Location,
+   * Location) offers the episode after the one you just saw instead of S01E01.
    */
   const nextUnwatched = (limit: number): EpisodeInfo[] => {
-    const out: EpisodeInfo[] = [];
-    const seasons = [...episodesRec.seasons]
-      .filter((s) => s.number > 0 && (firstOpen == null || s.number >= firstOpen))
-      .sort((a, b) => a.number - b.number);
-    for (const s of seasons) {
-      for (const e of [...s.episodes].sort((a, b) => a.number - b.number)) {
-        if (isAired(s.number, e.number) && !isWatched(s.number, e.number)) {
-          out.push(e);
-          if (out.length >= limit) return out;
-        }
-      }
-    }
-    return out;
+    const open = [...episodesRec.seasons]
+      .filter((s) => s.number > 0)
+      .sort((a, b) => a.number - b.number)
+      .flatMap((s) => [...s.episodes].sort((a, b) => a.number - b.number))
+      .filter((e) => isAired(e.season, e.number) && !isWatched(e.season, e.number));
+    // Nothing left ahead of where you're up to — then the backlog behind it is what's next.
+    const ahead = upTo ? open.filter((e) => watchOrder(e) > watchOrder(upTo)) : open;
+    return (ahead.length > 0 ? ahead : open).slice(0, limit);
   };
+
+  // Skip specials when guessing which season to open on — on a show you haven't started
+  // they sort first, and opening the page onto 80-odd specials helps nobody.
+  const firstOpen =
+    nextUnwatched(1)[0]?.season ?? progress0?.seasons.find((s) => s.number > 0 && s.completed < s.aired)?.number;
+  if (firstOpen != null) expanded.add(firstOpen);
+  // The season you'd watch next never folds away, so a show you haven't started can't
+  // collapse into nothing but bands. Without progress that's simply the first season.
+  const numbered = episodesRec.seasons.filter((s) => s.number > 0 && s.episodes.length > 0).map((s) => s.number);
+  const startHere = firstOpen || (numbered.length > 0 ? Math.min(...numbered) : null);
+  if (startHere != null) unfolded.add(startHere);
 
   // ---------- about view ----------
 
