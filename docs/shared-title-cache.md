@@ -1,6 +1,7 @@
 # Shared title cache
 
-> **Status (2026-08-03): Phase 1 built, Phase 2 not.** The `titles` table, the
+> **Status (2026-08-03): Phase 1 deployed and verified in production, Phase 2 not
+> started.** The `titles` table, the
 > `/titles` route and the JustWatch read-through all exist. Everything under
 > "Phase 2" below — sharing TMDB providers, the announced dates, `provider_since`,
 > and the convergence trigger — does not. The TMDB columns exist in the table and
@@ -179,6 +180,25 @@ it covers, and zero when sync is unconfigured or nothing is eligible.
 - **The whole thing is best-effort.** Both calls swallow their errors: an
   unreachable Worker means every device behaves exactly as it did before this
   existed, which is also what a device with no sync URL configured does.
+
+### Verified in production, 2026-08-03
+
+- **Publish.** The live site refreshed and wrote 11 rows — every title that had
+  ever had a top-up attempted locally — each `ok`, with a real node id and the
+  full six-country offer set.
+- **Adopt.** *Mother Mary* forced stale, then reloaded: `GET /titles` fired with
+  exactly the one eligible id, **no `POST /justwatch` at all**, and the record came
+  back with `topUp.at` equal to the shared row's `jw_fetched` to the millisecond
+  rather than a fresh timestamp. That equality is the proof it replayed rather
+  than re-asked.
+- **Degrade.** Before the Worker was deployed, the client called `/titles`, got a
+  404, swallowed it, and topped up directly as before — the client-ahead-of-Worker
+  ordering, which is the one that happens in real life since Pages deploys itself
+  on push and the Worker needs two commands.
+
+> **The deploy is not instant.** The first `/titles` call after `wrangler deploy`
+> returned the Worker's own 404 and succeeded about a minute later. Worth knowing
+> before concluding a route did not ship.
 
 > **Phase 1 does not fix the divergence that prompted this.** All three cases in
 > the table above are TMDB-derived — two dates and a provider set. The phases are
