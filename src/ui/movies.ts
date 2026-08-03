@@ -18,11 +18,12 @@ export const moviesRoute: Route = {
     const view: "watchlist" | "watched" = params[0] === "watched" ? "watched" : "watchlist";
     container.append(moviesTabs(view));
 
-    // Which list is showing lives in the address — `#/movies/list/36041308` — rather than in
-    // session storage, so a reload, a pull-to-refresh or a link back lands on the list you were
-    // reading instead of dropping you on the watchlist.
-    let activeListId: number | null = params[0] === "list" ? Number(params[1]) : null;
-    if (activeListId !== null && !Number.isFinite(activeListId)) activeListId = null;
+    // Which list is showing lives in the address — `#/movies/list/family` — rather than in
+    // session storage, so the view can be copied and linked. The slug is what goes in it: it
+    // came over from Trakt on every list and has been carried unread ever since, which is
+    // exactly the readable name this wants. The numeric id still resolves, because a list
+    // without a slug has nothing else to be addressed by.
+    let listKey: string | null = params[0] === "list" ? (params[1] ?? null) : null;
 
     let movies = await loadMovies();
     let lists = await loadMovieLists();
@@ -48,6 +49,10 @@ export const moviesRoute: Route = {
     const watchlistedAt = (m: MovieRec): string => m.listedAt ?? "";
     const listedOnAt = (m: MovieRec, listId: number): string => m.listAddedAt?.[listId] ?? "";
 
+    const listUrlKey = (list: MovieListRec): string => list.slug || String(list.traktId);
+    const findList = (key: string | null): MovieListRec | undefined =>
+      key === null ? undefined : (lists.find((l) => l.slug === key) ?? lists.find((l) => String(l.traktId) === key));
+
     // With nothing to sync from, an empty library is empty — not still loading.
     const nothingYet = (): HTMLElement =>
       el("div", { class: "empty-note" }, "No movies here yet — import your data from Settings, or add some via Search.");
@@ -69,26 +74,26 @@ export const moviesRoute: Route = {
       }
 
       // Watch-list view: picker between the watchlist and custom lists.
-      const activeList: MovieListRec | undefined = lists.find((l) => l.traktId === activeListId);
+      const activeList: MovieListRec | undefined = findList(listKey);
 
       if (lists.length > 0) {
         const select = el("select", { class: "season-select list-select" });
         const optionFor = (value: string, label: string, count: number): HTMLElement => {
           const opt = el("option", { value }, `${label} (${count})`);
-          if (value === (activeList ? String(activeList.traktId) : "watchlist")) opt.setAttribute("selected", "");
+          if (value === (activeList ? listUrlKey(activeList) : "watchlist")) opt.setAttribute("selected", "");
           return opt;
         };
         select.append(optionFor("watchlist", "Watchlist", all.filter((m) => m.onWatchlist && m.plays === 0).length));
         for (const list of lists) {
           select.append(
-            optionFor(String(list.traktId), list.name, all.filter((m) => m.customLists?.includes(list.traktId) && m.plays === 0).length),
+            optionFor(listUrlKey(list), list.name, all.filter((m) => m.customLists?.includes(list.traktId) && m.plays === 0).length),
           );
         }
         select.addEventListener("change", () => {
-          activeListId = select.value === "watchlist" ? null : Number(select.value);
+          listKey = select.value === "watchlist" ? null : select.value;
           // `replaceHash`, so flipping through the picker doesn't fill the back stack with
           // every list you glanced at — Back still returns wherever you came from.
-          replaceHash(activeListId === null ? "#/movies" : `#/movies/list/${activeListId}`);
+          replaceHash(listKey === null ? "#/movies" : `#/movies/list/${listKey}`);
           renderContent();
         });
         content.append(el("div", { class: "list-picker" }, select));
