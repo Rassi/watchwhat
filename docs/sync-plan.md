@@ -211,6 +211,46 @@ the phone's recent ticks would need re-entering by hand. The phone seeded
 instead, so its ticks were in the log from the start and the gap ran the other
 way — closed by the re-seed above rather than by hand.
 
+## A third silent data-losing bug, found the same way (2026-08-03)
+
+Same pattern as the two above — found only by comparing two devices, and reporting
+a clean sync while losing data. The symptom this time was the Releases screen
+listing *The Devil Wears Prada 2* on one device and not the other.
+
+**A background refresh overwrote an event that a sync had just applied.** Every
+refresher in `sync.ts` read a record, awaited TMDB or OMDb for a second or two,
+and then stored the object it had been holding. Anything that changed in the
+meantime was silently discarded — and what changes in the meantime is `pull()`
+applying events.
+
+The sequence, reconstructed from timestamps:
+
+1. The film was marked watched on the laptop at 12:43 and pushed as event 12594.
+2. The other device pulled that page, replay wrote `plays: 1`, and its cursor
+   advanced past 12594.
+3. A bulk `ensureMovieDetails` that had loaded the film *before* the pull finished
+   its TMDB round trip at 13:13:27 and wrote its stale copy back — `plays: 0`.
+
+The film un-watched itself, and **because the cursor had already advanced, nothing
+would ever have replayed it.** The event was still in the log; no device would ever
+read it again.
+
+> **The direction matters.** A refresh clobbering the event log destroys history
+> permanently. The log clobbering a refresh only discards cached provider data,
+> which the next TTL — or now a converged row — brings straight back. That is why
+> the fix is on the refresh side only, and why the user-action writers
+> (`setMovieWatched` and friends) still write whole records: they are handed a live
+> record from the caller's map with no network wait in between.
+
+**Fixed by `saveMovieFields`**, which re-reads the stored record and copies over
+only the fields the refresh actually owns. `TMDB_DERIVED_FIELDS` is that list;
+everything absent from it belongs to the event log and is now never touched by a
+refresh.
+
+Reproduced deliberately before and after, by holding TMDB responses for four
+seconds and writing a watch mark one second in: the record still shows the refresh
+landed (providers in all six countries) *and* keeps `plays: 1`.
+
 ## Gotchas
 
 - **The repo is public.** The sync token must never be committed. It lives as a

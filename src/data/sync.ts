@@ -561,6 +561,45 @@ function stampProviderSightings(movie: MovieRec): void {
   movie.providerSeen = [...seen];
 }
 
+/**
+ * Write back only the fields a refresh actually owns, merged onto whatever the record looks
+ * like **now** rather than onto the copy loaded before the network call.
+ *
+ * Every background refresh here reads a record, awaits TMDB or OMDb for a few seconds, and then
+ * stores it. Writing the whole object silently discards anything that changed in between — and
+ * what changes in between is a sync pull applying events. Found 2026-08-03: *The Devil Wears
+ * Prada 2* was marked watched on one device, the event reached the other, replay wrote
+ * `plays: 1`, and a bulk `ensureMovieDetails` that had loaded the film moments earlier wrote its
+ * stale copy back over it. The film silently un-watched itself, and because the sync cursor had
+ * already advanced past the event, nothing would ever have replayed it.
+ *
+ * The in-memory copy is updated to match, so a screen rendering from the caller's map shows the
+ * watch state that arrived mid-refresh instead of the one it started with.
+ */
+async function saveMovieFields(movie: MovieRec, keys: readonly (keyof MovieRec)[]): Promise<void> {
+  const current = await dbGet<MovieRec>("movies", movie.traktId);
+  if (!current) {
+    await dbPut("movies", movie.traktId, movie);
+    return;
+  }
+  for (const key of keys) Object.assign(current, { [key]: movie[key] });
+  await dbPut("movies", movie.traktId, current);
+  Object.assign(movie, current);
+}
+
+/** What a TMDB refresh owns. Everything else on the record belongs to the event log. */
+const TMDB_DERIVED_FIELDS = [
+  "poster", "backdrop", "overview", "trailer", "cast",
+  "providers", "providersVersion", "providerSince", "providerSeen",
+  "digitalRelease", "streamingRelease", "jwNodeId", "topUp", "tmdbFetchedAt",
+] as const satisfies readonly (keyof MovieRec)[];
+
+/** What adopting a shared row owns — the same minus the fields that only a real fetch produces. */
+const SHARED_DERIVED_FIELDS = [
+  "providers", "providersVersion", "providerSince",
+  "digitalRelease", "streamingRelease", "jwNodeId", "topUp",
+] as const satisfies readonly (keyof MovieRec)[];
+
 const PROVIDER_SINCE_SEEDED_KEY = "watchwhat.providerSinceSeeded.v2";
 
 /**
@@ -586,7 +625,7 @@ export async function seedProviderSince(): Promise<void> {
     // countries that are never read.
     if (movie.providerSince !== undefined && movie.providerSeen !== undefined) continue;
     stampProviderSightings(movie);
-    await dbPut("movies", movie.traktId, movie);
+    await saveMovieFields(movie, ["providerSince", "providerSeen"]);
   }
   localStorage.setItem(PROVIDER_SINCE_SEEDED_KEY, new Date().toISOString());
 }
@@ -621,7 +660,8 @@ export async function trimProviderCountries(): Promise<void> {
   };
 
   const movies = await dbGetAll<MovieRec>("movies");
-  for (const movie of movies) if (trim(movie)) await dbPut("movies", movie.traktId, movie);
+  for (const movie of movies) if (trim(movie)) await saveMovieFields(movie, ["providers"]);
+  // Episodes need no such care: nothing in the event log writes that store.
   const episodes = await dbGetAll<EpisodesRec>("episodes");
   for (const rec of episodes) if (trim(rec)) await dbPut("episodes", rec.traktId, rec);
 
@@ -829,7 +869,7 @@ export async function convergeSharedTitles(): Promise<boolean> {
           if (kind !== "movie") continue; // shows have no shared fields written yet
           const movie = byTmdb.get(Number(id));
           if (!movie || !adoptSharedTitle(movie, row)) continue;
-          await dbPut("movies", movie.traktId, movie);
+          await saveMovieFields(movie, SHARED_DERIVED_FIELDS);
           changed = true;
         }
       }
@@ -975,7 +1015,9 @@ export async function ensureMovieDetails(
     // day it actually appeared rather than whenever TMDB catches up.
     stampProviderSightings(movie);
     movie.tmdbFetchedAt = Date.now();
-    await dbPut("movies", traktId, movie);
+    // Merged onto the stored record rather than replacing it: a sync pull can have applied a
+    // watch or a list change to this film during the TMDB round trip just above.
+    await saveMovieFields(movie, TMDB_DERIVED_FIELDS);
     // Share what TMDB just said, so a device whose own TTL has not expired can show it rather
     // than sitting on a week-old answer. `extras.providersByCountry` and not `movie.providers`:
     // the shared column holds TMDB's answer *before* the JustWatch merge, and `mergeJustWatch`
@@ -1055,7 +1097,8 @@ export async function ensureMovieExtRatings(movies: Map<number, MovieRec>, movie
   if (!ratings) return false;
   movie.extRatings = { ...ratings, fetchedAt: Date.now() };
   movies.set(movie.traktId, movie);
-  await dbPut("movies", movie.traktId, movie);
+  // Same hazard as the TMDB refresh: OMDb was just awaited, so the stored record may have moved.
+  await saveMovieFields(movie, ["extRatings"]);
   return true;
 }
 
