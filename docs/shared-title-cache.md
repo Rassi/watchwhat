@@ -1,10 +1,6 @@
 # Shared title cache
 
-> **Status (2026-08-03): both phases built.** Phase 1 is deployed and verified in
-> production. Phase 2 is written and tested against a local Worker but **needs
-> `npm run schema` and `npm run deploy`** before it does anything — until then the
-> client asks for `?since=`, the old Worker ignores it, and convergence is a
-> harmless no-op.
+> **Status (2026-08-03): both phases deployed and verified in production.**
 
 A third D1 table holding what a title's external sources say about it — watch
 providers, the JustWatch node id, the announced dates — so that two devices stop
@@ -223,6 +219,29 @@ it covers, and zero when sync is unconfigured or nothing is eligible.
 > **The deploy is not instant.** The first `/titles` call after `wrangler deploy`
 > returned the Worker's own 404 and succeeded about a minute later. Worth knowing
 > before concluding a route did not ship.
+
+### Phase 2 verified in production, 2026-08-03
+
+Two real devices, `rassi.github.io` and `localhost:5173`, against the deployed
+Worker. *The Terminal* (`movie:594`) as the subject.
+
+- **Publish.** The live site refreshed it and wrote all six countries, the
+  announced dates and 20 `providerSince` keys. `jw_fetched` stayed null, correctly
+  — a 2004 film is nowhere near a release and gets no top-up.
+- **Converge.** The record was then damaged on the other device — providers
+  replaced with a single `WRONG` entry, `digitalRelease` nulled, `providerSince`
+  reduced to one bogus key — and stamped an hour *older* than the row. One sync
+  restored all six countries, all nine Danish listings, the date and all 20 keys,
+  with no trace of the marker. **`tmdbFetchedAt` was still the older value
+  afterwards**, which is the invariant above holding.
+- **Refuse.** The same row offered to a record claiming a *newer* fetch was
+  correctly ignored — the local answer survived, and the cursor still advanced,
+  since the row had been seen and judged.
+
+> **Watch out for `skipWatchedRefresh` when testing this.** The first attempt used
+> *Amélie*, which is watched, and nothing published at all: bulk refreshes skip
+> watched films by design. Pick an unwatched title, or the publish path looks
+> broken when it is working exactly as specified.
 
 > **Phase 1 does not fix the divergence that prompted this.** All three cases in
 > the table above are TMDB-derived — two dates and a provider set. The phases are
