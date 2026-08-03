@@ -168,6 +168,33 @@ export interface MovieRec {
   /** Which provider kinds the cached `providers` were fetched with; see PROVIDERS_VERSION. */
   providersVersion?: number;
   /**
+   * When each streaming listing was first seen, keyed `"DK:Netflix"` — what makes "this
+   * only just turned up" answerable at all. `providers` is overwritten wholesale on every
+   * refresh, so without this a film that landed on Netflix last night is indistinguishable
+   * from one that has been there for three years.
+   *
+   * Timestamps are about the *listing*, deliberately not about whether the service is one
+   * of yours. Stamping "became available to me" would make adding a service in Settings
+   * republish half the watchlist as breaking news; keyed this way, a settings change can
+   * only ever reveal arrivals that genuinely happened.
+   *
+   * `0` means "already there when this film started being tracked" — the honest answer for
+   * a listing whose arrival nobody watched, and never news. Derived and per-device like
+   * `providers` itself, so it stays out of the event log.
+   *
+   * Only the countries you watch in are kept. `providers` holds every country TMDB returns,
+   * about 40 of them, and stamping all of those cost 558 KB across the library against 71 KB
+   * for the six that are ever read — dead weight in every export.
+   */
+  providerSince?: Record<string, number>;
+  /**
+   * Which watch countries this film's listings have actually been looked at in, which is what
+   * makes a missing `providerSince` key readable. Without it, "no stamp for Netflix DK" is
+   * ambiguous between *nobody has checked DK* and *DK was checked and Netflix wasn't there* —
+   * and those want opposite answers when Netflix DK later appears: baseline, or news.
+   */
+  providerSeen?: string[];
+  /**
    * This title's JustWatch node id (`tm1433295`), saved so a repeat top-up costs one request
    * rather than three. Derived and per-device like `providers`, so it is not in the event log.
    */

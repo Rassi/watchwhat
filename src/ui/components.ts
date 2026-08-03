@@ -94,6 +94,13 @@ export interface PosterCardOpts {
   badge?: string | null;
   subtitle?: string | null;
   /**
+   * A second subtitle line, brighter than the first. Split from `subtitle` rather than
+   * appended to it because the two carry opposite weight: the title is there so in-page
+   * search can find the card, while the note is the thing you came to the screen to read.
+   * Sharing one nowrap line, the ellipsis always eats the note — "Mother Mary · HBO M…".
+   */
+  note?: string | null;
+  /**
    * Small chip (top-right), coloured by what it would cost you: "mine" a green ▶ for a
    * service you pay for, "free" a yellow ▶ for free to anyone, "stream" a grey ▶ for a
    * subscription you don't have, "rent" a grey $ for paying per title.
@@ -185,6 +192,7 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
     card.append(bar);
   }
   if (opts.subtitle) card.append(el("div", { class: "poster-subtitle" }, opts.subtitle));
+  if (opts.note) card.append(el("div", { class: "poster-note" }, opts.note));
   return card;
 }
 

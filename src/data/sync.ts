@@ -519,6 +519,77 @@ function knownDates(movie: MovieRec): number[] {
     .filter((t) => Number.isFinite(t));
 }
 
+/**
+ * Record when each streaming listing was first seen, so "this only just turned up" has an
+ * answer. `providers` is replaced wholesale on every refresh, which loses the one fact the
+ * Releases screen is built on; this diffs the new set against what was there before.
+ *
+ * The first stamp for a film is all zeroes — "already there", never news. That is the honest
+ * reading: a listing this device has never seen absent cannot be said to have arrived, and
+ * the alternative would announce a 2019 film as new the day the library was imported.
+ *
+ * Rentals are skipped for the same reason they are left out of the service catalogue: a shop
+ * carrying a title is not the title becoming watchable.
+ */
+function stampProviderSightings(movie: MovieRec): void {
+  const countries = watchCountryList();
+  // Countries dropped from the watch list fall out of both, so their stamps stop being carried
+  // around — and a country added back later re-baselines rather than reporting its whole
+  // catalogue as having arrived that afternoon.
+  const seen = new Set((movie.providerSeen ?? []).filter((cc) => countries.includes(cc)));
+  const since = movie.providerSince ?? {};
+  const now = Date.now();
+  const live = new Set<string>();
+
+  for (const cc of countries) {
+    // Never looked here before, so nothing it lists can be said to have arrived.
+    const known = seen.has(cc);
+    for (const p of movie.providers?.[cc]?.providers ?? []) {
+      if (p.kind === "rent") continue;
+      const key = `${cc}:${p.name}`;
+      live.add(key);
+      if (since[key] === undefined) since[key] = known ? now : 0;
+    }
+    seen.add(cc);
+  }
+
+  // A listing that went away loses its stamp, so a film that leaves a service and comes back
+  // a year later reads as news again rather than keeping the date of its first run.
+  for (const key of Object.keys(since)) if (!live.has(key)) delete since[key];
+  movie.providerSince = since;
+  movie.providerSeen = [...seen];
+}
+
+const PROVIDER_SINCE_SEEDED_KEY = "watchwhat.providerSinceSeeded.v2";
+
+/**
+ * Give every film already on this device its provider baseline, once, asking TMDB nothing.
+ *
+ * Without it the Releases screen takes about two TTLs to say anything: the first refresh of a
+ * film only establishes what it already had, so the earliest an arrival could be *noticed* is
+ * the refresh after that — a fortnight of an empty section for a feature whose whole job is to
+ * be timely. Seeding from the providers already cached collapses that to one TTL.
+ *
+ * Films never fetched are deliberately skipped rather than seeded empty. An empty baseline
+ * claims "this had nothing and then gained something", and for a record TMDB has never been
+ * asked about that is a fabrication — it would report the first fetch as an arrival. Left
+ * alone, they get an honest baseline when that fetch happens.
+ */
+export async function seedProviderSince(): Promise<void> {
+  if (localStorage.getItem(PROVIDER_SINCE_SEEDED_KEY)) return;
+  const movies = await dbGetAll<MovieRec>("movies");
+  for (const movie of movies) {
+    if (movie.tmdbFetchedAt == null) continue;
+    // `providerSeen` missing means either never stamped, or stamped by the first version that
+    // kept all ~40 of TMDB's countries. Both want a re-stamp: the second one to shed the
+    // countries that are never read.
+    if (movie.providerSince !== undefined && movie.providerSeen !== undefined) continue;
+    stampProviderSightings(movie);
+    await dbPut("movies", movie.traktId, movie);
+  }
+  localStorage.setItem(PROVIDER_SINCE_SEEDED_KEY, new Date().toISOString());
+}
+
 /** Within a month of any known date — when listings actually move, in either direction. */
 function nearRelease(movie: MovieRec): boolean {
   const now = Date.now();
@@ -686,6 +757,9 @@ export async function ensureMovieDetails(
       // four movies at once, so the shared record belongs to whichever finished last.
       movie.topUp = outcome;
     }
+    // After the JustWatch merge, so a listing that only JustWatch knows about is stamped on the
+    // day it actually appeared rather than whenever TMDB catches up.
+    stampProviderSightings(movie);
     movie.tmdbFetchedAt = Date.now();
     await dbPut("movies", traktId, movie);
     notify.tick();

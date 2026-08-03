@@ -8,17 +8,9 @@ import { ensureMovieDetails, loadMovieLists, loadMovies } from "../data/sync";
 import type { MovieListRec, MovieRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { watchBadge } from "./shared";
+import { moviesTabs } from "./hometabs";
 
 const ACTIVE_LIST_KEY = "watchwhat.activeMovieList"; // "watchlist" or a list trakt id
-
-function moviesTabs(active: "watchlist" | "watched"): HTMLElement {
-  return el(
-    "div",
-    { class: "home-tabs" },
-    el("a", { class: `home-tab ${active === "watchlist" ? "active" : ""}`, href: "#/movies" }, "WATCH LIST"),
-    el("a", { class: `home-tab ${active === "watched" ? "active" : ""}`, href: "#/movies/watched" }, "WATCHED"),
-  );
-}
 
 export const moviesRoute: Route = {
   name: "movies",

@@ -230,6 +230,20 @@ button {
   white-space: nowrap;
 }
 
+/* The release date or service on the Releases grid. Allowed two lines and clamped rather than
+   ellipsed on one: at poster width "around late September" has no single-line form worth
+   showing, and this is the line the screen exists to display. */
+.poster-note {
+  font-size: 11px;
+  color: var(--text);
+  margin-top: 1px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
 /* ---------- show page ---------- */
 .show-header {
   position: relative;

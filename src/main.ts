@@ -5,6 +5,7 @@ import { libraryRoute } from "./ui/library";
 import { showRoute } from "./ui/show";
 import { moviesRoute } from "./ui/movies";
 import { movieRoute } from "./ui/movie";
+import { releasesRoute } from "./ui/releases";
 import { searchRoute } from "./ui/search";
 import { settingsRoute } from "./ui/settings";
 import { applyTheme } from "./theme";
@@ -12,6 +13,7 @@ import { ensureUnlocked } from "./gate";
 import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
 import { dbDelete } from "./data/db";
 import { purgeTraktRemnants, seedCloudStamps } from "./data/settings";
+import { seedProviderSince } from "./data/sync";
 import { installSyncTriggers, syncEvents } from "./data/replay";
 
 applyTheme();
@@ -25,6 +27,9 @@ purgeTraktRemnants();
 // Settings this device already had predate the sync stamps, so give them one —
 // otherwise nothing would ever seed a server that has never held any. Once only.
 seedCloudStamps();
+// Baseline for "this film only just turned up on a service" — from what is already cached, so
+// Releases starts noticing arrivals after one refresh rather than two. Once only.
+void seedProviderSince();
 await ensureUnlocked();
 
 registerRoute(watchlistRoute);
@@ -32,6 +37,7 @@ registerRoute(libraryRoute);
 registerRoute(showRoute);
 registerRoute(moviesRoute);
 registerRoute(movieRoute);
+registerRoute(releasesRoute);
 registerRoute(searchRoute);
 registerRoute(settingsRoute);
 
