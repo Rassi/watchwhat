@@ -194,6 +194,15 @@ mapping does not change, so the result is kept on the movie record as
 query — measured 2026-08-03: 2 requests cold, **1 warm**. Derived and per-device
 like `providers`, so it is not in the event log.
 
+- **Being refused is not the same as being answered**, and the difference is what
+  keeps a throttling episode from compounding. A 429, a 502 or a Worker outage
+  (`refused`) leaves the cached id untouched and costs exactly **one** request;
+  only JustWatch actually answering that it cannot resolve the id (`rejected`)
+  triggers the search-and-heal path. Conflating them turned one throttled
+  request into four *and* overwrote a good id with the null from a search that
+  was also refused — so a burst that got throttled would have erased the cache it
+  had just built. Measured 2026-08-03 against a simulated 429: 1 request, id and
+  providers intact, reported as `reach`.
 - **A miss is deliberately not cached.** An unreleased film JustWatch does not
   know yet will be known later, and a remembered miss would be permanent.
 - **A saved id that stops resolving heals itself**: one search, then the query

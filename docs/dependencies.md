@@ -129,6 +129,22 @@ handful of rows per pull.
   ~45/day rather than ~137. That ceiling assumes the app is opened at least four
   times a day, spaced more than 6h apart.
 
+- **The burst is real but small, and bounded by `mapWithConcurrency(…, 4, …)`.**
+  Measured 2026-08-03 on a fully-stale library: **38 requests over 3 seconds,
+  peak concurrency 4, all 200, median 73 ms.** Warm it is one request per
+  eligible title (~18), cold two to three. There is no pacing, jitter, retry or
+  backoff anywhere, and the Worker proxies straight through without queueing —
+  so this shape is the shape, and it is short enough not to need managing.
+
+  Two things would make it worse, in order: **the missing in-flight guard below**
+  can double it to 8-wide, and a cold cache after `jwNodeId` is cleared triples
+  the count. Neither is worth pre-empting at these numbers, but both are worth
+  recognising if JustWatch ever starts refusing.
+
+  **A refusal now costs one request, not four.** See `where-to-watch.md` on
+  `refused` vs `rejected` — without that split, throttling accelerated the client
+  into the limit and wiped the id cache on the way.
+
 - **Nothing here runs on a timer.** `ensureMovieDetails` fires on route render
   only — the Movies list, the Watchlist, a movie page — plus `refreshRouteInPlace`
   after a sync applies something. **A TTL is therefore a ceiling, not a schedule**:

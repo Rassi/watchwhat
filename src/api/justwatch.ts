@@ -140,17 +140,36 @@ function target(): { url: string; headers: Record<string, string> } {
   return { url: ENDPOINT, headers: { "Content-Type": "application/json" } };
 }
 
-async function post<T>(query: string, variables: Record<string, unknown>): Promise<T | null> {
+/**
+ * Why a query did not produce data, which is not a detail: **`refused` must never be retried the
+ * way `rejected` is.**
+ *
+ * `rejected` is JustWatch answering — a validation error, an id it cannot merge — and asking a
+ * different question is the right response. `refused` is not getting an answer at all: a 429, a
+ * 502, the Worker being down. Treating that as "the question was wrong" turns one throttled
+ * request into a search plus two more queries, per title, across a burst — accelerating into a
+ * limit at the exact moment to stop. Worse, it would overwrite a good cached id with the null
+ * from a search that was also refused, so a throttling episode would erase the cache it took a
+ * burst to build.
+ */
+type PostResult<T> = { ok: true; data: T } | { ok: false; reason: "refused" | "rejected" };
+
+async function post<T>(query: string, variables: Record<string, unknown>): Promise<PostResult<T>> {
   const { url, headers } = target();
   const res = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify({ query, variables }),
   });
-  if (!res.ok) return null;
+  if (!res.ok) return { ok: false, reason: "refused" };
   const json = (await res.json()) as { data?: T; errors?: unknown[] };
-  if (json.errors?.length || !json.data) return null;
-  return json.data;
+  if (json.errors?.length || !json.data) return { ok: false, reason: "rejected" };
+  return { ok: true, data: json.data };
+}
+
+/** For callers that only want the answer and treat every failure the same way. */
+function dataOf<T>(result: PostResult<T>): T | null {
+  return result.ok ? result.data : null;
 }
 
 const SEARCH = `query S($country: Country!, $language: Language!, $q: String!) {
@@ -163,18 +182,25 @@ const SEARCH = `query S($country: Country!, $language: Language!, $q: String!) {
  * JustWatch has no lookup by TMDB id, so the title is searched and the result confirmed by the
  * tmdbId it reports back — never by title text, which would happily match a remake or a sequel.
  */
-async function findNodeId(title: string, tmdbId: number, searchCountries: string[]): Promise<string | null> {
+async function findNodeId(
+  title: string,
+  tmdbId: number,
+  searchCountries: string[],
+): Promise<{ id: string | null; refused: boolean }> {
   interface SearchData {
     popularTitles: { edges: { node: { id: string; content?: { externalIds?: { tmdbId?: number | string } } } }[] };
   }
   for (const country of searchCountries) {
-    const data = await post<SearchData>(SEARCH, { country, language: "en", q: title });
-    const hit = data?.popularTitles.edges.find(
+    const result = await post<SearchData>(SEARCH, { country, language: "en", q: title });
+    // Trying the next country against a service that just refused is one more request into the
+    // wall. A miss is a miss; being turned away is not, and is not this function's to report.
+    if (!result.ok && result.reason === "refused") return { id: null, refused: true };
+    const hit = dataOf(result)?.popularTitles.edges.find(
       (e) => String(e.node.content?.externalIds?.tmdbId ?? "") === String(tmdbId),
     );
-    if (hit) return hit.node.id;
+    if (hit) return { id: hit.node.id, refused: false };
   }
-  return null;
+  return { id: null, refused: false };
 }
 
 export interface JustWatchCheck {
@@ -200,7 +226,7 @@ export async function checkJustWatch(countries: string[]): Promise<JustWatchChec
   const wanted = countries.map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
 
   try {
-    const ping = await post<{ __typename: string }>("{__typename}", {});
+    const ping = dataOf(await post<{ __typename: string }>("{__typename}", {}));
     checks.push({ label: "Endpoint reachable", ok: ping !== null, detail: ping ? "GraphQL responded" : "No usable response" });
     if (!ping) return checks;
   } catch (e) {
@@ -211,7 +237,7 @@ export async function checkJustWatch(countries: string[]): Promise<JustWatchChec
   interface SearchData {
     popularTitles: { edges: { node: { id: string; content?: { externalIds?: { tmdbId?: number | string } } } }[] };
   }
-  const search = await post<SearchData>(SEARCH, { country: wanted[0] ?? "US", language: "en", q: CANARY.title });
+  const search = dataOf(await post<SearchData>(SEARCH, { country: wanted[0] ?? "US", language: "en", q: CANARY.title }));
   const edges = search?.popularTitles?.edges;
   if (!Array.isArray(edges)) {
     checks.push({ label: "Title search", ok: false, detail: "Response shape changed — no popularTitles.edges array" });
@@ -230,13 +256,14 @@ export async function checkJustWatch(countries: string[]): Promise<JustWatchChec
   // The full document, upcoming releases included, so a rename in either half shows up here
   // rather than as top-ups quietly getting less useful.
   let withUpcoming = true;
-  let offers = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, true), {
-    id: hit.node.id,
-    language: "en",
-  });
+  let offers = dataOf(
+    await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, true), { id: hit.node.id, language: "en" }),
+  );
   if (!offers?.node) {
     withUpcoming = false;
-    offers = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, false), { id: hit.node.id });
+    offers = dataOf(
+      await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, false), { id: hit.node.id, language: "en" }),
+    );
   }
   if (!offers?.node) {
     checks.push({ label: "Offers query", ok: false, detail: "No node returned — offers field or country aliasing may have changed" });
@@ -353,20 +380,25 @@ function offersDocument(countries: string[], withUpcoming: boolean): string {
  * difference visible: a bad id fails the `content` resolver outright. Without it a saved id that
  * stopped resolving would be indistinguishable from bad news about the film, forever.
  */
-async function queryNode(
-  nodeId: string,
-  wanted: string[],
-): Promise<{ node: Record<string, CountryBlock>; askedForUpcoming: boolean } | null> {
+type NodeQuery =
+  | { state: "ok"; node: Record<string, CountryBlock>; askedForUpcoming: boolean }
+  | { state: "unresolved" }
+  | { state: "refused" };
+
+async function queryNode(nodeId: string, wanted: string[]): Promise<NodeQuery> {
   const full = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, true), {
     id: nodeId,
     language: "en",
   });
-  if (full?.node) return { node: full.node, askedForUpcoming: true };
+  if (full.ok && full.data.node) return { state: "ok", node: full.data.node, askedForUpcoming: true };
+  // Refused is about the connection, not the document, so asking a shorter one changes nothing.
+  if (!full.ok && full.reason === "refused") return { state: "refused" };
   const plain = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, false), {
     id: nodeId,
     language: "en",
   });
-  return plain?.node ? { node: plain.node, askedForUpcoming: false } : null;
+  if (plain.ok && plain.data.node) return { state: "ok", node: plain.data.node, askedForUpcoming: false };
+  return { state: !plain.ok && plain.reason === "refused" ? "refused" : "unresolved" };
 }
 
 /**
@@ -402,11 +434,19 @@ export async function fetchJustWatchOffers(
   try {
     // US first: the largest catalogue, so the likeliest to know a title at all.
     const searchIn = [...new Set(["US", ...wanted])].slice(0, 2);
+    // A refusal never disturbs what is already known: the id is handed straight back, so a
+    // throttled burst leaves the cache exactly as it found it.
+    const refused = (id: string | null): JustWatchResult => {
+      recordHealth({ at: Date.now(), ok: false, stage: "reach", detail: `${title}: JustWatch refused the request` });
+      return done("reach", null, null, id);
+    };
+
     let nodeId = cachedNodeId?.trim() || null;
     const fromCache = nodeId !== null;
     if (!nodeId) {
-      nodeId = await findNodeId(title, tmdbId, searchIn);
-      if (!nodeId) {
+      const found = await findNodeId(title, tmdbId, searchIn);
+      if (found.refused) return refused(null);
+      if (!found.id) {
         // Not necessarily breakage: a title genuinely absent from JustWatch looks the same as a
         // renamed search field. Which it is shows up in whether *every* title starts failing.
         // Deliberately not cached — an unreleased film JustWatch does not know yet will be
@@ -414,21 +454,27 @@ export async function fetchJustWatchOffers(
         recordHealth({ at: Date.now(), ok: false, stage: "search", detail: `No JustWatch match for "${title}"` });
         return done("search", null);
       }
+      nodeId = found.id;
     }
 
-    let result = await queryNode(nodeId, wanted);
-    if (!result && fromCache) {
-      // The saved id no longer resolves. Pay for the search this once and try the new one, so a
-      // re-indexed title heals itself instead of failing every time from now on.
+    let query = await queryNode(nodeId, wanted);
+    if (query.state === "refused") return refused(nodeId);
+    if (query.state === "unresolved" && fromCache) {
+      // The saved id no longer resolves — JustWatch said so, rather than declining to answer. Pay
+      // for the search this once so a re-indexed title heals instead of failing from now on.
       const fresh = await findNodeId(title, tmdbId, searchIn);
-      nodeId = fresh;
-      if (fresh) result = await queryNode(fresh, wanted);
+      if (fresh.refused) return refused(nodeId);
+      nodeId = fresh.id;
+      if (fresh.id) {
+        query = await queryNode(fresh.id, wanted);
+        if (query.state === "refused") return refused(nodeId);
+      }
     }
-    if (!result) {
+    if (query.state !== "ok") {
       recordHealth({ at: Date.now(), ok: false, stage: "offers", detail: "Offers query returned no node" });
       return done("offers", null, null, nodeId);
     }
-    const { node, askedForUpcoming } = result;
+    const { node, askedForUpcoming } = query;
     const offersIn = (cc: string): OfferRow[] => {
       const block = node[`o_${cc.toLowerCase()}`];
       return Array.isArray(block) ? block : [];
