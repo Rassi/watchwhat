@@ -611,12 +611,15 @@ button {
   color: var(--text);
 }
 
+/* The whole row opens the title's page, which nothing said: without the hand
+   cursor the rows read as a list you can only act on through the button. */
 .search-row {
   display: flex;
   gap: 12px;
   padding: 10px 0;
   border-bottom: 1px solid var(--border);
   align-items: center;
+  cursor: pointer;
 }
 
 .search-row img,
