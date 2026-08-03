@@ -107,7 +107,7 @@ concurrency.
 |---|---|---|---|
 | TMDB | No hard limit; ~50 req/s practical | ~100 calls in a 5s burst | Comfortable |
 | OMDb | 1,000/day | One call per movie page opened | Enormous |
-| JustWatch | None published — unofficial | ~137 requests/day/device | Small numbers, no contract |
+| JustWatch | None published — unofficial | ~45 requests/day/device | Small numbers, no contract |
 | Worker requests | 100,000/day | ~100/day | Effectively unlimited |
 | D1 rows read | 5,000,000/day | 63K on the heaviest day (seeding) | 1.3% |
 | D1 rows written | 100,000/day | 17K on the heaviest day (seeding) | 17% |
@@ -119,17 +119,23 @@ handful of rows per pull.
 ## Things to be aware of
 
 - **JustWatch is the only one with no contract**, so it is the one to actually
-  watch. Its load is bounded by two counts, not one: 11 near-release films at ~3
-  requests each on a **6h** TTL (~132/day), plus 7 more that are
-  `awaitingRelease` — no streaming date yet, and inside the window where one
-  could plausibly have been announced — on a **7-day** TTL (~3/day). The second
-  group adds 2% to the requests, which is the whole reason it is affordable: it
-  widened the gate, not the TTL. Both scale with *how many unreleased films sit
-  in the watchlist*, so if that list ever gets long, re-check these numbers.
+  watch. Its load is bounded by two counts, not one: 11 near-release films on a
+  **6h** TTL, plus 7 more that are `awaitingRelease` — no streaming date yet, and
+  inside the window where one could plausibly have been announced — on a **7-day**
+  TTL. Both scale with *how many unreleased films sit in the watchlist*, so if
+  that list ever gets long, re-check these numbers.
 
-  **The 6h TTL is the only real lever on this total.** Everything else is
-  rounding: dropping the near-release cohort to 12h would halve JustWatch
-  traffic, where tightening the announcement window further saves single digits. It is
+  At **1 request per top-up** once `jwNodeId` is cached (it was 3), the ceiling is
+  ~45/day rather than ~137. That ceiling assumes the app is opened at least four
+  times a day, spaced more than 6h apart.
+
+- **Nothing here runs on a timer.** `ensureMovieDetails` fires on route render
+  only — the Movies list, the Watchlist, a movie page — plus `refreshRouteInPlace`
+  after a sync applies something. **A TTL is therefore a ceiling, not a schedule**:
+  it decides whether an app open causes a refresh, and app opens are the real rate
+  limiter. Measured on the desktop 2026-08-03: 96 of the unwatched films last
+  fetched in a single burst 114 hours earlier, so the 6h TTL had not bound once in
+  five days. Widening a TTL only helps a device opened *more often* than it. It is
   also the only service whose breakage is invisible by default; see
   `where-to-watch.md` for how the card now surfaces it.
 

@@ -63,6 +63,16 @@ differ only here.
 - **It costs no extra request**: same node id, same document, aliased alongside
   the offers.
 
+> **Both documents ask for `content { title }`, and it is load-bearing.** An id
+> JustWatch does not know **still resolves to a node with empty offer arrays and
+> no error** — so a query selecting offers alone cannot tell a wrong id from a
+> title with nothing on offer, which is a real state for most of an unreleased
+> film's life. Asking for the title makes a bad id fail the resolver outright.
+> Found 2026-08-03 by poisoning a saved id: without this, the healing path never
+> fires and the film reports "no offers" forever. It is also why
+> *"matched, but no usable offers"* in the health record deserves a glance at the
+> saved id before it is believed.
+
 > **The two halves must not share a fate.** A rename inside `upcomingReleases` is
 > a *validation* error, and GraphQL fails the whole document for one — which
 > would take the provider top-up down with a feature it does not depend on. So
@@ -173,10 +183,24 @@ that reads like a date is a guess that gets planned around.
 > hat, so they drag the measured streaming gap down until those records refresh.
 > The buy sample was never affected.
 
-**One top-up is 2–3 requests, not one.** A search against US, then against the
-first configured country if US missed, then a single offers query with every
-country aliased into it. Six round trips per title would have made this too
-expensive to do automatically, which is why the aliasing exists.
+**A first top-up is 2–3 requests; every one after it is 1.** A search against US,
+then against the first configured country if US missed, then a single offers
+query with every country aliased into it. Six round trips per title would have
+made this too expensive to do automatically, which is why the aliasing exists.
+
+**The searches only ever translate a TMDB id into a JustWatch one**, and that
+mapping does not change, so the result is kept on the movie record as
+`jwNodeId` (`tm1433295`). A title asked about before skips straight to the offers
+query — measured 2026-08-03: 2 requests cold, **1 warm**. Derived and per-device
+like `providers`, so it is not in the event log.
+
+- **A miss is deliberately not cached.** An unreleased film JustWatch does not
+  know yet will be known later, and a remembered miss would be permanent.
+- **A saved id that stops resolving heals itself**: one search, then the query
+  again, and the new id replaces it. That costs 4 requests once rather than
+  failing from then on.
+- **`null` is written back on failure**, clearing a dead id — keeping it would
+  cost a wasted request before the search it was supposed to save.
 - It only ever *adds* a provider TMDB is missing, or *downgrades* a kind when
   JustWatch says something is cheaper than TMDB thinks. **Nothing is ever
   removed**: an entry TMDB has and JustWatch does not is far more likely to be a

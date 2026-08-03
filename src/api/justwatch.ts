@@ -303,6 +303,12 @@ export interface JustWatchResult {
   offers: Record<string, JustWatchOffer[]> | null;
   /** Announced digital releases across the watch countries; null if the query could not be run. */
   upcoming: JustWatchUpcoming[] | null;
+  /**
+   * The JustWatch id this title resolved to, worth keeping: it is stable, and having it turns the
+   * next top-up from three requests into one. Null means nothing matched, which is deliberately
+   * not worth remembering — see `fetchJustWatchOffers`.
+   */
+  nodeId: string | null;
   outcome: JustWatchOutcome;
 }
 
@@ -328,61 +334,101 @@ function offersDocument(countries: string[], withUpcoming: boolean): string {
     .map((cc) => {
       const key = cc.toLowerCase();
       const offers = `o_${key}: offers(country: ${cc}, platform: WEB) { monetizationType presentationType package { clearName } }`;
-      return withUpcoming ? `${offers}\n      u_${key}: content(country: ${cc}, language: $language) { ${UPCOMING_SELECTION} }` : offers;
+      // `title` is what makes a wrong id detectable — see the note below on why both documents
+      // ask for the content block even though only one of them wants what is inside it.
+      const content = `u_${key}: content(country: ${cc}, language: $language) { title${withUpcoming ? `\n        ${UPCOMING_SELECTION}` : ""} }`;
+      return `${offers}\n      ${content}`;
     })
     .join("\n      ");
-  const args = withUpcoming ? "$id: ID!, $language: Language!" : "$id: ID!";
-  return `query O(${args}) { node(id: $id) { ... on MovieOrShow {\n      ${blocks}\n  } } }`;
+  return `query O($id: ID!, $language: Language!) { node(id: $id) { ... on MovieOrShow {\n      ${blocks}\n  } } }`;
+}
+
+/**
+ * One node's offers, falling back to the document without `upcomingReleases` — see above.
+ *
+ * **Both documents ask for `content { title }`, and that is load-bearing rather than tidy.** An id
+ * JustWatch does not know still resolves to a node with empty offer arrays and no error, so a
+ * query selecting offers alone cannot tell a wrong id from a title with nothing on offer — which
+ * is a real state for most of an unreleased film's life. Asking for the title makes the
+ * difference visible: a bad id fails the `content` resolver outright. Without it a saved id that
+ * stopped resolving would be indistinguishable from bad news about the film, forever.
+ */
+async function queryNode(
+  nodeId: string,
+  wanted: string[],
+): Promise<{ node: Record<string, CountryBlock>; askedForUpcoming: boolean } | null> {
+  const full = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, true), {
+    id: nodeId,
+    language: "en",
+  });
+  if (full?.node) return { node: full.node, askedForUpcoming: true };
+  const plain = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, false), {
+    id: nodeId,
+    language: "en",
+  });
+  return plain?.node ? { node: plain.node, askedForUpcoming: false } : null;
 }
 
 /**
  * Offers per country for one title; `offers` is null if anything at all went wrong. Countries are
  * aliased into a single query rather than requested one at a time — six round trips per title
  * would make this too expensive to do automatically.
+ *
+ * `cachedNodeId` is what makes a repeat top-up cheap. The search exists only to turn a TMDB id
+ * into a JustWatch one, and that mapping does not change, so on a title asked about before this is
+ * **one request instead of three** — which matters against an unofficial API rather more than it
+ * would against a metered one. The id is returned so the caller can keep it.
  */
 export async function fetchJustWatchOffers(
   title: string,
   tmdbId: number,
   countries: string[],
+  cachedNodeId?: string | null,
 ): Promise<JustWatchResult> {
   const done = (
     stage: JustWatchHealth["stage"],
     offers: Record<string, JustWatchOffer[]> | null,
     upcoming: JustWatchUpcoming[] | null = null,
+    nodeId: string | null = null,
   ): JustWatchResult => ({
     offers,
     upcoming,
+    nodeId,
     outcome: { at: Date.now(), stage },
   });
   const wanted = countries.map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
   // No countries configured is not a JustWatch problem, so it must not be recorded as one.
-  if (wanted.length === 0) return { offers: null, upcoming: null, outcome: { at: Date.now(), stage: "ok" } };
+  if (wanted.length === 0) return { offers: null, upcoming: null, nodeId: null, outcome: { at: Date.now(), stage: "ok" } };
   try {
     // US first: the largest catalogue, so the likeliest to know a title at all.
-    const searchIn = [...new Set(["US", ...wanted])];
-    const nodeId = await findNodeId(title, tmdbId, searchIn.slice(0, 2));
+    const searchIn = [...new Set(["US", ...wanted])].slice(0, 2);
+    let nodeId = cachedNodeId?.trim() || null;
+    const fromCache = nodeId !== null;
     if (!nodeId) {
-      // Not necessarily breakage: a title genuinely absent from JustWatch looks the same as a
-      // renamed search field. Which it is shows up in whether *every* title starts failing.
-      recordHealth({ at: Date.now(), ok: false, stage: "search", detail: `No JustWatch match for "${title}"` });
-      return done("search", null);
+      nodeId = await findNodeId(title, tmdbId, searchIn);
+      if (!nodeId) {
+        // Not necessarily breakage: a title genuinely absent from JustWatch looks the same as a
+        // renamed search field. Which it is shows up in whether *every* title starts failing.
+        // Deliberately not cached — an unreleased film JustWatch does not know yet will be
+        // known later, and a remembered miss would be permanent.
+        recordHealth({ at: Date.now(), ok: false, stage: "search", detail: `No JustWatch match for "${title}"` });
+        return done("search", null);
+      }
     }
 
-    let askedForUpcoming = true;
-    let data = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, true), {
-      id: nodeId,
-      language: "en",
-    });
-    if (!data?.node) {
-      // Retry without the newer half before calling this a failure — see `offersDocument`.
-      askedForUpcoming = false;
-      data = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, false), { id: nodeId });
+    let result = await queryNode(nodeId, wanted);
+    if (!result && fromCache) {
+      // The saved id no longer resolves. Pay for the search this once and try the new one, so a
+      // re-indexed title heals itself instead of failing every time from now on.
+      const fresh = await findNodeId(title, tmdbId, searchIn);
+      nodeId = fresh;
+      if (fresh) result = await queryNode(fresh, wanted);
     }
-    if (!data?.node) {
+    if (!result) {
       recordHealth({ at: Date.now(), ok: false, stage: "offers", detail: "Offers query returned no node" });
-      return done("offers", null);
+      return done("offers", null, null, nodeId);
     }
-    const node = data.node;
+    const { node, askedForUpcoming } = result;
     const offersIn = (cc: string): OfferRow[] => {
       const block = node[`o_${cc.toLowerCase()}`];
       return Array.isArray(block) ? block : [];
@@ -436,7 +482,7 @@ export async function fetchJustWatchOffers(
     // "Matched, but nothing on offer here" is a real answer, not a breakage — a film genuinely
     // absent from every configured country looks exactly like this. So the per-title outcome is
     // `ok` even where the global health record calls it a miss: nothing needs the user's attention.
-    return done("ok", countries.length > 0 ? out : null, askedForUpcoming ? upcoming : null);
+    return done("ok", countries.length > 0 ? out : null, askedForUpcoming ? upcoming : null, nodeId);
   } catch (e) {
     // Unofficial API: a failure just means TMDB's answer stands.
     recordHealth({

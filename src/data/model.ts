@@ -164,6 +164,11 @@ export interface MovieRec {
   /** Which provider kinds the cached `providers` were fetched with; see PROVIDERS_VERSION. */
   providersVersion?: number;
   /**
+   * This title's JustWatch node id (`tm1433295`), saved so a repeat top-up costs one request
+   * rather than three. Derived and per-device like `providers`, so it is not in the event log.
+   */
+  jwNodeId?: string | null;
+  /**
    * How the last JustWatch top-up for this title went, so the card can say when its listing is
    * TMDB's alone. Absent means never attempted, which is the normal state — the top-up only runs
    * near a release or on demand. Per-device like `providers` themselves, and for the same reason.

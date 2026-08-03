@@ -672,7 +672,15 @@ export async function ensureMovieDetails(
     // the other ~320 titles. A hand-asked refresh always tops up, whatever the dates say: someone
     // pressing the button is reporting that TMDB looks wrong, which is why this fallback exists.
     if (movie.ids.tmdb && (opts?.force || nearRelease(movie) || awaitingRelease(movie, streamGap))) {
-      const { offers, upcoming, outcome } = await fetchJustWatchOffers(movie.title, movie.ids.tmdb, watchCountryList());
+      const { offers, upcoming, outcome, nodeId } = await fetchJustWatchOffers(
+        movie.title,
+        movie.ids.tmdb,
+        watchCountryList(),
+        movie.jwNodeId,
+      );
+      // Written back even when null: an id that stopped resolving is worse than none, since it
+      // costs a wasted request before the search it was meant to save.
+      movie.jwNodeId = nodeId;
       if (offers) movie.providers = mergeJustWatch(movie.providers ?? {}, offers);
       if (upcoming) applyUpcoming(movie, upcoming);
       // Kept per title rather than read from the global health record afterwards: this loop runs
