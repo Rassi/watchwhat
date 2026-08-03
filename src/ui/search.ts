@@ -1,4 +1,4 @@
-import type { Route } from "../router";
+import { replaceHash, type Route } from "../router";
 import { dialog, el, toast, withSyncIndicator } from "./components";
 import {
   fetchMoviePoster,
@@ -22,15 +22,28 @@ function byRelevance<T extends { title: string }>(query: string, items: T[]): T[
   );
 }
 
+type Mode = "all" | "show" | "movie";
+const isMode = (s: string | undefined): s is Mode => s === "all" || s === "show" || s === "movie";
+
+/**
+ * The last TMDB answer, so that coming back from a title's page re-draws the list
+ * you left instead of asking TMDB the same question again — and re-draws it before
+ * the router restores the scroll, which a fresh request would arrive far too late for.
+ * One entry: going back is the only way in, and that only ever wants the last one.
+ */
+let lastResults: { key: string; hits: TmdbSearchHit[] } | null = null;
+
 export const searchRoute: Route = {
   name: "search",
   title: "Search · WatchWhat",
-  async render(container) {
+  async render(container, params) {
     const lib = await loadLibrary();
     const movies = await loadMovies();
     const movieLists = await loadMovieLists();
-    type Mode = "all" | "show" | "movie";
-    let mode: Mode = "all";
+    // The query lives in the address (#/search/all/dune), so tapping a result and
+    // pressing back returns to the same search rather than an empty box.
+    let mode: Mode = isMode(params[0]) ? params[0] : "all";
+    const initialQuery = params[1] ? decodeURIComponent(params[1]) : "";
 
     // TMDB when there's a key, and failing that the library on the device.
     // Only the second cannot turn up something new, so it says so in the
@@ -41,7 +54,8 @@ export const searchRoute: Route = {
         ? { all: "Search your shows & movies…", show: "Search your shows…", movie: "Search your movies…" }
         : { all: "Search movies & TV shows…", show: "Search TV shows…", movie: "Search movies…" };
 
-    const input = el("input", { type: "search", placeholder: placeholders[mode], autofocus: "true" });
+    const input = el("input", { type: "search", placeholder: placeholders[mode], autofocus: "true" }) as HTMLInputElement;
+    input.value = initialQuery;
     const results = el("div", {});
 
     const modeTabs = el("div", { class: "home-tabs" });
@@ -54,6 +68,7 @@ export const searchRoute: Route = {
         modeTabs.querySelectorAll(".home-tab").forEach((t) => t.classList.remove("active"));
         tab.classList.add("active");
         input.placeholder = placeholders[mode];
+        rememberSearch();
         runSearch();
         input.focus();
       });
@@ -227,6 +242,20 @@ export const searchRoute: Route = {
       hit.kind === "show" ? showRow(hitToShow(hit), withType, hit.poster) : movieRow(hitToMovie(hit), withType, hit.poster);
 
     // ----- search plumbing -----
+    const cacheKey = (query: string): string => `${mode}\n${query}`;
+
+    /** Keep the address in step with the box, without a history entry per keystroke. */
+    function rememberSearch(): void {
+      const query = input.value.trim();
+      replaceHash(query ? `#/search/${mode}/${encodeURIComponent(query)}` : "#/search");
+    }
+
+    function showHits(hits: TmdbSearchHit[]): void {
+      const rows = hits.map((h) => hitRow(h, mode === "all"));
+      results.replaceChildren(...rows);
+      if (rows.length === 0) results.append(el("div", { class: "empty-note" }, "Nothing found."));
+    }
+
     function runSearch(): void {
       window.clearTimeout(debounce);
       const query = input.value.trim();
@@ -251,21 +280,32 @@ export const searchRoute: Route = {
         return;
       }
 
+      const key = cacheKey(query);
       debounce = window.setTimeout(async () => {
         const seq = ++requestSeq;
         try {
           const hits =
             mode === "all" ? await searchTmdbAll(query) : mode === "show" ? await searchTmdbShows(query) : await searchTmdbMovies(query);
           if (seq !== requestSeq) return; // a newer search superseded this one
-          const rows = hits.map((h) => hitRow(h, mode === "all"));
-          results.replaceChildren(...rows);
-          if (rows.length === 0) results.append(el("div", { class: "empty-note" }, "Nothing found."));
+          lastResults = { key, hits };
+          showHits(hits);
         } catch (e) {
           if (seq === requestSeq) toast(e instanceof Error ? e.message : "Search failed", "error");
         }
       }, 350);
     }
 
-    input.addEventListener("input", runSearch);
+    input.addEventListener("input", () => {
+      rememberSearch();
+      runSearch();
+    });
+
+    // Arriving with a query — from the back button, or a link. Cached hits are painted
+    // here and now, still inside `render`, so the router finds a full-height list to
+    // restore the scroll onto; anything else has to go and ask.
+    if (initialQuery.length >= 2) {
+      if (source === "tmdb" && lastResults?.key === cacheKey(initialQuery)) showHits(lastResults.hits);
+      else runSearch();
+    }
   },
 };

@@ -53,6 +53,21 @@ export function startRouter(appContainer: HTMLElement): void {
   void dispatch();
 }
 
+/**
+ * Move the address without a history entry and without re-rendering — for state a
+ * page keeps in the URL as you go, like the search query, so that leaving and
+ * coming back lands on the same view rather than a blank one.
+ *
+ * The history state is carried over so the entry stays stamped and still restores
+ * its scroll, and `currentHash` moves with it or the scroll position would be
+ * filed under the address we just left behind.
+ */
+export function replaceHash(hash: string): void {
+  if (hash === location.hash) return;
+  history.replaceState(history.state, "", hash);
+  currentHash = location.hash || "#/";
+}
+
 /** Re-render the current route (after data changes). */
 export function refreshRoute(): void {
   void dispatch();
