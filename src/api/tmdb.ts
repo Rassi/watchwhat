@@ -36,6 +36,20 @@ export interface TmdbMovieExtras {
 }
 
 /**
+ * The countries watch listings are kept for.
+ *
+ * TMDB answers `watch/providers` for roughly 40 countries and nothing reads more than these:
+ * the where-to-watch card, the poster badge, the service picker and the Releases screen all
+ * iterate this same list. Storing the rest cost 6.9 MB across the library against 0.8 MB for
+ * the ones actually consulted — data kept only to be skipped by an `if`, in every record and
+ * every export. Release *dates* are deliberately not filtered this way: `buyGlobal` falls back
+ * to the earliest announcement anywhere on purpose.
+ */
+function watchCountries(): string[] {
+  return getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+}
+
+/**
  * Notes that name the transaction, not a service: the entry is a buy/rent date that happens to
  * carry a note. Matched as whole words so SVOD and AVOD — which are subscription and ad-supported
  * — are left alone; only the transactional spellings are listed.
@@ -89,7 +103,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
   // is often the only advance warning available.
   // The buy date prefers the user's countries and falls back to the earliest anywhere; the
   // streaming one does not fall back at all. See below for why.
-  const userCountries = getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase());
+  const userCountries = watchCountries();
   let buyUser: { date: string; country: string } | null = null;
   let buyGlobal: { date: string; country: string } | null = null;
   let noteUser: { date: string; country: string; note: string } | null = null;
@@ -130,6 +144,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
     streamingRelease: noteUser,
   };
   for (const [country, entry] of Object.entries(data["watch/providers"]?.results ?? {})) {
+    if (!userCountries.includes(country)) continue;
     const providers: TmdbProvider[] = [
       ...(entry.flatrate ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "stream" })),
       ...(entry.free ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "free" })),
@@ -436,7 +451,9 @@ export async function fetchShowExtras(tmdbId: number, seasonNumbers: number[]): 
         .map((c) => ({ tmdbId: c.id, name: c.name, character: c.roles?.[0]?.character ?? c.character ?? null, profile: c.profile_path }));
     }
     if (data["watch/providers"]?.results) {
+      const userCountries = watchCountries();
       for (const [country, entry] of Object.entries(data["watch/providers"].results)) {
+        if (!userCountries.includes(country)) continue;
         const providers: TmdbProvider[] = [
           ...(entry.flatrate ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "stream" })),
           ...(entry.free ?? []).map((p): TmdbProvider => ({ name: p.provider_name, logo: p.logo_path, kind: "free" })),

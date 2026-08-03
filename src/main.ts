@@ -13,7 +13,7 @@ import { ensureUnlocked } from "./gate";
 import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
 import { dbDelete } from "./data/db";
 import { purgeTraktRemnants, seedCloudStamps } from "./data/settings";
-import { seedProviderSince } from "./data/sync";
+import { seedProviderSince, trimProviderCountries } from "./data/sync";
 import { installSyncTriggers, syncEvents } from "./data/replay";
 
 applyTheme();
@@ -27,9 +27,16 @@ purgeTraktRemnants();
 // Settings this device already had predate the sync stamps, so give them one —
 // otherwise nothing would ever seed a server that has never held any. Once only.
 seedCloudStamps();
-// Baseline for "this film only just turned up on a service" — from what is already cached, so
-// Releases starts noticing arrivals after one refresh rather than two. Once only.
-void seedProviderSince();
+// Two one-off passes over the cached films, both local and neither costing a request. First
+// shed watch listings for countries nothing reads — records cached before the fetch was
+// narrowed still carry all ~40 TMDB returns. Then set the baseline for "this film only just
+// turned up on a service", so Releases starts noticing arrivals after one refresh rather than
+// two. Strictly in sequence: both rewrite whole movie records, so run concurrently they would
+// read the same snapshot and the second to finish would undo the first.
+void (async () => {
+  await trimProviderCountries();
+  await seedProviderSince();
+})();
 await ensureUnlocked();
 
 registerRoute(watchlistRoute);

@@ -590,6 +590,43 @@ export async function seedProviderSince(): Promise<void> {
   localStorage.setItem(PROVIDER_SINCE_SEEDED_KEY, new Date().toISOString());
 }
 
+const PROVIDERS_TRIMMED_KEY = "watchwhat.providersTrimmed";
+
+/**
+ * Drop cached watch listings for countries that are never read, once, asking TMDB nothing.
+ *
+ * TMDB answers `watch/providers` for about 40 countries and everything that reads them — the
+ * where-to-watch card, the poster badge, the service picker, Releases — iterates the six in
+ * settings. Records cached before the fetch was narrowed still carry all of it: 6.9 MB across
+ * this library against 0.8 MB for the countries actually consulted, in IndexedDB and in every
+ * export. New fetches are already trimmed at the API boundary; this reclaims the back catalogue
+ * without waiting a fortnight for TTLs to turn it over.
+ */
+export async function trimProviderCountries(): Promise<void> {
+  if (localStorage.getItem(PROVIDERS_TRIMMED_KEY)) return;
+  const countries = watchCountryList();
+  // Settings not filled in yet. Trimming to nothing would throw away every listing on the
+  // device to save space it is about to want back.
+  if (countries.length === 0) return;
+
+  const trim = (rec: { providers?: Record<string, unknown> }): boolean => {
+    let changed = false;
+    for (const cc of Object.keys(rec.providers ?? {})) {
+      if (countries.includes(cc)) continue;
+      delete rec.providers![cc];
+      changed = true;
+    }
+    return changed;
+  };
+
+  const movies = await dbGetAll<MovieRec>("movies");
+  for (const movie of movies) if (trim(movie)) await dbPut("movies", movie.traktId, movie);
+  const episodes = await dbGetAll<EpisodesRec>("episodes");
+  for (const rec of episodes) if (trim(rec)) await dbPut("episodes", rec.traktId, rec);
+
+  localStorage.setItem(PROVIDERS_TRIMMED_KEY, new Date().toISOString());
+}
+
 /** Within a month of any known date — when listings actually move, in either direction. */
 function nearRelease(movie: MovieRec): boolean {
   const now = Date.now();
@@ -704,6 +741,7 @@ export async function ensureMovieDetails(
   onUpdate?: () => void,
   opts?: { skipWatchedRefresh?: boolean; force?: boolean },
 ): Promise<void> {
+  const wanted = watchCountryList();
   const stale = traktIds.filter((id) => {
     const movie = movies.get(id);
     if (!movie?.ids.tmdb) return false;
@@ -717,6 +755,12 @@ export async function ensureMovieDetails(
     if (movie.digitalRelease === undefined) return true; // backfill new field
     if (movie.streamingRelease === undefined) return true; // backfill new field
     if (movie.providersVersion !== PROVIDERS_VERSION) return true; // cached before rent was kept
+    // A watch country added since this record was cached has no listings stored for it, because
+    // providers are now kept only for the countries in settings. `providerSeen` being absent
+    // means the record predates that field rather than missing a country — `seedProviderSince`
+    // fills it in without a request, so refetching here instead would put the whole library
+    // through TMDB the first time this runs.
+    if (movie.providerSeen && wanted.some((cc) => !movie.providerSeen!.includes(cc))) return true;
     return Date.now() - movie.tmdbFetchedAt > detailsMaxAge(movie);
   });
   if (stale.length === 0) return;
