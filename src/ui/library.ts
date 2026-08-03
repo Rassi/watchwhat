@@ -30,6 +30,7 @@ const INFO: Record<Bucket, string[]> = {
   finished: [
     "Shows you've watched every aired episode of, and that have ended or been cancelled.",
     "Nothing more is coming, so these stay here.",
+    "Sorted by when you finished them, most recent first — the other groups are A–Z.",
   ],
   stopped: [
     'Shows you hid with "Stop tracking" — the equivalent of removing a show in TV Time.',
@@ -91,7 +92,13 @@ export const libraryRoute: Route = {
       for (const bucket of ["watching", "notStarted", "upToDate", "finished", "stopped"] as Bucket[]) {
         const shows = buckets.get(bucket);
         if (!shows?.length) continue;
-        shows.sort((a, b) => a.title.localeCompare(b.title));
+        // Finished shows answer "what did I wrap up lately?" — the rest are an A–Z index you look shows up in.
+        if (bucket === "finished") {
+          const at = (show: ShowRec): string => lib.watched.get(show.traktId)?.lastWatchedAt ?? "";
+          shows.sort((a, b) => at(b).localeCompare(at(a)) || a.title.localeCompare(b.title));
+        } else {
+          shows.sort((a, b) => a.title.localeCompare(b.title));
+        }
         const anchor = sectionHeader(`${LABELS[bucket]} (${shows.length})`, { title: LABELS[bucket], points: INFO[bucket] });
         sectionAnchors.set(bucket, anchor);
         const item = el("button", { class: "burger-item" }, `${LABELS[bucket]} (${shows.length})`);
