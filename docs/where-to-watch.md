@@ -49,6 +49,31 @@ windows, which for a staggered rollout can add up to roughly six months of
 eligibility, in bursts rather than one stretch. It is still nearly always
 inactive: for a library of mostly older films, only a handful qualify at once.
 
+### The two dates come from one TMDB field, split on a note
+
+TMDB files both the buy/rent drop and the subscription launch under release type
+4 (Digital), and nothing in the schema separates them — only the free-text
+`note`. So `digitalRelease` is the un-noted entry and `streamingRelease` the
+noted one, with two guards that exist because the naive split was wrong in both
+directions (found 2026-08-03 on *The Mandalorian and Grogu*):
+
+- **A note naming the transaction is not a service.** `Rakuten TV / TVOD` is a
+  rental by definition; read as a subscription it made a film that costs money
+  in all six watch countries say *"Streaming since Jul 21"*. `TRANSACTIONAL_NOTE`
+  in `src/api/tmdb.ts` files those as buy. It matches whole words, so **SVOD and
+  AVOD deliberately do not match `\bvod\b`** — they are the subscription and
+  ad-supported spellings.
+- **The streaming date never falls back outside `watchCountries`.** A
+  subscription is per-country by nature, so a launch somewhere you cannot watch
+  says nothing about you. `digitalRelease` still falls back to the earliest
+  anywhere; `streamingRelease` returns null rather than guess. *Supergirl* was
+  the second case: an Israeli `iTunes / Apple TV` entry, which is a store rather
+  than Apple TV+, and neither a country nor a service that applies here.
+
+Being wrong here is asymmetric, which is why both guards err the same way: a
+missing date costs a surprise, a false one reads as *"you already pay for this"*
+when every listing still charges.
+
 **One top-up is 2–3 requests, not one.** A search against US, then against the
 first configured country if US missed, then a single offers query with every
 country aliased into it. Six round trips per title would have made this too

@@ -29,11 +29,18 @@ export interface TmdbMovieExtras {
   trailer: string | null;
   cast: TmdbCastMember[];
   providersByCountry: Record<string, TmdbCountryProviders>;
-  /** Earliest un-noted digital release — when it can be bought or rented. */
+  /** Earliest digital release that is not a subscription launch — when it can be bought or rented. */
   digitalRelease: { date: string; country: string } | null;
-  /** Earliest digital release noted with the services, e.g. "Disney+ / Hulu" — the streaming date. */
+  /** Digital release noted with the services, e.g. "Disney+ / Hulu", in a watch country only. */
   streamingRelease: { date: string; country: string; note: string } | null;
 }
+
+/**
+ * Notes that name the transaction, not a service: the entry is a buy/rent date that happens to
+ * carry a note. Matched as whole words so SVOD and AVOD — which are subscription and ad-supported
+ * — are left alone; only the transactional spellings are listed.
+ */
+const TRANSACTIONAL_NOTE = /\b(tvod|pvod|dto|vod|rent|rental|buy|purchase|premium video on demand|download to own)\b/i;
 
 /** Poster path only — for movie search results. */
 export async function fetchMoviePoster(tmdbId: number): Promise<string | null> {
@@ -80,22 +87,29 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
   // different questions: when can I pay for this, versus when is it included in something I
   // already have. The noted date also lands here well before watch/providers catches up, so it
   // is often the only advance warning available.
-  // Both prefer the user's countries and fall back to the earliest anywhere.
+  // The buy date prefers the user's countries and falls back to the earliest anywhere; the
+  // streaming one does not fall back at all. See below for why.
   const userCountries = getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase());
   let buyUser: { date: string; country: string } | null = null;
   let buyGlobal: { date: string; country: string } | null = null;
   let noteUser: { date: string; country: string; note: string } | null = null;
-  let noteGlobal: { date: string; country: string; note: string } | null = null;
   for (const region of data.release_dates?.results ?? []) {
     for (const rel of region.release_dates ?? []) {
       if (rel.type !== 4 || !rel.release_date) continue;
       const candidate = { date: rel.release_date, country: region.iso_3166_1 };
       const mine = userCountries.includes(candidate.country);
       const note = rel.note?.trim();
-      if (note) {
+      // A note describing the *transaction* rather than a service is a buy/rent entry that
+      // happens to be annotated, so it must not be read as a subscription launch. "Rakuten TV /
+      // TVOD" is the case that proved it: TVOD is transactional by definition, and reading it as
+      // streaming made a rent-only film claim "Streaming since Jul 21" while every country still
+      // charged for it. Note that SVOD and AVOD deliberately do not match \bvod\b.
+      if (note && !TRANSACTIONAL_NOTE.test(note)) {
         const noted = { ...candidate, note };
+        // Only the user's own countries. A subscription is per-country by nature, so a launch in
+        // a country you cannot watch in says nothing about yours — and being wrong here is the
+        // expensive direction: it reads as "you already have this" when you would have to pay.
         if (mine && (!noteUser || noted.date < noteUser.date)) noteUser = noted;
-        if (!noteGlobal || noted.date < noteGlobal.date) noteGlobal = noted;
       } else {
         if (mine && (!buyUser || candidate.date < buyUser.date)) buyUser = candidate;
         if (!buyGlobal || candidate.date < buyGlobal.date) buyGlobal = candidate;
@@ -113,7 +127,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
       .map((c) => ({ tmdbId: c.id, name: c.name, character: c.character ?? null, profile: c.profile_path })),
     providersByCountry: {},
     digitalRelease: buyUser ?? buyGlobal,
-    streamingRelease: noteUser ?? noteGlobal,
+    streamingRelease: noteUser,
   };
   for (const [country, entry] of Object.entries(data["watch/providers"]?.results ?? {})) {
     const providers: TmdbProvider[] = [
