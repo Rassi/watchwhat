@@ -178,10 +178,19 @@ that reads like a date is a guess that gets planned around.
   90)**. That window has been shortening for years, so re-measure rather than
   trusting them to age.
 
-> **The streaming sample is still healing.** Some `streamingRelease` values in
-> the cache were set by the old note rule and are store dates wearing the wrong
-> hat, so they drag the measured streaming gap down until those records refresh.
-> The buy sample was never affected.
+> **Healed, and the cause was only half what it looked like** (2026-08-03). The
+> store dates were real — `STOREFRONT_NOTE` now catches a note that names only
+> where to buy (`iTunes / Apple TV`) alongside one that names the transaction
+> (`Rakuten TV / TVOD`) — but they were not what was dragging the streaming
+> median down. **`sampleGaps` was measuring films that never had a theatrical
+> window**: 15% of the streaming sample releases day-and-date or
+> streaming-first, and still 11% counting only the last two years, so it is a
+> standing feature rather than a pandemic hangover. Those are a different release
+> strategy from the one being predicted — a film still waiting with nothing
+> announced demonstrably did not follow it — and including them pulled p25 from
+> 47 days to 14. `MIN_WINDOW_DAYS` excludes them, which reproduces the
+> documented constants almost exactly. The buy sample was never affected either
+> way: nothing goes day-and-date to *purchase*.
 
 **A first top-up is 2–3 requests; every one after it is 1.** A search against US,
 then against the first configured country if US missed, then a single offers

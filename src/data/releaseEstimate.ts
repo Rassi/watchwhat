@@ -36,14 +36,20 @@ export interface ReleaseEstimate {
 }
 
 /**
- * Fallbacks for a library too small to speak for itself, measured across this one on 2026-08-03
- * (n=32 buy, n=26 stream, films from 2023 on). Re-measure with the snippet in `dependencies.md`
- * rather than trusting these to age well: the theatrical-to-digital window has been shortening
- * for years, and these are the median and quartiles of a moving target.
+ * Fallbacks for a library too small to speak for itself, re-measured across this one on
+ * 2026-08-03 after the storefront-note fix, over five years and windowed releases only
+ * (n=149 buy, n=118 stream — up from n=32 and n=26, because the first measurement predated
+ * both). Re-measure with the snippet in `dependencies.md` rather than trusting these to age
+ * well: the theatrical-to-digital window has been shortening for years, and these are the
+ * median and quartiles of a moving target.
+ *
+ * They barely moved, which is the point worth recording: the earlier figures were sound, and
+ * the live `gapQuartiles` had drifted away from them by sampling films with no window at all.
+ * See `MIN_WINDOW_DAYS`.
  */
 const FALLBACK: Record<ReleaseKind, { p25: number; median: number; p75: number }> = {
-  buy: { p25: 32, median: 39, p75: 63 },
-  stream: { p25: 46, median: 90, p75: 119 },
+  buy: { p25: 32, median: 45, p75: 60 },
+  stream: { p25: 47, median: 85, p75: 126 },
 };
 
 /** Below this, the library's own gaps are noise and the measured fallback is the better guess. */
@@ -51,6 +57,29 @@ const MIN_SAMPLE = 8;
 
 /** Gaps beyond this are a re-release or a catalogue backfill, not a rollout. */
 const MAX_GAP_DAYS = 400;
+
+/**
+ * Below this, the film had no theatrical window at all — a day-and-date or streaming-first
+ * release, which is a different animal from the one being predicted here.
+ *
+ * This is not a rounding guard, it is a population one. Everything `estimateRelease` is asked
+ * about is *in cinemas with nothing announced*, and a film that was always going straight to a
+ * service announced that on day one — so it is evidence about a release strategy this film
+ * demonstrably did not follow. Measured 2026-08-03 across this library: **15% of the streaming
+ * sample has a gap of three days or less** (Dune and The Suicide Squad on HBO Max the same day
+ * as cinemas, Soul and Luca and Turning Red straight to Disney+, Finch on Apple TV+), and it is
+ * still 11% counting only the last two years, so this is a standing feature of the landscape and
+ * not a pandemic hangover that will age out.
+ *
+ * Including them drags the streaming p25 from 47 days to 14 and the median from 85 to 63, which
+ * is every estimate arriving about three weeks early. Excluding them reproduces the constants
+ * below almost exactly — those were measured on windowed releases and were right; it was the
+ * live computation that had drifted away from them.
+ *
+ * Buy dates barely notice either way (median 45 against 43): a film does not go day-and-date to
+ * *purchase*. The rule is applied to both kinds anyway, because the reasoning is the same one.
+ */
+const MIN_WINDOW_DAYS = 7;
 
 /**
  * How long before a film reaches cinemas an announcement can already exist.
@@ -90,7 +119,7 @@ function sampleGaps(movies: Iterable<MovieRec>, kind: ReleaseKind): number[] {
     if (!Number.isFinite(released) || !Number.isFinite(to)) continue;
     if (released < now - SAMPLE_WINDOW_DAYS * DAY) continue;
     const gap = days(released, to);
-    if (gap < 0 || gap > MAX_GAP_DAYS) continue;
+    if (gap < MIN_WINDOW_DAYS || gap > MAX_GAP_DAYS) continue;
     out.push(gap);
   }
   return out.sort((a, b) => a - b);
