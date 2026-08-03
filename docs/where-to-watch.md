@@ -77,17 +77,34 @@ windows, which for a staggered rollout can add up to roughly six months of
 eligibility, in bursts rather than one stretch. It is still nearly always
 inactive: for a library of mostly older films, only a handful qualify at once.
 
-**`awaitingRelease` covers the gap `nearRelease` cannot.** Unwatched, in cinemas
-within the last year or still to come, and no streaming date known — the films
-whose *announcement* is the thing being waited for. `nearRelease` is computed
-from the dates, so a film whose digital date has not been announced is never
-near anything and would never be asked about: circular, exactly where
-`upcomingReleases` has an answer.
+**`awaitingRelease` covers the gap `nearRelease` cannot.** Unwatched, no
+streaming date known, and inside the window where an announcement could
+plausibly exist. `nearRelease` is computed from the dates, so a film whose
+digital date has not been announced is never near anything and would never be
+asked about: circular, exactly where `upcomingReleases` has an answer.
 
-It widens **which** films are asked about, never **how often**. Those titles sit
-in the 7-day bucket in `detailsMaxAge`, so on a 345-film library it was 11 extra
-titles for ~5 requests a day against ~130 (measured 2026-08-03). Widening the TTL
-to match is what would make this expensive — it would be ~130 more.
+**The window is `announcementWindow`, drawn from the same estimate the movie page
+shows** — which is what keeps this from being a poll:
+
+- **From 45 days before cinemas.** Not from the theatrical date itself, tempting
+  as that is: a streaming-first film announces ahead of its own premiere.
+  *Mayday* had a booked Apple TV+ date **31 days before** its theatrical date, so
+  cutting at release would have missed the one case this lookup exists for.
+- **Until p75 + 90 days.** Past its own third quartile by a season, a film has
+  stopped following the pattern that would predict it, and a weekly poll is no
+  longer what will find out — a provider appearing on the normal TMDB path still
+  will.
+
+It widens **which** films are asked about, never **how often**: those titles sit
+in the 7-day bucket in `detailsMaxAge`. On a 345-film library that is 7 extra
+titles for ~3 requests a day against ~132 (measured 2026-08-03; the unbounded
+version was 11 titles and ~5). Widening the TTL to match is what would make this
+expensive — it would be ~130 more.
+
+> **The load here is not where it looks.** The whole `awaitingRelease` cohort is
+> ~2% of JustWatch traffic. The other ~132/day is 11 near-release films on a **6h
+> TTL** — so that TTL, not this gate, is the lever if the total ever needs to
+> come down.
 
 ### The two dates come from one TMDB field, split on a note
 

@@ -120,12 +120,16 @@ handful of rows per pull.
 
 - **JustWatch is the only one with no contract**, so it is the one to actually
   watch. Its load is bounded by two counts, not one: 11 near-release films at ~3
-  requests each on a **6h** TTL (~132/day), plus 11 more that are
-  `awaitingRelease` — recent or upcoming in cinemas with no streaming date yet —
-  on a **7-day** TTL (~5/day). The second group doubles the *titles* and adds 4%
-  to the *requests*, which is the whole reason it was affordable: it widened the
-  gate, not the TTL. Both scale with *how many unreleased films sit in the
-  watchlist*, so if that list ever gets long, re-check these numbers. It is
+  requests each on a **6h** TTL (~132/day), plus 7 more that are
+  `awaitingRelease` — no streaming date yet, and inside the window where one
+  could plausibly have been announced — on a **7-day** TTL (~3/day). The second
+  group adds 2% to the requests, which is the whole reason it is affordable: it
+  widened the gate, not the TTL. Both scale with *how many unreleased films sit
+  in the watchlist*, so if that list ever gets long, re-check these numbers.
+
+  **The 6h TTL is the only real lever on this total.** Everything else is
+  rounding: dropping the near-release cohort to 12h would halve JustWatch
+  traffic, where tightening the announcement window further saves single digits. It is
   also the only service whose breakage is invisible by default; see
   `where-to-watch.md` for how the card now surfaces it.
 
@@ -188,8 +192,10 @@ const showStale = watched.filter(w => w.plays > 0).filter(w => {
 });
 // Clustering: how many share a fetch hour. A tall single bar is one synchronised burst.
 const hist = arr => arr.reduce((a, t) => (t != null && (a[Math.floor((now - t) / 36e5)] = (a[Math.floor((now - t) / 36e5)] || 0) + 1), a), {});
-// Both gates, since either one is enough to trigger a top-up.
-const awaiting = m => m.plays === 0 && !m.streamingRelease && m.released && +new Date(m.released) > now - 365*DAY;
+// Both gates, since either one is enough to trigger a top-up. The window mirrors
+// announcementWindow(): 45 days before cinemas, until p75 + 90 after.
+const awaiting = m => { const r = +new Date(m.released ?? ""); return m.plays === 0 && !m.streamingRelease &&
+  Number.isFinite(r) && now >= r - 45*DAY && now <= r + (119 + 90)*DAY; };
 const tops = movieStale.filter(m => near(m) || awaiting(m));
 console.table({
   moviesStaleNow: movieStale.length, justWatchThisBurst: tops.length * 3,

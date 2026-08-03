@@ -232,7 +232,9 @@ function renderPage(
             }))),
       // Only where nothing is announced: a guess must never sit next to the real date it is
       // guessing at. `estimateRelease` returns null the moment either one lands.
-      ...(["stream", "buy"] as const)
+      // Buy before stream, the same order the announced dates above use: cheapest question first,
+      // and a reader comparing the two lines should never have to re-orient.
+      ...(["buy", "stream"] as const)
         .map((kind) => {
           const est = estimateRelease(movies.values(), movie, kind);
           if (!est) return null;

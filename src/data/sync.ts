@@ -18,6 +18,7 @@
 import { fetchMovieExtras, fetchSeasonNumbers, fetchShowExtras, fetchShowImages, fetchShowSummary } from "../api/tmdb";
 import { fetchOmdbRatings } from "../api/omdb";
 import { fetchJustWatchOffers, type JustWatchUpcoming } from "../api/justwatch";
+import { announcementWindow, gapQuartiles, type GapQuartiles } from "./releaseEstimate";
 import { dbGet, dbGetAll, dbPut } from "./db";
 import { enqueue, now } from "./outbox";
 import type {
@@ -526,21 +527,28 @@ function nearRelease(movie: MovieRec): boolean {
 }
 
 /**
- * Recent or upcoming in cinemas, unwatched, with no streaming date known yet — the films whose
- * announcement is the thing being waited for.
+ * Unwatched, no streaming date known, and inside the stretch where an announcement could
+ * plausibly exist — the films whose announcement is the thing being waited for.
  *
  * `nearRelease` cannot cover this: it is computed from the dates, so a film whose digital date has
  * not been announced is never near anything and would never be asked about. That is circular
  * exactly where JustWatch's `upcomingReleases` has an answer TMDB does not.
  *
- * It stays cheap because it only widens *which* films are asked about, never how often: these sit
- * in the 7-day bucket in `detailsMaxAge`, so 11 extra titles cost about 5 requests a day against
- * ~130 today. Widening the TTL as well is what would make this expensive.
+ * The window comes from the same estimate the movie page shows, which is what keeps this from
+ * being a poll. A film nine months from cinemas has nothing booked to find, and one long past its
+ * own p75 has stopped following the pattern that would predict it — both are requests against an
+ * unofficial API that can only come back empty.
+ *
+ * It also only widens *which* films are asked about, never how often: these sit in the 7-day
+ * bucket in `detailsMaxAge`. Widening the TTL as well is what would make it expensive.
  */
-function awaitingRelease(movie: MovieRec): boolean {
+function awaitingRelease(movie: MovieRec, gap: GapQuartiles): boolean {
   if (movie.plays > 0 || movie.streamingRelease) return false;
   const released = movie.released ? new Date(movie.released).getTime() : NaN;
-  return Number.isFinite(released) && released > Date.now() - 365 * DAY;
+  if (!Number.isFinite(released)) return false;
+  const { from, until } = announcementWindow(gap, released);
+  const now = Date.now();
+  return now >= from && now <= until;
 }
 
 /**
@@ -643,6 +651,8 @@ export async function ensureMovieDetails(
   });
   if (stale.length === 0) return;
 
+  // Once for the whole batch: the window is a property of the library, not of any one film.
+  const streamGap = gapQuartiles(movies.values(), "stream");
   const notify = batchNotify(onUpdate);
   await mapWithConcurrency(stale, 4, async (traktId) => {
     const movie = movies.get(traktId)!;
@@ -661,7 +671,7 @@ export async function ensureMovieDetails(
     // the two windows where TMDB is known to be behind, and nothing else, which keeps this off
     // the other ~320 titles. A hand-asked refresh always tops up, whatever the dates say: someone
     // pressing the button is reporting that TMDB looks wrong, which is why this fallback exists.
-    if (movie.ids.tmdb && (opts?.force || nearRelease(movie) || awaitingRelease(movie))) {
+    if (movie.ids.tmdb && (opts?.force || nearRelease(movie) || awaitingRelease(movie, streamGap))) {
       const { offers, upcoming, outcome } = await fetchJustWatchOffers(movie.title, movie.ids.tmdb, watchCountryList());
       if (offers) movie.providers = mergeJustWatch(movie.providers ?? {}, offers);
       if (upcoming) applyUpcoming(movie, upcoming);

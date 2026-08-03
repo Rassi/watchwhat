@@ -52,6 +52,18 @@ const MIN_SAMPLE = 8;
 /** Gaps beyond this are a re-release or a catalogue backfill, not a rollout. */
 const MAX_GAP_DAYS = 400;
 
+/**
+ * How long before a film reaches cinemas an announcement can already exist.
+ *
+ * Not zero, which "do not ask before it is out" would suggest: a streaming-first film announces
+ * ahead of its own premiere. *Mayday* had a booked Apple TV+ date 31 days before its theatrical
+ * date, and cutting at release would have missed the exact case the lookup exists for.
+ */
+const ANNOUNCE_LEAD_DAYS = 45;
+
+/** Past its own p75 by this much, a film has broken the pattern and polling stops paying. */
+const ANNOUNCE_GRACE_DAYS = 90;
+
 /** Only recent films describe the window films are getting *now*. */
 const SAMPLE_WINDOW_DAYS = 5 * 365;
 
@@ -84,6 +96,43 @@ function sampleGaps(movies: Iterable<MovieRec>, kind: ReleaseKind): number[] {
   return out.sort((a, b) => a - b);
 }
 
+export interface GapQuartiles {
+  p25: number;
+  median: number;
+  p75: number;
+  /** How many films the library could actually offer; below MIN_SAMPLE these are the fallbacks. */
+  n: number;
+}
+
+/** How long the gap has run for this library's recent films, or the measured fallback. */
+export function gapQuartiles(movies: Iterable<MovieRec>, kind: ReleaseKind): GapQuartiles {
+  const gaps = sampleGaps(movies, kind);
+  if (gaps.length < MIN_SAMPLE) return { ...FALLBACK[kind], n: gaps.length };
+  return {
+    p25: percentile(gaps, 0.25),
+    median: percentile(gaps, 0.5),
+    p75: percentile(gaps, 0.75),
+    n: gaps.length,
+  };
+}
+
+/**
+ * The stretch during which an announcement could plausibly exist to be found, as timestamps —
+ * what decides whether asking JustWatch about a film is worth a request at all.
+ *
+ * Both ends come from the estimate rather than from a round number. Before the lead-in nothing is
+ * booked yet: asking about a film nine months from cinemas is a request that can only ever return
+ * an empty list. After p75 plus a grace period the film has broken its own pattern, and a weekly
+ * poll is no longer the thing that will find out — a provider appearing on the normal TMDB path
+ * still will.
+ */
+export function announcementWindow(gap: GapQuartiles, released: number): { from: number; until: number } {
+  return {
+    from: released - ANNOUNCE_LEAD_DAYS * DAY,
+    until: released + (gap.p75 + ANNOUNCE_GRACE_DAYS) * DAY,
+  };
+}
+
 /** Already watchable that way in a country actually watched in — nothing left to estimate. */
 function alreadyAvailable(movie: MovieRec, kind: ReleaseKind): boolean {
   const countries = getSettings().watchCountries.split(",").map((c) => c.trim().toUpperCase());
@@ -113,11 +162,8 @@ export function estimateRelease(movies: Iterable<MovieRec>, movie: MovieRec, kin
   if (released < now - MAX_GAP_DAYS * DAY) return null;
   if (alreadyAvailable(movie, kind)) return null;
 
-  const gaps = sampleGaps(movies, kind);
-  const enough = gaps.length >= MIN_SAMPLE;
-  const q = enough
-    ? { p25: percentile(gaps, 0.25), median: percentile(gaps, 0.5), p75: percentile(gaps, 0.75) }
-    : FALLBACK[kind];
+  const q = gapQuartiles(movies, kind);
+  const enough = q.n >= MIN_SAMPLE;
 
   const at = released + q.median * DAY;
   const high = released + q.p75 * DAY;
@@ -132,7 +178,7 @@ export function estimateRelease(movies: Iterable<MovieRec>, movie: MovieRec, kin
     precision,
     overdue: now > high,
     basis: enough
-      ? `Estimated from ${gaps.length} films in your library: ${kind === "buy" ? "digital release" : "streaming"} came ${q.p25}–${q.p75} days after cinemas, ${q.median} typically.`
+      ? `Estimated from ${q.n} films in your library: ${kind === "buy" ? "digital release" : "streaming"} came ${q.p25}–${q.p75} days after cinemas, ${q.median} typically.`
       : `Estimated from a typical ${q.p25}–${q.p75} day gap after cinemas — too few films in your library to measure your own.`,
   };
 }
