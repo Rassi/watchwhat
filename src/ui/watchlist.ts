@@ -2,7 +2,7 @@ import type { Route } from "../router";
 import { el, posterCard, sectionHeader } from "./components";
 import { getSettings } from "../data/settings";
 import { ensureImages, ensureProgress, loadLibrary } from "../data/sync";
-import type { Library, ProgressRec, ShowRec, WatchedRec } from "../data/model";
+import { isEnded, type Library, type ProgressRec, type ShowRec, type WatchedRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { homeTabs } from "./hometabs";
 
@@ -70,6 +70,7 @@ function card(row: RowData): HTMLElement {
     href: `#/show/${row.show.traktId}`,
     posterUrl: posterUrl(row.show.poster),
     progress: row.aired > 0 ? row.completed / row.aired : 0,
+    ended: isEnded(row.show),
     badge: isNewBadge(row) ? "NEW" : null,
     subtitle: next ? `${row.show.title} · S${next.season} E${next.number}` : row.show.title,
   });

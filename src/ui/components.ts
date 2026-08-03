@@ -99,6 +99,11 @@ export interface PosterCardOpts {
    * subscription you don't have, "rent" a grey $ for paying per title.
    */
   watch?: "mine" | "free" | "stream" | "rent" | null;
+  /**
+   * Ended or cancelled. Only changes a *full* bar: done for good reads purple,
+   * merely caught up on a running show stays green.
+   */
+  ended?: boolean;
 }
 
 /**
@@ -171,8 +176,11 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
   }
   if (opts.progress != null) {
     const bar = el("div", { class: "progress-track" });
-    const fill = el("div", { class: "progress-fill" });
-    fill.style.width = `${Math.round(Math.min(1, Math.max(0, opts.progress)) * 100)}%`;
+    const done = Math.min(1, Math.max(0, opts.progress));
+    const fill = el("div", { class: `progress-fill${done >= 1 ? (opts.ended ? " finished" : " complete") : ""}` });
+    // Floored, so one unwatched episode out of hundreds still leaves a visible
+    // gap: a bar that reads full must also be coloured as full.
+    fill.style.width = `${Math.floor(done * 100)}%`;
     bar.append(fill);
     card.append(bar);
   }

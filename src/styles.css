@@ -6,6 +6,7 @@
   --text-dim: #9a9aa5;
   --accent: #fdc620; /* TV Time yellow */
   --green: #2ea44f; /* was iOS #34c759 — too high-chroma once badges cover most of a grid */
+  --purple: #7d5bbe; /* TV Time's "finished for good" — kept near --green's chroma so a mixed grid stays calm */
   --danger: #ff5252;
   --border: #2c2c35;
   --control-bg: #3a3a42;
@@ -480,8 +481,13 @@ button {
   color: #000;
 }
 
+/* Full bar, two meanings: green = caught up, more to come; purple = ended, you're done for good. */
 .progress-fill.complete {
   background: var(--green);
+}
+
+.progress-fill.finished {
+  background: var(--purple);
 }
 
 /* ---------- forms / settings ---------- */

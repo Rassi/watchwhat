@@ -17,7 +17,7 @@ import {
   setEpisodesWatched,
   type EpisodeRef,
 } from "../data/sync";
-import { isTmdbKeyed, type EpisodeInfo, type EpisodesRec, type Library, type ProgressRec, type ShowRec } from "../data/model";
+import { isEnded, isTmdbKeyed, type EpisodeInfo, type EpisodesRec, type Library, type ProgressRec, type ShowRec } from "../data/model";
 import { backdropUrl, fetchShowSummary, stillUrl } from "../api/tmdb";
 
 function epCode(season: number, number: number): string {
@@ -503,7 +503,7 @@ function renderPage(
     if (years) meta.push(years);
     if (show.genres?.length) meta.push(show.genres.slice(0, 4).join(", "));
     const facts: string[] = [];
-    if (show.airs?.day && show.status !== "ended" && show.status !== "canceled") {
+    if (show.airs?.day && !isEnded(show)) {
       facts.push(`${show.airs.day}${show.airs.time ? ` | ${show.airs.time}` : ""}`);
     }
     if (show.runtime) facts.push(`${show.runtime} min`);
@@ -698,8 +698,9 @@ function renderPage(
 
     const fill = el("div", { class: "progress-fill" });
     if (progress && progress.aired > 0) {
-      fill.style.width = `${Math.round((progress.completed / progress.aired) * 100)}%`;
-      if (progress.completed === progress.aired) fill.classList.add("complete"); // all caught up
+      fill.style.width = `${Math.floor((progress.completed / progress.aired) * 100)}%`;
+      // Caught up on a running show is green; an ended one you've completed is purple — done for good.
+      if (progress.completed >= progress.aired) fill.classList.add(isEnded(show) ? "finished" : "complete");
     }
 
     const header = el(

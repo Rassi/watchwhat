@@ -53,6 +53,10 @@ export interface ShowRec {
   imagesFetchedAt?: number;
 }
 
+/** Nothing more is coming — the show wrapped or was cancelled. */
+export const isEnded = (show: { status?: string } | undefined): boolean =>
+  show?.status === "ended" || show?.status === "canceled";
+
 export interface CastMemberRec {
   tmdbId?: number;
   name: string;

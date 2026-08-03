@@ -32,6 +32,7 @@ import type {
   WatchedRec,
   WatchlistEntry,
 } from "./model";
+import { isEnded } from "./model";
 import { getSettings } from "./settings";
 
 export const dataEvents = new EventTarget();
@@ -191,8 +192,7 @@ export async function loadLibrary(): Promise<Library> {
 // ---------- lazy per-show data ----------
 
 function progressTtlMs(show: ShowRec | undefined): number {
-  const ended = show?.status === "ended" || show?.status === "canceled";
-  return ended ? 7 * 24 * 3600 * 1000 : 12 * 3600 * 1000;
+  return isEnded(show) ? 7 * 24 * 3600 * 1000 : 12 * 3600 * 1000;
 }
 
 function progressIsStale(lib: Library, traktId: number, skipFinishedTtl = false): boolean {
@@ -212,8 +212,7 @@ function progressIsStale(lib: Library, traktId: number, skipFinishedTtl = false)
   // revival (which flips status via the metadata sync, ending the exemption).
   if (skipFinishedTtl) {
     const show = lib.shows.get(traktId);
-    const ended = show?.status === "ended" || show?.status === "canceled";
-    if (ended && progress.aired > 0 && progress.completed >= progress.aired) return false;
+    if (isEnded(show) && progress.aired > 0 && progress.completed >= progress.aired) return false;
   }
   return Date.now() - progress.fetchedAt > progressTtlMs(lib.shows.get(traktId));
 }
