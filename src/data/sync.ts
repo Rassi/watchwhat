@@ -534,12 +534,24 @@ function knownDates(movie: MovieRec): number[] {
  */
 function stampProviderSightings(movie: MovieRec): void {
   const countries = watchCountryList();
+  /**
+   * When an arrival is dated to. **The previous fetch, not now** — this runs before
+   * `tmdbFetchedAt` is updated, so it still holds the last time this device had a complete
+   * picture. All that is actually known is that the listing appeared somewhere between then and
+   * now, and the older end is the only end that cannot overstate.
+   *
+   * At the usual 6h TTL the difference is invisible. Against a stale record it is the whole
+   * story: refreshing a library last seen three days ago stamped 22 films as arriving *today*,
+   * which is precisely the claim this screen exists to make trustworthy. Zero when there is no
+   * previous fetch to point at — an arrival that cannot be dated is not news, by the same rule
+   * that makes a first stamp baseline.
+   */
+  const arrivedAt = movie.tmdbFetchedAt && movie.tmdbFetchedAt > 0 ? movie.tmdbFetchedAt : 0;
   // Countries dropped from the watch list fall out of both, so their stamps stop being carried
   // around — and a country added back later re-baselines rather than reporting its whole
   // catalogue as having arrived that afternoon.
   const seen = new Set((movie.providerSeen ?? []).filter((cc) => countries.includes(cc)));
   const since = movie.providerSince ?? {};
-  const now = Date.now();
   const live = new Set<string>();
 
   for (const cc of countries) {
@@ -549,7 +561,7 @@ function stampProviderSightings(movie: MovieRec): void {
       if (p.kind === "rent") continue;
       const key = `${cc}:${p.name}`;
       live.add(key);
-      if (since[key] === undefined) since[key] = known ? now : 0;
+      if (since[key] === undefined) since[key] = known ? arrivedAt : 0;
     }
     seen.add(cc);
   }
