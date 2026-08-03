@@ -5,7 +5,7 @@ import type { Route } from "../router";
 import { el, posterCard, sectionHeader } from "./components";
 
 import { ensureMovieDetails, loadMovieLists, loadMovies } from "../data/sync";
-import type { MovieListRec, MovieRec } from "../data/model";
+import { isTrackedMovie, type MovieListRec, type MovieRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { watchBadge } from "./shared";
 import { moviesTabs } from "./hometabs";
@@ -118,7 +118,10 @@ export const moviesRoute: Route = {
     };
 
     const kickLazyLoads = (): void => {
-      void ensureMovieDetails(movies, [...movies.keys()], renderContent, { skipWatchedRefresh: true });
+      // Tracked films only. A film opened once from Search is stored just like a followed one,
+      // and refreshing those would grow the bill with every title ever browsed.
+      const tracked = [...movies.values()].filter(isTrackedMovie).map((m) => m.traktId);
+      void ensureMovieDetails(movies, tracked, renderContent, { skipWatchedRefresh: true });
     };
 
     renderContent();

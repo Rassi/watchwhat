@@ -21,7 +21,7 @@
 import type { Route } from "../router";
 import { el, posterCard, sectionHeader } from "./components";
 import { ensureMovieDetails, loadMovies } from "../data/sync";
-import type { MovieRec } from "../data/model";
+import { isTrackedMovie, type MovieRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { getSettings } from "../data/settings";
 import { matchServiceRule, parseServiceRules, watchBadge, type ServiceRule } from "./shared";
@@ -296,6 +296,8 @@ export const releasesRoute: Route = {
     };
 
     renderContent();
-    void ensureMovieDetails(movies, [...movies.keys()], renderContent, { skipWatchedRefresh: true });
+    // Tracked films only — see `isTrackedMovie`. This screen shows nothing else anyway.
+    const tracked = [...movies.values()].filter(isTrackedMovie).map((m) => m.traktId);
+    void ensureMovieDetails(movies, tracked, renderContent, { skipWatchedRefresh: true });
   },
 };

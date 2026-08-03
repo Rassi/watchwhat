@@ -56,6 +56,30 @@ function watchCountries(): string[] {
  */
 const TRANSACTIONAL_NOTE = /\b(tvod|pvod|dto|vod|rent|rental|buy|purchase|premium video on demand|download to own)\b/i;
 
+/**
+ * Notes that name a *storefront* rather than a subscription — the other half of the same
+ * problem. `TRANSACTIONAL_NOTE` catches an entry that says what the transaction is; this catches
+ * one that says only where to buy it, which reads as a service and is not one. *Supergirl* is
+ * the case that proved it: an `iTunes / Apple TV` entry filed as a streaming launch, so a film
+ * every country still charged for sat in Releases under "Coming soon" with a rental badge beside
+ * the date contradicting it.
+ *
+ * **Bare `Apple TV` and bare `YouTube` are deliberately absent.** Each names both a store and a
+ * subscription — Apple TV the storefront against Apple TV+, YouTube against YouTube Premium —
+ * and TMDB's free text cannot tell them apart. Filing a real subscription launch as a purchase
+ * is the expensive direction: a missing date costs a surprise, a wrong one reads as "you still
+ * have to pay" for something already included. The spelling that actually turns up,
+ * `iTunes / Apple TV`, is caught by `itunes` without touching Apple TV+.
+ *
+ * Whole words throughout, so `Amazon Video` (the store) matches while `Amazon Prime Video` (the
+ * subscription) does not.
+ */
+const STOREFRONT_NOTE =
+  /\b(itunes|google play|youtube movies|vudu|fandango at home|microsoft store|amazon video|rakuten tv|sky store|chili|blockbuster|sf anytime|viaplay store|maxdome store)\b/i;
+
+/** A note that describes buying rather than subscribing, by either route. */
+const buysRatherThanStreams = (note: string): boolean => TRANSACTIONAL_NOTE.test(note) || STOREFRONT_NOTE.test(note);
+
 /** Poster path only — for movie search results. */
 export async function fetchMoviePoster(tmdbId: number): Promise<string | null> {
   const { tmdbApiKey } = getSettings();
@@ -118,7 +142,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
       // TVOD" is the case that proved it: TVOD is transactional by definition, and reading it as
       // streaming made a rent-only film claim "Streaming since Jul 21" while every country still
       // charged for it. Note that SVOD and AVOD deliberately do not match \bvod\b.
-      if (note && !TRANSACTIONAL_NOTE.test(note)) {
+      if (note && !buysRatherThanStreams(note)) {
         const noted = { ...candidate, note };
         // Only the user's own countries. A subscription is per-country by nature, so a launch in
         // a country you cannot watch in says nothing about yours — and being wrong here is the

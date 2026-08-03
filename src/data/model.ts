@@ -53,6 +53,17 @@ export interface ShowRec {
   imagesFetchedAt?: number;
 }
 
+/**
+ * A film you actually track, rather than one you merely looked at.
+ *
+ * Opening a search result deep-links to the movie page, which builds a record from TMDB and
+ * caches it — so a film browsed once and never added is stored exactly like one on a list, and
+ * used to join the bulk refresh forever. Every screen already shows only tracked films; this is
+ * what stops the refreshes covering the rest.
+ */
+export const isTrackedMovie = (movie: MovieRec): boolean =>
+  movie.plays > 0 || movie.onWatchlist || (movie.customLists?.length ?? 0) > 0;
+
 /** Nothing more is coming — the show wrapped or was cancelled. */
 export const isEnded = (show: { status?: string } | undefined): boolean =>
   show?.status === "ended" || show?.status === "canceled";
