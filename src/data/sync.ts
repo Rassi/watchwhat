@@ -17,7 +17,7 @@
 
 import { fetchMovieExtras, fetchSeasonNumbers, fetchShowExtras, fetchShowImages, fetchShowSummary } from "../api/tmdb";
 import { fetchOmdbRatings } from "../api/omdb";
-import { fetchJustWatchOffers } from "../api/justwatch";
+import { fetchJustWatchOffers, type JustWatchUpcoming } from "../api/justwatch";
 import { dbGet, dbGetAll, dbPut } from "./db";
 import { enqueue, now } from "./outbox";
 import type {
@@ -526,6 +526,24 @@ function nearRelease(movie: MovieRec): boolean {
 }
 
 /**
+ * Recent or upcoming in cinemas, unwatched, with no streaming date known yet — the films whose
+ * announcement is the thing being waited for.
+ *
+ * `nearRelease` cannot cover this: it is computed from the dates, so a film whose digital date has
+ * not been announced is never near anything and would never be asked about. That is circular
+ * exactly where JustWatch's `upcomingReleases` has an answer TMDB does not.
+ *
+ * It stays cheap because it only widens *which* films are asked about, never how often: these sit
+ * in the 7-day bucket in `detailsMaxAge`, so 11 extra titles cost about 5 requests a day against
+ * ~130 today. Widening the TTL as well is what would make this expensive.
+ */
+function awaitingRelease(movie: MovieRec): boolean {
+  if (movie.plays > 0 || movie.streamingRelease) return false;
+  const released = movie.released ? new Date(movie.released).getTime() : NaN;
+  return Number.isFinite(released) && released > Date.now() - 365 * DAY;
+}
+
+/**
  * How long cached TMDB details stay good. Providers only really move around a release: a title
  * landing on a subscription this week can change daily, while a film from 1984 has said all it
  * is going to say. Watched films are settled by definition — you already saw it.
@@ -571,6 +589,36 @@ function mergeJustWatch(
   return merged;
 }
 
+/**
+ * Let JustWatch's announced dates stand in for TMDB's, where it has them.
+ *
+ * TMDB files the buy/rent drop and the subscription launch under one release type and separates
+ * them only by a free-text note, which is a guess in both directions — "Rakuten TV / TVOD" reads
+ * as streaming, and "Apple TV" cannot be told apart from "Apple TV Store". JustWatch answers the
+ * same question structurally: the date comes with the package, and the package says whether it is
+ * a subscription. These entries are also per watch country by construction, since that is what
+ * was asked for.
+ *
+ * It only ever *announces*. JustWatch empties `upcomingReleases` once a title is out, so nothing
+ * here can restate a date that has passed — which is why TMDB stays the fallback rather than
+ * being replaced.
+ */
+function applyUpcoming(movie: MovieRec, upcoming: JustWatchUpcoming[]): void {
+  const earliest = (kind: JustWatchUpcoming["kind"]): JustWatchUpcoming | null =>
+    upcoming.filter((u) => u.kind === kind).sort((a, b) => (a.date < b.date ? -1 : 1))[0] ?? null;
+
+  const stream = earliest("stream");
+  if (stream) movie.streamingRelease = { date: stream.date, country: stream.country, note: stream.service };
+
+  const store = earliest("rent");
+  // A date that has already passed while a watch country is still counting down means the film is
+  // out somewhere else, not here — so the announced local date is the one worth showing.
+  const known = movie.digitalRelease ? new Date(movie.digitalRelease.date).getTime() : null;
+  if (store && (known === null || !Number.isFinite(known) || known < Date.now())) {
+    movie.digitalRelease = { date: store.date, country: store.country };
+  }
+}
+
 /** TMDB artwork/cast/providers for movies missing or outgrowing their cache, limited concurrency. */
 export async function ensureMovieDetails(
   movies: Map<number, MovieRec>,
@@ -609,13 +657,14 @@ export async function ensureMovieDetails(
     movie.providersVersion = PROVIDERS_VERSION;
     movie.digitalRelease = extras.digitalRelease;
     movie.streamingRelease = extras.streamingRelease;
-    // Only near a release, and only with the dates TMDB just returned: this is the one window
-    // where TMDB is known to be behind, and it keeps the extra request off the other ~340 titles.
-    // A hand-asked refresh always tops up, whatever the dates say — someone pressing the button
-    // is reporting that TMDB looks wrong, which is the entire reason this fallback exists.
-    if (movie.ids.tmdb && (opts?.force || nearRelease(movie))) {
-      const { offers, outcome } = await fetchJustWatchOffers(movie.title, movie.ids.tmdb, watchCountryList());
+    // Near a release with the dates TMDB just returned, or still waiting for the date itself —
+    // the two windows where TMDB is known to be behind, and nothing else, which keeps this off
+    // the other ~320 titles. A hand-asked refresh always tops up, whatever the dates say: someone
+    // pressing the button is reporting that TMDB looks wrong, which is why this fallback exists.
+    if (movie.ids.tmdb && (opts?.force || nearRelease(movie) || awaitingRelease(movie))) {
+      const { offers, upcoming, outcome } = await fetchJustWatchOffers(movie.title, movie.ids.tmdb, watchCountryList());
       if (offers) movie.providers = mergeJustWatch(movie.providers ?? {}, offers);
+      if (upcoming) applyUpcoming(movie, upcoming);
       // Kept per title rather than read from the global health record afterwards: this loop runs
       // four movies at once, so the shared record belongs to whichever finished last.
       movie.topUp = outcome;

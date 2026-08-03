@@ -107,7 +107,7 @@ concurrency.
 |---|---|---|---|
 | TMDB | No hard limit; ~50 req/s practical | ~100 calls in a 5s burst | Comfortable |
 | OMDb | 1,000/day | One call per movie page opened | Enormous |
-| JustWatch | None published — unofficial | ~130 requests/day/device | Small numbers, no contract |
+| JustWatch | None published — unofficial | ~137 requests/day/device | Small numbers, no contract |
 | Worker requests | 100,000/day | ~100/day | Effectively unlimited |
 | D1 rows read | 5,000,000/day | 63K on the heaviest day (seeding) | 1.3% |
 | D1 rows written | 100,000/day | 17K on the heaviest day (seeding) | 17% |
@@ -119,9 +119,13 @@ handful of rows per pull.
 ## Things to be aware of
 
 - **JustWatch is the only one with no contract**, so it is the one to actually
-  watch. Its load is bounded by the near-release count — 11 films today, ~3
-  requests each, on a 6h TTL. That scales with *how many unreleased films sit in
-  the watchlist*, so if that list ever gets long, re-check this number. It is
+  watch. Its load is bounded by two counts, not one: 11 near-release films at ~3
+  requests each on a **6h** TTL (~132/day), plus 11 more that are
+  `awaitingRelease` — recent or upcoming in cinemas with no streaming date yet —
+  on a **7-day** TTL (~5/day). The second group doubles the *titles* and adds 4%
+  to the *requests*, which is the whole reason it was affordable: it widened the
+  gate, not the TTL. Both scale with *how many unreleased films sit in the
+  watchlist*, so if that list ever gets long, re-check these numbers. It is
   also the only service whose breakage is invisible by default; see
   `where-to-watch.md` for how the card now surfaces it.
 
@@ -184,8 +188,13 @@ const showStale = watched.filter(w => w.plays > 0).filter(w => {
 });
 // Clustering: how many share a fetch hour. A tall single bar is one synchronised burst.
 const hist = arr => arr.reduce((a, t) => (t != null && (a[Math.floor((now - t) / 36e5)] = (a[Math.floor((now - t) / 36e5)] || 0) + 1), a), {});
+// Both gates, since either one is enough to trigger a top-up.
+const awaiting = m => m.plays === 0 && !m.streamingRelease && m.released && +new Date(m.released) > now - 365*DAY;
+const tops = movieStale.filter(m => near(m) || awaiting(m));
 console.table({
-  moviesStaleNow: movieStale.length, justWatchThisBurst: movieStale.filter(near).length * 3,
+  moviesStaleNow: movieStale.length, justWatchThisBurst: tops.length * 3,
+  ofWhichAwaitingOnly: tops.filter(m => !near(m)).length,
+  justWatchPerDay: Math.round(tops.reduce((s, m) => s + (DAY / age(m)) * 3, 0)),
   showsStaleNow: showStale.length, tmdbCallsIfShowsOpened: showStale.length * 2,
 });
 console.log("unwatched movie fetch ages (h):", hist(movies.filter(m => m.plays === 0).map(m => m.tmdbFetchedAt)));

@@ -34,7 +34,8 @@ directly:
   `ensureMovieDetails`. A show's providers are TMDB's answer and nothing else,
   including when the ↻ is pressed — so do not go looking for a broken top-up on
   a show page. There isn't one to break.
-- Fires when `nearRelease(movie)`, or whenever a refresh is asked for by hand.
+- Fires when `nearRelease(movie)` **or `awaitingRelease(movie)`**, or whenever a
+  refresh is asked for by hand.
 - `apis.justwatch.com/graphql`, which is **JustWatch's own web API, not a
   published one**: no versioning, no contract. Every caller must treat failure as
   "no extra information" and keep TMDB's answer.
@@ -42,12 +43,51 @@ directly:
   **confirmed by the `tmdbId` it reports back** — never by title text, which
   would happily match a remake or a sequel.
 
+**JustWatch also knows the announced date, and knows it structurally**
+(`upcomingReleases`, added 2026-08-03). Per country, it returns `releaseDate`
+with the `package` it belongs to, and the package carries its own
+`monetizationTypes` — so whether a date means *included* or *costs money* is a
+lookup rather than a guess at free text. It is what settles the case TMDB cannot
+express: `Apple TV` the store (`packageId 2`, RENT/BUY) and `Apple TV` the
+subscription (`packageId 350`, `appletvplus`, FLATRATE) share a display name and
+differ only here.
+
+- **It only ever announces.** JustWatch empties the list once a title is out, so
+  it can say *"Streaming from"* and never *"Streaming since"*. For anything
+  already released the offers are the answer, which is why TMDB's noted date
+  stays as the fallback rather than being replaced.
+- **`applyUpcoming` in `sync.ts` is where it lands.** A subscription-typed entry
+  always wins over TMDB's note. A store-typed one only fills a gap, or replaces a
+  date that has *already passed* — a date in the past next to a country still
+  counting down means the film is out somewhere else, not here.
+- **It costs no extra request**: same node id, same document, aliased alongside
+  the offers.
+
+> **The two halves must not share a fate.** A rename inside `upcomingReleases` is
+> a *validation* error, and GraphQL fails the whole document for one — which
+> would take the provider top-up down with a feature it does not depend on. So
+> `offersDocument(countries, withUpcoming)` can build the query without it, and a
+> null result is retried once that way. One extra request in the broken case,
+> none otherwise, and the Settings canary asserts the field separately.
+
 **The window is wider than "30 days" suggests.** `nearRelease` is ±30 days of
 *any* known date, and there are up to three — theatrical `released`,
 `digitalRelease.date`, `streamingRelease.date`. That is up to three 60-day
 windows, which for a staggered rollout can add up to roughly six months of
 eligibility, in bursts rather than one stretch. It is still nearly always
 inactive: for a library of mostly older films, only a handful qualify at once.
+
+**`awaitingRelease` covers the gap `nearRelease` cannot.** Unwatched, in cinemas
+within the last year or still to come, and no streaming date known — the films
+whose *announcement* is the thing being waited for. `nearRelease` is computed
+from the dates, so a film whose digital date has not been announced is never
+near anything and would never be asked about: circular, exactly where
+`upcomingReleases` has an answer.
+
+It widens **which** films are asked about, never **how often**. Those titles sit
+in the 7-day bucket in `detailsMaxAge`, so on a 345-film library it was 11 extra
+titles for ~5 requests a day against ~130 (measured 2026-08-03). Widening the TTL
+to match is what would make this expensive — it would be ~130 more.
 
 ### The two dates come from one TMDB field, split on a note
 
@@ -73,6 +113,9 @@ directions (found 2026-08-03 on *The Mandalorian and Grogu*):
 Being wrong here is asymmetric, which is why both guards err the same way: a
 missing date costs a surprise, a false one reads as *"you already pay for this"*
 when every listing still charges.
+
+Both guards are still only a defence for the fallback path. Where JustWatch has
+an answer, no note is parsed at all.
 
 **One top-up is 2–3 requests, not one.** A search against US, then against the
 first configured country if US missed, then a single offers query with every
@@ -280,7 +323,11 @@ disc as a rental.
   propagate one device's stale answer to a device that had a fresher one.
 - **A show's providers live on the episodes record**, not the show record.
 - **Shows never call JustWatch.** If a show's providers look wrong, TMDB is the
-  only thing to blame and the only thing to fix.
+  only thing to blame and the only thing to fix. Shows therefore never get an
+  announced streaming date either — `applyUpcoming` is on the movie path only.
+- **"Streaming since" can only ever come from TMDB's note**, since JustWatch
+  drops a release from `upcomingReleases` the moment it happens. A wrong *since*
+  is a note-parsing problem; a wrong *from* is a JustWatch one.
 - **The JustWatch endpoint has no contract.** If top-ups quietly stop, run the
   Settings check before assuming the network is at fault — a field rename fails
   silently and looks exactly like "no extra offers".

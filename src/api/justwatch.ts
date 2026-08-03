@@ -71,6 +71,52 @@ export interface JustWatchOffer {
 }
 
 /**
+ * An announced digital release that has not happened yet — the structured answer to the question
+ * TMDB only hints at through a free-text note.
+ *
+ * `kind` is decided from the package's own `monetizationTypes`, not from the name: JustWatch
+ * models "Apple TV+" (`appletvplus`, FLATRATE) and "Apple TV Store" (RENT/BUY) as different
+ * packages, so whether a date means "included" or "costs money" is a lookup rather than a guess.
+ */
+export interface JustWatchUpcoming {
+  date: string;
+  country: string;
+  service: string;
+  kind: "stream" | "rent";
+}
+
+/**
+ * Upcoming releases are only ever *upcoming*: JustWatch empties the list once a title is out, so
+ * this can say "streaming from" and never "streaming since". For anything already released the
+ * offers are the answer, which is what the rest of this file fetches.
+ */
+const UPCOMING_SELECTION = `upcomingReleases(releaseTypes: [DIGITAL]) {
+        releaseDate
+        package { clearName monetizationTypes }
+      }`;
+
+interface UpcomingRow {
+  releaseDate?: string | null;
+  package?: { clearName?: string | null; monetizationTypes?: string[] | null } | null;
+}
+
+/** One country's announced digital releases, keeping the cheapest kind per service. */
+function upcomingFrom(rows: UpcomingRow[], country: string): JustWatchUpcoming[] {
+  const out: JustWatchUpcoming[] = [];
+  for (const row of rows) {
+    const date = row.releaseDate?.trim();
+    const service = row.package?.clearName?.trim();
+    if (!date || !service) continue;
+    const types = row.package?.monetizationTypes ?? [];
+    // A package offering a subscription is a subscription launch even if it also rents: the
+    // question being answered is "will I have to pay again", and the answer there is no.
+    const kind = types.some((t) => KINDS[t] === "stream" || KINDS[t] === "free" || KINDS[t] === "ads") ? "stream" : "rent";
+    out.push({ date, country, service, kind });
+  }
+  return out;
+}
+
+/**
  * Where to send a query.
  *
  * **JustWatch sends no `Access-Control-Allow-Origin` for `https://rassi.github.io`,
@@ -181,24 +227,42 @@ export async function checkJustWatch(countries: string[]): Promise<JustWatchChec
   });
   if (!hit) return checks;
 
-  const aliases = wanted
-    .map((cc) => `${cc.toLowerCase()}: offers(country: ${cc}, platform: WEB) { monetizationType presentationType package { clearName } }`)
-    .join("\n      ");
-  interface OfferRow {
-    monetizationType: string;
-    presentationType?: string;
-    package: { clearName: string };
+  // The full document, upcoming releases included, so a rename in either half shows up here
+  // rather than as top-ups quietly getting less useful.
+  let withUpcoming = true;
+  let offers = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, true), {
+    id: hit.node.id,
+    language: "en",
+  });
+  if (!offers?.node) {
+    withUpcoming = false;
+    offers = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, false), { id: hit.node.id });
   }
-  const offers = await post<{ node: Record<string, OfferRow[] | undefined> }>(
-    `query O($id: ID!) { node(id: $id) { ... on MovieOrShow {\n      ${aliases}\n  } } }`,
-    { id: hit.node.id },
-  );
   if (!offers?.node) {
     checks.push({ label: "Offers query", ok: false, detail: "No node returned — offers field or country aliasing may have changed" });
     return checks;
   }
-  const rows = wanted.flatMap((cc) => offers.node[cc.toLowerCase()] ?? []);
-  const withCountries = wanted.filter((cc) => (offers.node[cc.toLowerCase()] ?? []).length > 0);
+  const node = offers.node;
+  const offersIn = (cc: string): OfferRow[] => {
+    const block = node[`o_${cc.toLowerCase()}`];
+    return Array.isArray(block) ? block : [];
+  };
+  // Availability is not asserted — the canary is 2006 and has nothing upcoming anywhere, which is
+  // the normal answer. What must hold is that the field still resolves and still returns a list.
+  const upcomingBlocks = wanted
+    .map((cc) => node[`u_${cc.toLowerCase()}`])
+    .filter((b): b is { upcomingReleases?: UpcomingRow[] | null } => b !== undefined && !Array.isArray(b));
+  checks.push({
+    label: "Upcoming releases",
+    ok: withUpcoming && upcomingBlocks.some((b) => Array.isArray(b.upcomingReleases)),
+    detail: !withUpcoming
+      ? "Document rejected with upcomingReleases — announced streaming dates are off; offers still work"
+      : upcomingBlocks.some((b) => Array.isArray(b.upcomingReleases))
+        ? `Field resolves in ${upcomingBlocks.length} country block(s)`
+        : "Resolved but returned no list — upcomingReleases may have changed shape",
+  });
+  const rows = wanted.flatMap(offersIn);
+  const withCountries = wanted.filter((cc) => offersIn(cc).length > 0);
   checks.push({
     label: "Offers query",
     ok: true,
@@ -237,7 +301,38 @@ export interface JustWatchOutcome {
 
 export interface JustWatchResult {
   offers: Record<string, JustWatchOffer[]> | null;
+  /** Announced digital releases across the watch countries; null if the query could not be run. */
+  upcoming: JustWatchUpcoming[] | null;
   outcome: JustWatchOutcome;
+}
+
+interface OfferRow {
+  monetizationType: string;
+  presentationType?: string;
+  package: { clearName: string };
+}
+
+/** One country's slot in the aliased query: an offers array, or the content block. */
+type CountryBlock = OfferRow[] | { upcomingReleases?: UpcomingRow[] | null } | undefined;
+
+/**
+ * Offers and upcoming releases for every country, aliased into one document.
+ *
+ * `withUpcoming: false` is the same query this file has always sent. It exists because the two
+ * halves must not share a fate: a rename inside `upcomingReleases` is a *validation* error, which
+ * fails the whole document, and that would take the provider top-up down with a feature it does
+ * not depend on. Asking again without it costs one request in the broken case and none otherwise.
+ */
+function offersDocument(countries: string[], withUpcoming: boolean): string {
+  const blocks = countries
+    .map((cc) => {
+      const key = cc.toLowerCase();
+      const offers = `o_${key}: offers(country: ${cc}, platform: WEB) { monetizationType presentationType package { clearName } }`;
+      return withUpcoming ? `${offers}\n      u_${key}: content(country: ${cc}, language: $language) { ${UPCOMING_SELECTION} }` : offers;
+    })
+    .join("\n      ");
+  const args = withUpcoming ? "$id: ID!, $language: Language!" : "$id: ID!";
+  return `query O(${args}) { node(id: $id) { ... on MovieOrShow {\n      ${blocks}\n  } } }`;
 }
 
 /**
@@ -250,13 +345,18 @@ export async function fetchJustWatchOffers(
   tmdbId: number,
   countries: string[],
 ): Promise<JustWatchResult> {
-  const done = (stage: JustWatchHealth["stage"], offers: Record<string, JustWatchOffer[]> | null): JustWatchResult => ({
+  const done = (
+    stage: JustWatchHealth["stage"],
+    offers: Record<string, JustWatchOffer[]> | null,
+    upcoming: JustWatchUpcoming[] | null = null,
+  ): JustWatchResult => ({
     offers,
+    upcoming,
     outcome: { at: Date.now(), stage },
   });
   const wanted = countries.map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
   // No countries configured is not a JustWatch problem, so it must not be recorded as one.
-  if (wanted.length === 0) return { offers: null, outcome: { at: Date.now(), stage: "ok" } };
+  if (wanted.length === 0) return { offers: null, upcoming: null, outcome: { at: Date.now(), stage: "ok" } };
   try {
     // US first: the largest catalogue, so the likeliest to know a title at all.
     const searchIn = [...new Set(["US", ...wanted])];
@@ -268,30 +368,37 @@ export async function fetchJustWatchOffers(
       return done("search", null);
     }
 
-    const aliases = wanted
-      .map(
-        (cc) =>
-          `${cc.toLowerCase()}: offers(country: ${cc}, platform: WEB) { monetizationType presentationType package { clearName } }`,
-      )
-      .join("\n      ");
-    interface OfferRow {
-      monetizationType: string;
-      presentationType?: string;
-      package: { clearName: string };
+    let askedForUpcoming = true;
+    let data = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, true), {
+      id: nodeId,
+      language: "en",
+    });
+    if (!data?.node) {
+      // Retry without the newer half before calling this a failure — see `offersDocument`.
+      askedForUpcoming = false;
+      data = await post<{ node: Record<string, CountryBlock> }>(offersDocument(wanted, false), { id: nodeId });
     }
-    const data = await post<{ node: Record<string, OfferRow[] | undefined> }>(
-      `query O($id: ID!) { node(id: $id) { ... on MovieOrShow {\n      ${aliases}\n  } } }`,
-      { id: nodeId },
-    );
     if (!data?.node) {
       recordHealth({ at: Date.now(), ok: false, stage: "offers", detail: "Offers query returned no node" });
       return done("offers", null);
     }
+    const node = data.node;
+    const offersIn = (cc: string): OfferRow[] => {
+      const block = node[`o_${cc.toLowerCase()}`];
+      return Array.isArray(block) ? block : [];
+    };
+    const upcomingIn = (cc: string): JustWatchUpcoming[] => {
+      const block = node[`u_${cc.toLowerCase()}`];
+      if (!block || Array.isArray(block)) return [];
+      return upcomingFrom(block.upcomingReleases ?? [], cc);
+    };
 
     const unknownKinds = new Set<string>();
+    const upcoming: JustWatchUpcoming[] = [];
     const out: Record<string, JustWatchOffer[]> = {};
     for (const cc of wanted) {
-      const rows = data.node[cc.toLowerCase()] ?? [];
+      upcoming.push(...upcomingIn(cc));
+      const rows = offersIn(cc);
       // One package can appear several times per country (tiers, presentation types); keep the
       // cheapest kind, matching how the rest of the app de-duplicates providers.
       const best = new Map<string, JustWatchOffer["kind"]>();
@@ -312,20 +419,24 @@ export async function fetchJustWatchOffers(
       if (best.size > 0) out[cc] = [...best].map(([name, kind]) => ({ name, kind }));
     }
     const countries = Object.keys(out);
+    const soon = upcoming.length > 0 ? `; ${upcoming.length} announced release(s)` : "";
     recordHealth({
       at: Date.now(),
       ok: countries.length > 0,
       stage: countries.length > 0 ? "ok" : "offers",
       detail:
-        countries.length > 0
-          ? `${title}: offers in ${countries.join(", ")}`
-          : `${title}: matched, but no usable offers in any watch country`,
+        (countries.length > 0
+          ? `${title}: offers in ${countries.join(", ")}${soon}`
+          : `${title}: matched, but no usable offers in any watch country${soon}`) +
+        // Not a failure — the offers still arrived — but it is the only trace that the field this
+        // now depends on has moved. The Settings canary is what tests it deliberately.
+        (askedForUpcoming ? "" : " (upcomingReleases unavailable)"),
       ...(unknownKinds.size > 0 ? { unknownKinds: [...unknownKinds] } : {}),
     });
     // "Matched, but nothing on offer here" is a real answer, not a breakage — a film genuinely
     // absent from every configured country looks exactly like this. So the per-title outcome is
     // `ok` even where the global health record calls it a miss: nothing needs the user's attention.
-    return done("ok", countries.length > 0 ? out : null);
+    return done("ok", countries.length > 0 ? out : null, askedForUpcoming ? upcoming : null);
   } catch (e) {
     // Unofficial API: a failure just means TMDB's answer stands.
     recordHealth({
