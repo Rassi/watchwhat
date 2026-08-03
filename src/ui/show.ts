@@ -648,7 +648,9 @@ function renderPage(
       const check = el("button", { class: "check" }, "✓");
       check.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        void onToggleEpisode({ traktId: e.traktId, season: e.season, number: e.number });
+        // No "mark previous?" prompt here: the strip is already the queue in watch
+        // order, so ticking one is a statement about that episode and nothing else.
+        void mutate([{ traktId: e.traktId, season: e.season, number: e.number }], true);
       });
       const still = stillUrl(e.still, "w300");
       const card = el(
