@@ -8,7 +8,7 @@ import { pickServices } from "./servicePicker";
 import { parseServiceRules } from "./shared";
 import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
 import { downloadBackup, exportBackup, importBackup, parseBackup, summarize } from "../data/transfer";
-import { flush, getCursor, pendingCount } from "../data/outbox";
+import { flush, getCursor, pendingCount, setCursor } from "../data/outbox";
 import { syncEvents, syncNow } from "../data/replay";
 import { describePlan, planBackfill, planListDateRepair, pushBackfill } from "../data/backfill";
 import { syncConfigured, testConnection } from "../api/syncserver";
@@ -297,6 +297,54 @@ export const settingsRoute: Route = {
       }
     });
 
+    /**
+     * Wind the cursor back to nothing and replay the log from the start.
+     *
+     * The recovery for the one failure the cursor cannot describe: an event that was *pulled*
+     * by a build too old to understand it. The cursor advances per page regardless — it has to,
+     * or an event nothing can apply would wedge sync forever — so the day the app learns to read
+     * that event, it is already behind the cursor and will never be offered again. That is
+     * exactly what happened to the list dates: every device that synced while running the
+     * previous build swallowed all 62 of them.
+     *
+     * Safe because replay is idempotent by construction: a watch already recorded is skipped
+     * rather than counted twice, and a list membership already held lands on the same state.
+     * That property is the whole reason the log is append-only, so leaning on it here costs
+     * nothing beyond the time to walk the log.
+     */
+    const repullBtn = el("button", { class: "btn small" }, "Replay the whole log…");
+    repullBtn.addEventListener("click", async () => {
+      if (!syncConfigured()) {
+        toast("Enter a URL and token, then Save first");
+        return;
+      }
+      const choice = await dialog(
+        "Replay the whole log?",
+        "Reads every event on the server again from the beginning and re-applies it here. Use this when this " +
+          "device is missing something the others have — usually because it synced while running an older " +
+          "version of the app. Nothing is deleted and nothing is uploaded; re-applying what this device " +
+          "already has changes nothing.",
+        [
+          { label: "Cancel", value: "cancel", kind: "plain" },
+          { label: "Replay", value: "go", kind: "primary" },
+        ],
+      );
+      if (choice !== "go") return;
+
+      repullBtn.textContent = "Replaying…";
+      try {
+        await setCursor(0);
+        const { applied, skipped } = await syncNow();
+        const parts = [applied ? `${applied} applied` : "", skipped ? `${skipped} skipped` : ""].filter(Boolean);
+        toast(parts.length ? `Replayed — ${parts.join(", ")}` : "Replayed — nothing on the server");
+      } catch (err) {
+        toast(`Replay failed: ${err instanceof Error ? err.message : "unknown error"}. Safe to try again.`, "error");
+      } finally {
+        repullBtn.textContent = "Replay the whole log…";
+        await refreshSyncStatus();
+      }
+    });
+
     const syncHelp = el("p", {});
     syncHelp.innerHTML =
       `Keeps this device and the others in step through your own Cloudflare Worker. Every change is saved locally ` +
@@ -322,6 +370,8 @@ export const settingsRoute: Route = {
       backfillBtn,
       el("p", { class: "field-help" }, "One-off — the first seeding sent custom lists undated, so other devices order them wrongly."),
       repairBtn,
+      el("p", { class: "field-help" }, "Missing something the other devices have? This device may have synced it while running an older version."),
+      repullBtn,
     );
 
     // --- Preferences ---

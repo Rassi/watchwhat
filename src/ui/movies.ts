@@ -7,10 +7,9 @@ import { el, posterCard, sectionHeader } from "./components";
 import { ensureMovieDetails, loadMovieLists, loadMovies } from "../data/sync";
 import { isTrackedMovie, type MovieListRec, type MovieRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
+import { replaceHash } from "../router";
 import { watchBadge } from "./shared";
 import { moviesTabs } from "./hometabs";
-
-const ACTIVE_LIST_KEY = "watchwhat.activeMovieList"; // "watchlist" or a list trakt id
 
 export const moviesRoute: Route = {
   name: "movies",
@@ -18,6 +17,12 @@ export const moviesRoute: Route = {
   async render(container, params) {
     const view: "watchlist" | "watched" = params[0] === "watched" ? "watched" : "watchlist";
     container.append(moviesTabs(view));
+
+    // Which list is showing lives in the address — `#/movies/list/36041308` — rather than in
+    // session storage, so a reload, a pull-to-refresh or a link back lands on the list you were
+    // reading instead of dropping you on the watchlist.
+    let activeListId: number | null = params[0] === "list" ? Number(params[1]) : null;
+    if (activeListId !== null && !Number.isFinite(activeListId)) activeListId = null;
 
     let movies = await loadMovies();
     let lists = await loadMovieLists();
@@ -64,8 +69,7 @@ export const moviesRoute: Route = {
       }
 
       // Watch-list view: picker between the watchlist and custom lists.
-      const stored = sessionStorage.getItem(ACTIVE_LIST_KEY) ?? "watchlist";
-      const activeList: MovieListRec | undefined = lists.find((l) => String(l.traktId) === stored);
+      const activeList: MovieListRec | undefined = lists.find((l) => l.traktId === activeListId);
 
       if (lists.length > 0) {
         const select = el("select", { class: "season-select list-select" });
@@ -81,7 +85,10 @@ export const moviesRoute: Route = {
           );
         }
         select.addEventListener("change", () => {
-          sessionStorage.setItem(ACTIVE_LIST_KEY, select.value);
+          activeListId = select.value === "watchlist" ? null : Number(select.value);
+          // `replaceHash`, so flipping through the picker doesn't fill the back stack with
+          // every list you glanced at — Back still returns wherever you came from.
+          replaceHash(activeListId === null ? "#/movies" : `#/movies/list/${activeListId}`);
           renderContent();
         });
         content.append(el("div", { class: "list-picker" }, select));
