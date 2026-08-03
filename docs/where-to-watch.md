@@ -117,6 +117,45 @@ when every listing still charges.
 Both guards are still only a defence for the fallback path. Where JustWatch has
 an answer, no note is parsed at all.
 
+### Estimating the date nobody has announced
+
+Both sources answer only once a date is *booked* — JustWatch's
+`upcomingReleases` is empty even for 2027 titles, and TMDB has no entry until a
+distributor files one. That leaves the most common state of an unwatched new
+film — out in cinemas, nothing announced — with nothing to say, which is exactly
+when the question gets asked. So `src/data/releaseEstimate.ts` guesses, from how
+long the gap has actually run for the films in *this* library.
+
+**It is vague in proportion to its distance**, which is the whole design: a guess
+that reads like a date is a guess that gets planned around.
+
+| Away | Reads as |
+|---|---|
+| > 180 days | `sometime in 2027` |
+| 90–180 | `early 2027` |
+| 30–90 | `around October 2026` |
+| < 30 | `around late August` |
+| past the p75 window | `no date announced yet` |
+
+- **Never beside the real thing.** `estimateRelease` returns null the moment a
+  date of that kind is announced, the film is watched, it is already watchable
+  that way in a watch country, or it is more than 400 days old — past that,
+  nothing is coming and a date would be fiction.
+- **It shows its working.** The tooltip carries the sample it came from
+  (*"Estimated from 41 films in your library: digital release came 32–67 days
+  after cinemas, 39 typically"*). An estimate that cannot be checked is a rumour.
+- **Styled quieter than a booked date** — `.release-estimate` is dimmed and
+  italic where `.digital-release` is accent-coloured and bold.
+- Below `MIN_SAMPLE` films it falls back to constants measured here on
+  2026-08-03: **32–63 days to buy (median 39)**, **46–119 to stream (median
+  90)**. That window has been shortening for years, so re-measure rather than
+  trusting them to age.
+
+> **The streaming sample is still healing.** Some `streamingRelease` values in
+> the cache were set by the old note rule and are store dates wearing the wrong
+> hat, so they drag the measured streaming gap down until those records refresh.
+> The buy sample was never affected.
+
 **One top-up is 2–3 requests, not one.** A search against US, then against the
 first configured country if US missed, then a single offers query with every
 country aliased into it. Six round trips per title would have made this too

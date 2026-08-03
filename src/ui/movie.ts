@@ -3,6 +3,7 @@
 import type { Route } from "../router";
 import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
 import { ensureMovieDetails, ensureMovieExtRatings, loadMovieLists, loadMovies, setMovieWatched } from "../data/sync";
+import { describeEstimate, estimateRelease } from "../data/releaseEstimate";
 import { isTmdbKeyed, type MovieListRec, type MovieRec } from "../data/model";
 import { backdropUrl, fetchMovieSummary } from "../api/tmdb";
 import { castStripCard, movieListsDropdown, whereToWatchCard } from "./shared";
@@ -229,6 +230,18 @@ function renderPage(
               const where = "note" in r ? `${r.country} · ${r.note}` : r.country;
               return el("p", { class: "about-facts digital-release" }, `${label}: ${when} (${where})`);
             }))),
+      // Only where nothing is announced: a guess must never sit next to the real date it is
+      // guessing at. `estimateRelease` returns null the moment either one lands.
+      ...(["stream", "buy"] as const)
+        .map((kind) => {
+          const est = estimateRelease(movies.values(), movie, kind);
+          if (!est) return null;
+          const label = kind === "stream" ? "Streaming" : "To buy or rent";
+          const line = el("p", { class: "about-facts release-estimate" }, `${label}: ${describeEstimate(est)} (estimated)`);
+          line.title = est.basis;
+          return line;
+        })
+        .filter((p) => p !== null),
       (() => {
         const names = [
           ...(movie.onWatchlist ? ["Watchlist"] : []),

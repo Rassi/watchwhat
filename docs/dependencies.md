@@ -197,6 +197,13 @@ console.table({
   justWatchPerDay: Math.round(tops.reduce((s, m) => s + (DAY / age(m)) * 3, 0)),
   showsStaleNow: showStale.length, tmdbCallsIfShowsOpened: showStale.length * 2,
 });
+// Release-gap quartiles, for the FALLBACK constants in releaseEstimate.ts.
+const gaps = pick => movies.map(m => [+new Date(m.released), +new Date(pick(m) ?? "")])
+  .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && a > now - 5*365*DAY)
+  .map(([a, b]) => Math.round((b - a) / DAY)).filter(d => d >= 0 && d <= 400).sort((a, b) => a - b);
+const q = d => d.length ? [.25,.5,.75].map(p => d[Math.floor(p * d.length)]).join(" / ") : "no sample";
+console.log("theatrical→digital p25/median/p75:", q(gaps(m => m.digitalRelease?.date)));
+console.log("theatrical→streaming p25/median/p75:", q(gaps(m => m.streamingRelease?.date)));
 console.log("unwatched movie fetch ages (h):", hist(movies.filter(m => m.plays === 0).map(m => m.tmdbFetchedAt)));
 console.log("started show fetch ages (h):", hist(watched.filter(w => w.plays > 0).map(w => P.get(w.traktId)?.fetchedAt)));
 ```

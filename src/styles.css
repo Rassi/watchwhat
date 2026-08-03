@@ -1132,6 +1132,12 @@ button {
   font-weight: 600;
 }
 
+/* Deliberately quieter than .digital-release: a guess must not look like a booked date. */
+.release-estimate {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
 .list-picker {
   display: flex;
   justify-content: center;
