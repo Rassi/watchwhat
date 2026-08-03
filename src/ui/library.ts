@@ -1,9 +1,9 @@
 /** All shows, grouped like TV Time's "All shows" page — purely from the local cache. */
 
-import type { Route } from "../router";
+import { replaceHash, type Route } from "../router";
 import { el, posterCard, sectionHeader } from "./components";
 import { ensureImages, ensureProgress, loadLibrary } from "../data/sync";
-import type { Library, ShowRec } from "../data/model";
+import { isEnded, type Library, type ShowRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { homeTabs } from "./hometabs";
 
@@ -42,6 +42,11 @@ const INFO: Record<Bucket, string[]> = {
   ],
 };
 
+const ORDER: Bucket[] = ["watching", "notStarted", "upToDate", "finished", "stopped"];
+
+/** How far down the viewport a section header may sit and still count as the one you're at. */
+const SECTION_MARK = 64;
+
 function bucketOf(lib: Library, show: ShowRec): Bucket | null {
   if (lib.hidden.has(show.traktId)) return "stopped";
   const watched = lib.watched.get(show.traktId);
@@ -51,15 +56,14 @@ function bucketOf(lib: Library, show: ShowRec): Bucket | null {
   const progress = lib.progress.get(show.traktId);
   if (!progress) return "watching"; // unknown yet — refined once progress loads
   if (progress.completed < progress.aired) return "watching";
-  const ended = show.status === "ended" || show.status === "canceled";
-  return ended ? "finished" : "upToDate";
+  return isEnded(show) ? "finished" : "upToDate";
 }
 
 export const libraryRoute: Route = {
   name: "library",
   tab: "home",
   title: "All shows · WatchWhat",
-  async render(container) {
+  async render(container, params) {
     container.append(homeTabs("library"));
 
     const lib = await loadLibrary();
@@ -78,6 +82,54 @@ export const libraryRoute: Route = {
 
     const sectionAnchors = new Map<Bucket, HTMLElement>();
 
+    /**
+     * The section you're at lives in the address (#/library/finished), so a
+     * refresh — or coming back from a show — returns you to it instead of the top.
+     */
+    let pending = ORDER.includes(params[0] as Bucket) ? (params[0] as Bucket) : null;
+
+    let jumped = false;
+    const scrollToPending = (): void => {
+      const anchor = pending && sectionAnchors.get(pending);
+      if (!anchor) return;
+      // Back/forward restores the exact position you left, which beats the top of
+      // a section — so only take over from a page that opened at the top.
+      if (!jumped && window.scrollY > 0) {
+        pending = null;
+        return;
+      }
+      jumped = true;
+      window.scrollTo(0, window.scrollY + anchor.getBoundingClientRect().top - SECTION_MARK / 2);
+    };
+
+    // Shows move between sections as progress loads, so the restore has to survive
+    // a few re-renders — until you take over by scrolling yourself.
+    const release = (): void => {
+      pending = null;
+    };
+    for (const ev of ["wheel", "touchstart", "keydown"] as const) {
+      window.addEventListener(ev, release, { passive: true, once: true });
+    }
+
+    let queued = false;
+    const onScroll = (): void => {
+      if (!content.isConnected) {
+        window.removeEventListener("scroll", onScroll); // the route is gone — no teardown hook to do it for us
+        return;
+      }
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        let at: Bucket | null = null;
+        // Insertion order is document order, so the last one past the mark is the one you're in.
+        for (const [bucket, anchor] of sectionAnchors) {
+          if (anchor.getBoundingClientRect().top <= SECTION_MARK) at = bucket;
+        }
+        replaceHash(at ? `#/library/${at}` : "#/library");
+      });
+    };
+
     const renderContent = (): void => {
       const buckets = new Map<Bucket, ShowRec[]>();
       for (const show of lib.shows.values()) {
@@ -89,7 +141,7 @@ export const libraryRoute: Route = {
       content.replaceChildren();
       burgerMenu.replaceChildren();
       sectionAnchors.clear();
-      for (const bucket of ["watching", "notStarted", "upToDate", "finished", "stopped"] as Bucket[]) {
+      for (const bucket of ORDER) {
         const shows = buckets.get(bucket);
         if (!shows?.length) continue;
         // Finished shows answer "what did I wrap up lately?" — the rest are an A–Z index you look shows up in.
@@ -119,6 +171,7 @@ export const libraryRoute: Route = {
                 href: `#/show/${show.traktId}`,
                 posterUrl: posterUrl(show.poster),
                 progress: progress && progress.aired > 0 ? progress.completed / progress.aired : null,
+                ended: isEnded(show),
                 subtitle: show.title,
               });
             }),
@@ -132,9 +185,13 @@ export const libraryRoute: Route = {
             : el("div", { class: "empty-note" }, "No shows here yet — import your data from Settings, or add some via Search."),
         );
       }
+      // After a frame, not a microtask: the router scrolls to the top once render
+      // returns, and that has to happen before we jump to the section.
+      if (pending) requestAnimationFrame(scrollToPending);
     };
 
     renderContent();
+    window.addEventListener("scroll", onScroll, { passive: true });
 
     const started = [...lib.watched.entries()].filter(([, w]) => w.plays > 0).map(([id]) => id);
     void ensureProgress(lib, started, renderContent, { skipFinishedTtl: true });
