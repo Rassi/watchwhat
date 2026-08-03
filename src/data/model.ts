@@ -159,6 +159,17 @@ export interface MovieRec {
   listedAt: string | null;
   /** Keys of the custom personal lists containing this movie. */
   customLists?: number[];
+  /**
+   * When this film joined each custom list, keyed by list id — what those lists are
+   * ordered by.
+   *
+   * Per list rather than folded into `listedAt`: that one belongs to the watchlist, and
+   * a film on the watchlist and two lists has three different answers to "when was this
+   * added". Ordering every list by the watchlist's date is what let the same film sit
+   * first on one device and last on another — membership carried no date of its own, so
+   * a device that learned about it from the log had nothing to sort by at all.
+   */
+  listAddedAt?: Record<number, string>;
   overview?: string;
   runtime?: number | null;
   rating?: number | null;

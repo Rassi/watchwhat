@@ -10,7 +10,7 @@ import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
 import { downloadBackup, exportBackup, importBackup, parseBackup, summarize } from "../data/transfer";
 import { flush, getCursor, pendingCount } from "../data/outbox";
 import { syncEvents, syncNow } from "../data/replay";
-import { describePlan, planBackfill, pushBackfill } from "../data/backfill";
+import { describePlan, planBackfill, planListDateRepair, pushBackfill } from "../data/backfill";
 import { syncConfigured, testConnection } from "../api/syncserver";
 import { reconcileSettings } from "../data/cloudsettings";
 
@@ -249,6 +249,54 @@ export const settingsRoute: Route = {
       }
     });
 
+    // The other one-off, and a much smaller one: the first seeding could not date a list
+    // membership, so every one of them went up stamped 1970 and any device that learned a film
+    // from the log alone showed it at the bottom of the list for good. Run from the device whose
+    // dates are the real ones.
+    const repairBtn = el("button", { class: "btn small" }, "Re-send list dates…");
+    repairBtn.addEventListener("click", async () => {
+      if (!syncConfigured()) {
+        toast("Enter a URL and token, then Save first");
+        return;
+      }
+      repairBtn.textContent = "Reading lists…";
+      let plan;
+      try {
+        plan = await planListDateRepair();
+      } finally {
+        repairBtn.textContent = "Re-send list dates…";
+      }
+      if (plan.events.length === 0) {
+        toast("Nothing to send — no films on any custom list here");
+        return;
+      }
+
+      const choice = await dialog(
+        "Re-send list dates?",
+        `This re-sends ${plan.events.length} list memberships with the dates this device has for them, so the ` +
+          `other devices sort those lists the same way. Do this on the device whose ordering is the one you want. ` +
+          `Nothing is removed and it is safe to run again.`,
+        [
+          { label: "Cancel", value: "cancel", kind: "plain" },
+          { label: `Send ${plan.events.length} events`, value: "go", kind: "primary" },
+        ],
+      );
+      if (choice !== "go") return;
+
+      repairBtn.textContent = "Sending…";
+      try {
+        await pushBackfill(plan, ({ sent, total }) => {
+          repairBtn.textContent = `Sending ${sent}/${total}…`;
+        });
+        toast(`Sent — ${plan.events.length} list dates`);
+      } catch (err) {
+        toast(`Sending failed: ${err instanceof Error ? err.message : "unknown error"}. Safe to try again.`, "error");
+      } finally {
+        repairBtn.textContent = "Re-send list dates…";
+        await refreshSyncStatus();
+      }
+    });
+
     const syncHelp = el("p", {});
     syncHelp.innerHTML =
       `Keeps this device and the others in step through your own Cloudflare Worker. Every change is saved locally ` +
@@ -272,6 +320,8 @@ export const settingsRoute: Route = {
       syncStatus,
       el("p", { class: "field-help" }, "First time only — put this device's existing library into the log so the others can pull it."),
       backfillBtn,
+      el("p", { class: "field-help" }, "One-off — the first seeding sent custom lists undated, so other devices order them wrongly."),
+      repairBtn,
     );
 
     // --- Preferences ---

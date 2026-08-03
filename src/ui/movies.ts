@@ -36,7 +36,12 @@ export const moviesRoute: Route = {
         subtitle: `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
       });
 
-    const addedAt = (m: MovieRec): string => m.listedAt ?? "";
+    // Two different dates, deliberately. The watchlist has one per film; a custom list has one
+    // per membership. Sorting both by `listedAt` was why the same film could sit first here and
+    // last on another device — a list add stored no date, so a film that arrived through the log
+    // had only the watchlist's date to sort by, or none.
+    const watchlistedAt = (m: MovieRec): string => m.listedAt ?? "";
+    const listedOnAt = (m: MovieRec, listId: number): string => m.listAddedAt?.[listId] ?? "";
 
     // With nothing to sync from, an empty library is empty — not still loading.
     const nothingYet = (): HTMLElement =>
@@ -85,7 +90,7 @@ export const moviesRoute: Route = {
       if (!activeList) {
         const watchlist = all
           .filter((m) => m.onWatchlist && m.plays === 0)
-          .sort((a, b) => addedAt(b).localeCompare(addedAt(a)));
+          .sort((a, b) => watchlistedAt(b).localeCompare(watchlistedAt(a)));
         if (watchlist.length > 0) {
           content.append(sectionHeader(`Want to watch (${watchlist.length})`), el("div", { class: "poster-grid" }, ...watchlist.map((m) => card(m))));
         } else {
@@ -97,7 +102,9 @@ export const moviesRoute: Route = {
         // Custom lists hide watched movies (same rule as the watchlist); the movie
         // stays on the list, so unmarking it brings it back here.
         const onList = all.filter((m) => m.customLists?.includes(activeList.traktId));
-        const items = onList.filter((m) => m.plays === 0).sort((a, b) => addedAt(b).localeCompare(addedAt(a)));
+        const items = onList
+          .filter((m) => m.plays === 0)
+          .sort((a, b) => listedOnAt(b, activeList.traktId).localeCompare(listedOnAt(a, activeList.traktId)));
         if (items.length > 0) {
           content.append(
             sectionHeader(`${activeList.name} (${items.length})`),

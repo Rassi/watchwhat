@@ -670,6 +670,41 @@ export async function seedProviderSince(): Promise<void> {
   localStorage.setItem(PROVIDER_SINCE_SEEDED_KEY, new Date().toISOString());
 }
 
+const LIST_DATES_SEEDED_KEY = "watchwhat.listDatesSeeded";
+
+/**
+ * Give every existing list membership a date of its own, once, asking nothing of the network.
+ *
+ * `listAddedAt` is new; every membership on this device predates it. The only date such a
+ * record carries is `listedAt`, which belongs to the watchlist and is right for a list only by
+ * coincidence — but it is also exactly what these lists have been ordered by all along, so
+ * adopting it changes nothing on screen while giving each membership a date it owns from here
+ * on. A film with no date at all keeps none: inventing today's would jump it to the top of the
+ * list for no reason, and the repair pass has nothing truer to send either.
+ *
+ * This has to run before `planListDateRepair` reads the library, which startup order gives it —
+ * otherwise the repair would re-send the same undated events under new ids and bake 1970 in for
+ * good.
+ */
+export async function seedListAddedAt(): Promise<void> {
+  if (localStorage.getItem(LIST_DATES_SEEDED_KEY)) return;
+  const movies = await dbGetAll<MovieRec>("movies");
+  for (const movie of movies) {
+    if (!movie.listedAt) continue;
+    const dates = { ...(movie.listAddedAt ?? {}) };
+    let changed = false;
+    for (const id of movie.customLists ?? []) {
+      if (dates[id]) continue;
+      dates[id] = movie.listedAt;
+      changed = true;
+    }
+    if (!changed) continue;
+    movie.listAddedAt = dates;
+    await saveMovieFields(movie, ["listAddedAt"]);
+  }
+  localStorage.setItem(LIST_DATES_SEEDED_KEY, new Date().toISOString());
+}
+
 const PROVIDERS_TRIMMED_KEY = "watchwhat.providersTrimmed";
 
 /**
@@ -1184,13 +1219,22 @@ export async function setMovieOnCustomList(
   on: boolean,
   opts?: MutationOpts,
 ): Promise<void> {
+  const at = opts?.at ?? now();
   const without = (movie.customLists ?? []).filter((id) => id !== listId);
   // Removing first keeps a replayed add from listing the same movie twice.
   movie.customLists = on ? [...without, listId] : without;
+  // The event has always carried `at`; until now replay threw it away, so a film that
+  // reached a device through the log arrived undated and sorted to the bottom of the list
+  // forever. Plain last-write-wins, which is what makes the repair pass work: the corrected
+  // `seed2:list:…` event has the higher seq, so it lands after the 1970 one it supersedes.
+  const dates = { ...(movie.listAddedAt ?? {}) };
+  if (on) dates[listId] = at;
+  else delete dates[listId];
+  movie.listAddedAt = dates;
   movies.set(movie.traktId, movie);
   await dbPut("movies", movie.traktId, movie);
   if (movie.ids.tmdb && !opts?.replay) {
-    await enqueue(on ? "list.add" : "list.remove", { movie: movie.ids.tmdb, list: listId, at: opts?.at ?? now() });
+    await enqueue(on ? "list.add" : "list.remove", { movie: movie.ids.tmdb, list: listId, at });
   }
   emitChange();
 }

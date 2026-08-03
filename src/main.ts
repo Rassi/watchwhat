@@ -13,7 +13,7 @@ import { ensureUnlocked } from "./gate";
 import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
 import { dbDelete } from "./data/db";
 import { purgeTraktRemnants, seedCloudStamps } from "./data/settings";
-import { migrateMovieListsToSettings, seedProviderSince, trimProviderCountries } from "./data/sync";
+import { migrateMovieListsToSettings, seedListAddedAt, seedProviderSince, trimProviderCountries } from "./data/sync";
 import { installSyncTriggers, syncEvents } from "./data/replay";
 
 applyTheme();
@@ -27,15 +27,18 @@ purgeTraktRemnants();
 // Settings this device already had predate the sync stamps, so give them one —
 // otherwise nothing would ever seed a server that has never held any. Once only.
 seedCloudStamps();
-// Two one-off passes over the cached films, both local and neither costing a request. First
+// Three one-off passes over the cached films, all local and none costing a request. First
 // shed watch listings for countries nothing reads — records cached before the fetch was
 // narrowed still carry all ~40 TMDB returns. Then set the baseline for "this film only just
 // turned up on a service", so Releases starts noticing arrivals after one refresh rather than
-// two. Strictly in sequence: both rewrite whole movie records, so run concurrently they would
+// two. Strictly in sequence: they rewrite whole movie records, so run concurrently they would
 // read the same snapshot and the second to finish would undo the first.
 void (async () => {
   await trimProviderCountries();
   await seedProviderSince();
+  // Then give every custom-list membership a date of its own, so the lists stop being ordered
+  // by the watchlist's date — and so the repair pass has something true to send.
+  await seedListAddedAt();
   // And move the custom list catalogue into the synced settings, so a device set up from sync
   // alone gets the list *names* rather than replaying memberships onto lists it cannot see.
   await migrateMovieListsToSettings();

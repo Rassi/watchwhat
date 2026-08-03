@@ -20,7 +20,7 @@
 
 import { MAX_BATCH, pushEvents, syncConfigured, type OutgoingEvent } from "../api/syncserver";
 import type { EventKind } from "./outbox";
-import type { ProgressRec } from "./model";
+import type { MovieRec, ProgressRec } from "./model";
 import { dbGetAll } from "./db";
 import { getDeviceId } from "./settings";
 import { loadLibrary, loadMovies } from "./sync";
@@ -46,6 +46,34 @@ const UNDATED = "1970-01-01T00:00:00.000Z";
 
 function event(id: string, kind: EventKind, body: Record<string, unknown>, at: string, device: string): OutgoingEvent {
   return { id, device, ts: at, kind, body };
+}
+
+/**
+ * The `list.add` events for a library, dated from the memberships themselves.
+ *
+ * `seed2:` and not `seed:` because the first seeding sent every one of these stamped
+ * `1970-01-01` — list membership carried no date to send — and the server's `INSERT OR IGNORE`
+ * means an id it already holds can never be corrected in place. A fresh id is the only way to
+ * retract a fact in an append-only log: both events replay, the later one wins, and the date
+ * comes out right on every device. The old rows stay where they are, which is the point.
+ *
+ * Split out from `planBackfill` so the repair pass can send exactly these and nothing else.
+ * Same ids from either route, so running both does the work once.
+ */
+function listEvents(movies: Iterable<MovieRec>, device: string): OutgoingEvent[] {
+  const events: OutgoingEvent[] = [];
+  for (const movie of movies) {
+    const tmdb = movie.ids.tmdb;
+    if (!tmdb) continue;
+    for (const list of movie.customLists ?? []) {
+      // `listedAt` as a second chance, not as the answer: `seedListAddedAt` normally fills
+      // `listAddedAt` from it at startup, and if that has somehow not run, reading it here
+      // directly still beats sending UNDATED under an id that can never be corrected again.
+      const at = movie.listAddedAt?.[list] ?? movie.listedAt ?? UNDATED;
+      events.push(event(`seed2:list:${tmdb}:${list}`, "list.add", { movie: tmdb, list, at }, at, device));
+    }
+  }
+  return events;
 }
 
 /**
@@ -131,18 +159,31 @@ export async function planBackfill(): Promise<BackfillPlan> {
       );
       counts.watchlist++;
     }
-
-    for (const list of movie.customLists ?? []) {
-      events.push(
-        event(`seed:list:${tmdb}:${list}`, "list.add", { movie: tmdb, list, at: UNDATED }, UNDATED, device),
-      );
-      counts.lists++;
-    }
   }
+
+  const lists = listEvents(movies.values(), device);
+  events.push(...lists);
+  counts.lists = lists.length;
 
   // Oldest first, so the log reads in the order things happened.
   events.sort((a, b) => a.ts.localeCompare(b.ts));
   return { events, counts };
+}
+
+/**
+ * Just the list memberships, re-sent with the dates they actually have.
+ *
+ * A one-off for a log seeded before list membership carried a date: everything else in it was
+ * dated correctly the first time, so pushing four thousand episode events to correct sixty-two
+ * list ones would be all cost and no effect. Safe to run repeatedly for the same reason the
+ * full seeding is — the ids are derived from the fact, so the second run changes nothing.
+ */
+export async function planListDateRepair(): Promise<BackfillPlan> {
+  const device = getDeviceId();
+  const movies = await loadMovies();
+  const events = listEvents(movies.values(), device);
+  events.sort((a, b) => a.ts.localeCompare(b.ts));
+  return { events, counts: { episodes: 0, movies: 0, watchlist: 0, hidden: 0, lists: events.length } };
 }
 
 /**
