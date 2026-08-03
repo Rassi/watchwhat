@@ -72,6 +72,8 @@ const MAX_SETTING_VALUE_CHARS = 4096;
 const MAX_TITLE_IDS = 500;
 /** D1 caps bound parameters per statement; a SELECT binds one per id. */
 const TITLE_SELECT_CHUNK = 200;
+/** One page of `?since=`. Provider blobs are ~2 KB each, so this is a few hundred KB at worst. */
+const TITLE_PAGE_SIZE = 100;
 /** A country's offers are a few short names; the whole row is well under this. */
 const MAX_TITLE_VALUE_CHARS = 16384;
 
@@ -291,11 +293,7 @@ async function readSettings(env: Env): Promise<Record<string, { value: unknown; 
   return out;
 }
 
-/**
- * What one title's JustWatch answer looks like over the wire. Phase 1 of
- * docs/shared-title-cache.md — the TMDB columns exist in the table but nothing
- * reads or writes them yet.
- */
+/** One title's row as it comes out of SQLite. */
 interface TitleRow {
   id: string;
   jw_providers: string | null;
@@ -303,14 +301,54 @@ interface TitleRow {
   jw_node_id: string | null;
   jw_verified: string | null;
   jw_fetched: string | null;
+  tmdb_providers: string | null;
+  tmdb_fetched: string | null;
+  dates: string | null;
+  provider_since: string | null;
+}
+
+const TITLE_COLUMNS =
+  "id, jw_providers, jw_upcoming, jw_node_id, jw_verified, jw_fetched, " +
+  "tmdb_providers, tmdb_fetched, dates, provider_since";
+
+/**
+ * How recently either half was fetched. The cursor runs on this rather than on
+ * one column, so a JustWatch-only write and a TMDB-only write both advance it and
+ * neither can hide behind the other's older timestamp.
+ */
+const TITLE_CHANGED = "MAX(COALESCE(tmdb_fetched, ''), COALESCE(jw_fetched, ''))";
+
+function encodeTitle(row: TitleRow): Record<string, unknown> {
+  return {
+    jwProviders: parseOrNull(row.jw_providers),
+    jwUpcoming: parseOrNull(row.jw_upcoming),
+    jwNodeId: row.jw_node_id,
+    jwVerified: row.jw_verified,
+    jwFetched: row.jw_fetched,
+    tmdbProviders: parseOrNull(row.tmdb_providers),
+    tmdbFetched: row.tmdb_fetched,
+    dates: parseOrNull(row.dates),
+    providerSince: parseOrNull(row.provider_since),
+  };
 }
 
 /**
- * The rows for a batch of ids. Absent ids are simply missing from the response —
- * a cache miss is not an error, and answering with nulls for 400 unknown titles
- * would be a bigger reply than the hits.
+ * Two ways to read, for the two things a client needs.
+ *
+ * `?ids=` answers "what do you know about these titles", which is what the
+ * read-through before a refresh asks. Absent ids are simply missing from the
+ * reply — a cache miss is not an error, and answering with nulls for 400 unknown
+ * titles would be a bigger response than the hits.
+ *
+ * `?since=` answers "what has changed", which is what convergence asks on every
+ * sync. Sending every row instead would be most of a megabyte of provider blobs
+ * on a pull that usually has nothing to say, so this mirrors `/events`: a cursor,
+ * a page, and a `more` flag to call again.
  */
 async function handleGetTitles(url: URL, env: Env, cors: HeadersInit): Promise<Response> {
+  const since = url.searchParams.get("since");
+  if (since !== null) return await handleGetTitlesSince(since, env, cors);
+
   const raw = (url.searchParams.get("ids") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   if (raw.length === 0) return json({ titles: {} }, 200, cors);
   if (raw.length > MAX_TITLE_IDS) return json({ error: `At most ${MAX_TITLE_IDS} ids per request` }, 400, cors);
@@ -325,26 +363,44 @@ async function handleGetTitles(url: URL, env: Env, cors: HeadersInit): Promise<R
   for (let i = 0; i < ids.length; i += TITLE_SELECT_CHUNK) {
     const chunk = ids.slice(i, i + TITLE_SELECT_CHUNK);
     const { results } = await env.DB.prepare(
-      `SELECT id, jw_providers, jw_upcoming, jw_node_id, jw_verified, jw_fetched ` +
-        `FROM titles WHERE id IN (${chunk.map(() => "?").join(",")})`,
+      `SELECT ${TITLE_COLUMNS} FROM titles WHERE id IN (${chunk.map(() => "?").join(",")})`,
     )
       .bind(...chunk)
       .all<TitleRow>();
-
-    for (const row of results ?? []) {
-      // A row with no jw_fetched was created by the TMDB side (Phase 2) and has
-      // nothing to say here; sending it would look like a verified empty answer.
-      if (!row.jw_fetched) continue;
-      titles[row.id] = {
-        jwProviders: parseOrNull(row.jw_providers),
-        jwUpcoming: parseOrNull(row.jw_upcoming),
-        jwNodeId: row.jw_node_id,
-        jwVerified: row.jw_verified,
-        jwFetched: row.jw_fetched,
-      };
-    }
+    for (const row of results ?? []) titles[row.id] = encodeTitle(row);
   }
   return json({ titles }, 200, cors);
+}
+
+/**
+ * Rows changed after the cursor, oldest change first, plus where the cursor lands.
+ *
+ * The cursor is the timestamp itself rather than a sequence number, because these
+ * rows are overwritten in place and have no monotonic id to page by. Two rows
+ * written in the same millisecond would tie, so the returned cursor is the last
+ * row's own timestamp and the comparison is strictly `>` — a tie costs at worst
+ * one row re-sent next time, which is idempotent to apply.
+ */
+async function handleGetTitlesSince(since: string, env: Env, cors: HeadersInit): Promise<Response> {
+  if (since !== "" && Number.isNaN(Date.parse(since))) {
+    return json({ error: "`since` must be an ISO 8601 timestamp or empty" }, 400, cors);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT ${TITLE_COLUMNS}, ${TITLE_CHANGED} AS changed FROM titles ` +
+      `WHERE ${TITLE_CHANGED} > ? ORDER BY changed ASC LIMIT ?`,
+  )
+    .bind(since, TITLE_PAGE_SIZE + 1)
+    .all<TitleRow & { changed: string }>();
+
+  const rows = results ?? [];
+  const more = rows.length > TITLE_PAGE_SIZE;
+  const page = more ? rows.slice(0, TITLE_PAGE_SIZE) : rows;
+
+  const titles: Record<string, unknown> = {};
+  for (const row of page) titles[row.id] = encodeTitle(row);
+
+  return json({ titles, cursor: page.length ? page[page.length - 1].changed : since, more }, 200, cors);
 }
 
 /**
@@ -378,45 +434,74 @@ async function handlePostTitles(request: Request, env: Env, cors: HeadersInit): 
     return json({ error: `At most ${MAX_TITLE_IDS} titles per request` }, 400, cors);
   }
 
-  const rows: TitleRow[] = [];
+  const jwRows: (string | null)[][] = [];
+  const tmdbRows: (string | null)[][] = [];
+
   for (const [id, candidate] of entries) {
     if (!TITLE_ID.test(id)) return json({ error: `\`${id}\`: expected "movie:123" or "show:123"` }, 400, cors);
     if (typeof candidate !== "object" || candidate === null) return json({ error: `\`${id}\`: must be an object` }, 400, cors);
-    const { jwProviders, jwUpcoming, jwNodeId, jwVerified, jwFetched } = candidate as Record<string, unknown>;
+    const c = candidate as Record<string, unknown>;
 
-    if (typeof jwFetched !== "string" || Number.isNaN(Date.parse(jwFetched))) {
-      return json({ error: `\`${id}\`: \`jwFetched\` must be an ISO 8601 timestamp` }, 400, cors);
-    }
-    if (jwVerified !== "ok" && jwVerified !== "search") {
-      return json({ error: `\`${id}\`: \`jwVerified\` must be "ok" or "search"` }, 400, cors);
-    }
-    if (jwNodeId !== null && typeof jwNodeId !== "string") {
-      return json({ error: `\`${id}\`: \`jwNodeId\` must be a string or null` }, 400, cors);
-    }
-
-    let providers: string | null;
-    let upcoming: string | null;
-    try {
-      providers = jwProviders == null ? null : JSON.stringify(jwProviders);
-      upcoming = jwUpcoming == null ? null : JSON.stringify(jwUpcoming);
-    } catch {
-      return json({ error: `\`${id}\`: offers must be JSON-serialisable` }, 400, cors);
-    }
-    if ((providers?.length ?? 0) + (upcoming?.length ?? 0) > MAX_TITLE_VALUE_CHARS) {
-      return json({ error: `\`${id}\`: payload is too long` }, 400, cors);
+    // Either half may be absent: a JustWatch top-up and a TMDB refresh happen on
+    // their own schedules and are written independently, each guarded on its own
+    // timestamp. A title carrying neither is a client bug worth reporting.
+    const hasJw = c.jwFetched !== undefined;
+    const hasTmdb = c.tmdbFetched !== undefined;
+    if (!hasJw && !hasTmdb) {
+      return json({ error: `\`${id}\`: needs \`jwFetched\` or \`tmdbFetched\`` }, 400, cors);
     }
 
-    rows.push({
-      id,
-      jw_providers: providers,
-      jw_upcoming: upcoming,
-      jw_node_id: jwNodeId,
-      jw_verified: jwVerified,
-      jw_fetched: jwFetched,
-    });
+    const encode = (value: unknown): string | null => (value == null ? null : JSON.stringify(value));
+
+    if (hasJw) {
+      const { jwProviders, jwUpcoming, jwNodeId, jwVerified, jwFetched } = c;
+      if (typeof jwFetched !== "string" || Number.isNaN(Date.parse(jwFetched))) {
+        return json({ error: `\`${id}\`: \`jwFetched\` must be an ISO 8601 timestamp` }, 400, cors);
+      }
+      if (jwVerified !== "ok" && jwVerified !== "search") {
+        return json({ error: `\`${id}\`: \`jwVerified\` must be "ok" or "search"` }, 400, cors);
+      }
+      if (jwNodeId !== null && typeof jwNodeId !== "string") {
+        return json({ error: `\`${id}\`: \`jwNodeId\` must be a string or null` }, 400, cors);
+      }
+      let providers: string | null;
+      let upcoming: string | null;
+      try {
+        providers = encode(jwProviders);
+        upcoming = encode(jwUpcoming);
+      } catch {
+        return json({ error: `\`${id}\`: offers must be JSON-serialisable` }, 400, cors);
+      }
+      if ((providers?.length ?? 0) + (upcoming?.length ?? 0) > MAX_TITLE_VALUE_CHARS) {
+        return json({ error: `\`${id}\`: JustWatch payload is too long` }, 400, cors);
+      }
+      jwRows.push([id, providers, upcoming, jwNodeId, jwVerified, jwFetched]);
+    }
+
+    if (hasTmdb) {
+      const { tmdbProviders, dates, providerSince, tmdbFetched } = c;
+      if (typeof tmdbFetched !== "string" || Number.isNaN(Date.parse(tmdbFetched))) {
+        return json({ error: `\`${id}\`: \`tmdbFetched\` must be an ISO 8601 timestamp` }, 400, cors);
+      }
+      let providers: string | null;
+      let releaseDates: string | null;
+      let since: string | null;
+      try {
+        providers = encode(tmdbProviders);
+        releaseDates = encode(dates);
+        since = encode(providerSince);
+      } catch {
+        return json({ error: `\`${id}\`: TMDB payload must be JSON-serialisable` }, 400, cors);
+      }
+      if ((providers?.length ?? 0) + (releaseDates?.length ?? 0) + (since?.length ?? 0) > MAX_TITLE_VALUE_CHARS) {
+        return json({ error: `\`${id}\`: TMDB payload is too long` }, 400, cors);
+      }
+      tmdbRows.push([id, providers, releaseDates, since, tmdbFetched]);
+    }
   }
 
-  if (rows.length) {
+  const statements = [];
+  if (jwRows.length) {
     const upsert = env.DB.prepare(
       "INSERT INTO titles (id, jw_providers, jw_upcoming, jw_node_id, jw_verified, jw_fetched) " +
         "VALUES (?, ?, ?, ?, ?, ?) " +
@@ -426,17 +511,28 @@ async function handlePostTitles(request: Request, env: Env, cors: HeadersInit): 
         "jw_fetched = excluded.jw_fetched " +
         "WHERE titles.jw_fetched IS NULL OR excluded.jw_fetched > titles.jw_fetched",
     );
-    const written = await env.DB.batch(
-      rows.map((r) => upsert.bind(r.id, r.jw_providers, r.jw_upcoming, r.jw_node_id, r.jw_verified, r.jw_fetched)),
+    statements.push(...jwRows.map((r) => upsert.bind(...r)));
+  }
+  if (tmdbRows.length) {
+    const upsert = env.DB.prepare(
+      "INSERT INTO titles (id, tmdb_providers, dates, provider_since, tmdb_fetched) " +
+        "VALUES (?, ?, ?, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET " +
+        "tmdb_providers = excluded.tmdb_providers, dates = excluded.dates, " +
+        "provider_since = excluded.provider_since, tmdb_fetched = excluded.tmdb_fetched " +
+        "WHERE titles.tmdb_fetched IS NULL OR excluded.tmdb_fetched > titles.tmdb_fetched",
     );
-    // `applied` counts rows the freshness guard actually let through, which is not
-    // the same as rows received — reporting the latter would call a discarded
-    // write a success, and the discard is the interesting case here.
-    const applied = written.reduce((n, r) => n + (r.meta?.changes ?? 0), 0);
-    return json({ received: rows.length, applied }, 200, cors);
+    statements.push(...tmdbRows.map((r) => upsert.bind(...r)));
   }
 
-  return json({ received: 0, applied: 0 }, 200, cors);
+  if (statements.length === 0) return json({ received: 0, applied: 0 }, 200, cors);
+
+  const written = await env.DB.batch(statements);
+  // `applied` counts writes the freshness guards actually let through, which is not
+  // the same as writes received — reporting the latter would call a discarded write
+  // a success, and the discard is the interesting case here.
+  const applied = written.reduce((n, r) => n + (r.meta?.changes ?? 0), 0);
+  return json({ received: statements.length, applied }, 200, cors);
 }
 
 /** A column this server wrote as JSON. Corrupt beats crashing: the client treats null as a miss. */

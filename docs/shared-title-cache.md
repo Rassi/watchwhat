@@ -1,16 +1,10 @@
 # Shared title cache
 
-> **Status (2026-08-03): Phase 1 deployed and verified in production, Phase 2 not
-> started.** The `titles` table, the
-> `/titles` route and the JustWatch read-through all exist. Everything under
-> "Phase 2" below — sharing TMDB providers, the announced dates, `provider_since`,
-> and the convergence trigger — does not. The TMDB columns exist in the table and
-> nothing reads or writes them.
->
-> **Phase 1 does not make two devices agree.** It shares the JustWatch top-up so
-> the second device stops paying for the same question; the divergence that
-> prompted this document is TMDB-derived and needs Phase 2. See the note under
-> "Order of work".
+> **Status (2026-08-03): both phases built.** Phase 1 is deployed and verified in
+> production. Phase 2 is written and tested against a local Worker but **needs
+> `npm run schema` and `npm run deploy`** before it does anything — until then the
+> client asks for `?since=`, the old Worker ignores it, and convergence is a
+> harmless no-op.
 
 A third D1 table holding what a title's external sources say about it — watch
 providers, the JustWatch node id, the announced dates — so that two devices stop
@@ -132,18 +126,39 @@ client applies the TTL policy, because that policy depends on user state —
 `detailsMaxAge` varies by whether *you* have watched the film. Writes resolve by
 **newest `*_fetched` wins**, never by arrival order.
 
-### Convergence needs its own trigger
+### Convergence is the whole of Phase 2, and it is not the read-through
 
-Step 1 above is what keeps the app fast, and it is also what would quietly defeat
-the whole feature: a device whose local copy is *fresh but older* never consults
-the shared row, and goes on showing its own answer for up to a full TTL — seven
-days for a settled film. The table would sit there, correct and unread, with the
-symptom unchanged.
+The obvious design — check the shared row before fetching — turns out to be worth
+almost nothing for the TMDB half. A device that is *about to fetch* gets fresh data
+anyway; adopting instead would only save a TMDB request, and TMDB has had no rate
+limit worth the name since 2019.
 
-So the freshness check has to be driven by something other than a cache miss.
-**Piggyback it on the existing sync pull** — `installSyncTriggers` already runs on
-startup and on pull-to-refresh. One batched `/titles` request at each of those
-points converges the devices at exactly the moments they already sync.
+**The device with the problem is the one not fetching.** Step 1 above is what keeps
+the app fast, and it is exactly what would leave the table correct and unread: a
+device whose local copy is fresh-but-older never looks, and goes on showing its own
+answer for up to a full TTL — seven days for a settled film. That is the symptom
+this document opens with.
+
+So Phase 2 is **publish and converge**, not read-through. `convergeSharedTitles`
+runs inside `syncNow`, after the event pull, and takes on anything another device
+has learned since its cursor. `installSyncTriggers` already fires that at startup,
+when the network returns, and when the app comes back to the foreground.
+
+> **`tmdbFetchedAt` is deliberately not bumped when adopting.** Taking on shared
+> facts is not the same as having refreshed the record: artwork, cast, overview and
+> the trailer come from the same TMDB call and are *not* in the shared row. Bumping
+> the timestamp would restart this device's TTL, and on a device that converged
+> before every refresh it would freeze those fields permanently. Leaving it alone
+> means the film still refreshes on its own schedule and merely displays the better
+> answer in the meantime. The cursor, not the timestamp, is what stops a row being
+> re-applied.
+
+**The cursor is a timestamp, not a sequence number**, because these rows are
+overwritten in place and have no monotonic id to page by. It runs on
+`MAX(tmdb_fetched, jw_fetched)` so that a write to either half advances it and
+neither can hide behind the other's older value. Two rows written in the same
+millisecond tie, and the comparison is strictly `>`, so a tie costs at worst one
+row re-sent next time — which is idempotent to apply.
 
 ## Order of work
 
@@ -155,7 +170,16 @@ reasons, and `jw_node_id` alone saves the 1–2 search requests every device pay
 on every cold title. The merge stays client-side and the TMDB path is untouched.
 
 **Phase 2 — the TMDB half** (`tmdb_providers`, `dates`, `provider_since`), plus
-the convergence trigger above. **Not built.**
+the convergence trigger above. **Built, pending deploy.**
+
+Every refresh publishes what TMDB said, alongside the JustWatch half when there was
+one — the two are separate columns with separate timestamps and separate freshness
+guards, so a top-up and a refresh never overwrite each other. What gets published as
+`tmdb_providers` is `extras.providersByCountry`, TMDB's answer *before* the merge;
+`mergeJustWatch` builds a new object rather than adding to that one, so it is still
+unmerged at that point. The `dates` are read *after* `applyUpcoming`, which is the
+point — they are the dates the other device should end up with, not the ones TMDB
+alone reported.
 
 ### How Phase 1 actually behaves
 

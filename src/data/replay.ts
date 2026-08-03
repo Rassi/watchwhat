@@ -22,6 +22,7 @@ import { getDeviceId, getSettings, type CloudKey } from "./settings";
 import { reconcileSettings } from "./cloudsettings";
 import {
   addToWatchlist,
+  convergeSharedTitles,
   ensureProgress,
   loadLibrary,
   loadMovies,
@@ -294,6 +295,11 @@ export async function syncNow(): Promise<SyncResult> {
   const settings = await reconcileSettings();
   const pushed = await flush();
   const { applied, skipped } = await pull();
+  // Then whatever the other device has learned about titles since last time. Not part of the
+  // event log — these are cached facts about films, not things anyone did — but this is the
+  // moment to collect them, because a device only sits on a stale provider listing for as long
+  // as nothing prompts it to look. See docs/shared-title-cache.md.
+  const converged = await convergeSharedTitles();
   // `pull` fires this itself when it applied something, but a settings-only
   // change is invisible to it — and a new services list or stale-days cutoff
   // changes what every open screen should be showing. Flagged as settings-only,
@@ -301,6 +307,11 @@ export async function syncNow(): Promise<SyncResult> {
   // controls in place instead of being redrawn out from under an unsaved edit.
   if (settings.length > 0 && applied === 0) {
     syncEvents.dispatchEvent(new CustomEvent("applied", { detail: { settingsOnly: true, keys: settings } }));
+  }
+  // Converged rows change what a poster badge and a Releases date say, so a screen already open
+  // has to repaint. Not flagged settings-only: this is title data, and every screen renders it.
+  if (converged && applied === 0) {
+    syncEvents.dispatchEvent(new CustomEvent("applied", { detail: { settingsOnly: false } }));
   }
   return { pushed, applied, skipped, settings };
 }

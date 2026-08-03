@@ -107,9 +107,26 @@ export interface SharedTitle {
   jwUpcoming: JustWatchUpcoming[] | null;
   jwNodeId: string | null;
   /** Only ever a real answer: 'ok' confirmed, 'search' means JustWatch has no match. */
-  jwVerified: "ok" | "search";
-  jwFetched: string;
+  jwVerified: "ok" | "search" | null;
+  jwFetched: string | null;
+  /**
+   * TMDB's own provider answer, **before** the JustWatch merge. Kept apart from
+   * `jwProviders` because the merge is additive and never removes: re-merging onto a
+   * previous merge would make JustWatch's additions permanent.
+   */
+  tmdbProviders: ProvidersByCountry | null;
+  tmdbFetched: string | null;
+  dates: { digital: ReleaseDate | null; streaming: StreamingDate | null } | null;
+  /** `"DK:Netflix"` -> ms epoch first seen; `0` means "already there when tracking began". */
+  providerSince: Record<string, number> | null;
 }
+
+type ProvidersByCountry = Record<string, { link: string | null; providers: { name: string; logo: string | null; kind: string }[] }>;
+type ReleaseDate = { date: string; country: string };
+type StreamingDate = { date: string; country: string; note: string };
+
+/** What a device sends. Either half may be omitted; each is guarded on its own timestamp. */
+export type TitleWrite = Partial<SharedTitle>;
 
 /** Shared rows for `["movie:1325734", …]`. Ids the server has never seen are simply absent. */
 export async function pullTitles(ids: string[]): Promise<Record<string, SharedTitle>> {
@@ -120,12 +137,31 @@ export async function pullTitles(ids: string[]): Promise<Record<string, SharedTi
   return body.titles ?? {};
 }
 
+export interface TitlePage {
+  titles: Record<string, SharedTitle>;
+  cursor: string;
+  /** More waiting beyond this page — call again with the returned cursor. */
+  more: boolean;
+}
+
+/**
+ * Rows changed since the cursor — what convergence pulls on every sync.
+ *
+ * The cursor is a timestamp rather than a sequence number, because these rows are
+ * overwritten in place and have no monotonic id to page by. Ties re-send a row,
+ * which is harmless: applying one twice lands on the same state.
+ */
+export async function pullTitlesSince(cursor: string): Promise<TitlePage> {
+  const body = (await request(`/titles?since=${encodeURIComponent(cursor)}`)) as Partial<TitlePage>;
+  return { titles: body.titles ?? {}, cursor: body.cursor ?? cursor, more: body.more ?? false };
+}
+
 /**
  * Publish what this device just learned. The server keeps whichever answer was
  * *fetched* most recently, not whichever arrived last, so a slow flush cannot
  * overwrite a fresher one.
  */
-export async function pushTitles(titles: Record<string, SharedTitle>): Promise<void> {
+export async function pushTitles(titles: Record<string, TitleWrite>): Promise<void> {
   if (Object.keys(titles).length === 0) return;
   await request("/titles", {
     method: "POST",

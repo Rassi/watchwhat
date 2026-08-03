@@ -21,7 +21,7 @@ import { fetchJustWatchOffers, type JustWatchUpcoming } from "../api/justwatch";
 import { announcementWindow, gapQuartiles, type GapQuartiles } from "./releaseEstimate";
 import { dbGet, dbGetAll, dbPut } from "./db";
 import { enqueue, now } from "./outbox";
-import { pullTitles, pushTitles, syncConfigured, type SharedTitle } from "../api/syncserver";
+import { pullTitles, pullTitlesSince, pushTitles, syncConfigured, type SharedTitle, type TitleWrite } from "../api/syncserver";
 import type {
   EpisodesRec,
   Library,
@@ -777,8 +777,12 @@ async function pullSharedTopUps(
     const rows = await pullTitles([...byTmdb.keys()]);
     for (const [key, row] of Object.entries(rows)) {
       const traktId = byTmdb.get(key);
+      // A row can exist with only the TMDB half written — a refresh that was not near enough to
+      // a release to top up. That is not an answer to replay here, and treating it as one would
+      // report a film as verified against JustWatch when nobody had asked.
+      if (traktId === undefined || !row.jwFetched || !row.jwVerified) continue;
       const fetchedAt = Date.parse(row.jwFetched);
-      if (traktId === undefined || !Number.isFinite(fetchedAt)) continue;
+      if (!Number.isFinite(fetchedAt)) continue;
       if (Date.now() - fetchedAt > SHARED_JW_TTL) continue; // there, but no fresher than asking
       out.set(traktId, row);
     }
@@ -788,8 +792,82 @@ async function pullSharedTopUps(
   return out;
 }
 
+const TITLES_CURSOR_KEY = "watchwhat.titlesCursor";
+
+/** Pages to take in one go, so a first run against a full table cannot spin forever. */
+const MAX_CONVERGE_PAGES = 20;
+
+/**
+ * Take on whatever another device has learned since last time. **This is what makes two clients
+ * agree**, and the read-through before a refresh is not — a device that is about to fetch gets
+ * fresh data anyway. The problem was always the device *not* fetching, sitting on an answer up to
+ * a seven-day TTL old while the other one had better. So this runs on every sync instead.
+ *
+ * **`tmdbFetchedAt` is deliberately left alone.** Adopting shared facts is not the same as having
+ * refreshed the record: artwork, cast, overview and the trailer come from the same TMDB call and
+ * are not in the shared row. Bumping the timestamp would restart this device's TTL and, on a
+ * device that always converged before it refreshed, freeze those fields forever. Leaving it means
+ * the film still refreshes on its own schedule and simply displays the better answer meanwhile.
+ *
+ * Returns whether anything changed, so the caller can redraw only when it must.
+ */
+export async function convergeSharedTitles(): Promise<boolean> {
+  if (!syncConfigured()) return false;
+  let cursor = localStorage.getItem(TITLES_CURSOR_KEY) ?? "";
+  let byTmdb: Map<number, MovieRec> | null = null;
+  let changed = false;
+
+  try {
+    for (let page = 0; page < MAX_CONVERGE_PAGES; page++) {
+      const res = await pullTitlesSince(cursor);
+      const rows = Object.entries(res.titles);
+      if (rows.length > 0) {
+        // Loaded once, and only if a page actually carried something — most pulls are empty.
+        byTmdb ??= new Map([...(await loadMovies()).values()].filter((m) => m.ids.tmdb).map((m) => [m.ids.tmdb!, m]));
+        for (const [key, row] of rows) {
+          const [kind, id] = key.split(":");
+          if (kind !== "movie") continue; // shows have no shared fields written yet
+          const movie = byTmdb.get(Number(id));
+          if (!movie || !adoptSharedTitle(movie, row)) continue;
+          await dbPut("movies", movie.traktId, movie);
+          changed = true;
+        }
+      }
+      // Only after the page is applied, so a failure resumes rather than skipping it.
+      cursor = res.cursor;
+      localStorage.setItem(TITLES_CURSOR_KEY, cursor);
+      if (!res.more) break;
+    }
+  } catch {
+    // Best-effort, like every other call to the shared table: the cursor has not moved past
+    // anything unapplied, so the next sync simply resumes.
+  }
+  return changed;
+}
+
+/** Apply one shared row to a local record. False when it had nothing better to offer. */
+function adoptSharedTitle(movie: MovieRec, row: SharedTitle): boolean {
+  const fetchedAt = row.tmdbFetched ? Date.parse(row.tmdbFetched) : NaN;
+  if (!Number.isFinite(fetchedAt) || !row.tmdbProviders) return false;
+  // This device asked more recently than whoever wrote the row, so its own answer is the better
+  // one. Newest *fetch* wins here exactly as it does on the server.
+  if (movie.tmdbFetchedAt != null && movie.tmdbFetchedAt >= fetchedAt) return false;
+
+  // Rebuilt from the two halves rather than from a stored merge — the merge is additive and
+  // never removes, so re-merging onto a previous merge would make JustWatch's additions
+  // permanent. This reproduces exactly what the writing device had.
+  movie.providers = row.jwProviders ? mergeJustWatch(row.tmdbProviders, row.jwProviders) : row.tmdbProviders;
+  movie.providersVersion = PROVIDERS_VERSION;
+  movie.digitalRelease = row.dates?.digital ?? null;
+  movie.streamingRelease = row.dates?.streaming ?? null;
+  if (row.providerSince) movie.providerSince = row.providerSince;
+  if (row.jwNodeId) movie.jwNodeId = row.jwNodeId;
+  if (row.jwVerified && row.jwFetched) movie.topUp = { at: Date.parse(row.jwFetched), stage: row.jwVerified };
+  return true;
+}
+
 /** Publish what this device learned, so the other one does not have to ask. Best-effort. */
-async function publishSharedTopUps(publish: Record<string, SharedTitle>): Promise<void> {
+async function publishSharedTopUps(publish: Record<string, TitleWrite>): Promise<void> {
   if (Object.keys(publish).length === 0 || !syncConfigured()) return;
   try {
     await pushTitles(publish);
@@ -832,7 +910,7 @@ export async function ensureMovieDetails(
   // Once for the whole batch: the window is a property of the library, not of any one film.
   const streamGap = gapQuartiles(movies.values(), "stream");
   const shared = opts?.force ? new Map<number, SharedTitle>() : await pullSharedTopUps(movies, stale, streamGap);
-  const publish: Record<string, SharedTitle> = {};
+  const publish: Record<string, TitleWrite> = {};
   const notify = batchNotify(onUpdate);
   await mapWithConcurrency(stale, 4, async (traktId) => {
     const movie = movies.get(traktId)!;
@@ -856,7 +934,7 @@ export async function ensureMovieDetails(
       // is the whole point of the shared table: the top-up runs on a 6h cadence for the
       // near-release handful, so two devices otherwise pay for the same question twice.
       const cached = shared.get(traktId);
-      if (cached) {
+      if (cached?.jwFetched && cached.jwVerified) {
         movie.jwNodeId = cached.jwNodeId;
         if (cached.jwProviders) movie.providers = mergeJustWatch(movie.providers ?? {}, cached.jwProviders);
         if (cached.jwUpcoming) applyUpcoming(movie, cached.jwUpcoming);
@@ -883,6 +961,7 @@ export async function ensureMovieDetails(
         // device a problem it does not have.
         if (outcome.stage === "ok" || outcome.stage === "search") {
           publish[`movie:${movie.ids.tmdb}`] = {
+            ...publish[`movie:${movie.ids.tmdb}`],
             jwProviders: offers,
             jwUpcoming: upcoming,
             jwNodeId: nodeId,
@@ -897,6 +976,19 @@ export async function ensureMovieDetails(
     stampProviderSightings(movie);
     movie.tmdbFetchedAt = Date.now();
     await dbPut("movies", traktId, movie);
+    // Share what TMDB just said, so a device whose own TTL has not expired can show it rather
+    // than sitting on a week-old answer. `extras.providersByCountry` and not `movie.providers`:
+    // the shared column holds TMDB's answer *before* the JustWatch merge, and `mergeJustWatch`
+    // builds a new object rather than adding to this one, so it is still unmerged here.
+    publish[`movie:${movie.ids.tmdb}`] = {
+      ...publish[`movie:${movie.ids.tmdb}`],
+      tmdbProviders: extras.providersByCountry,
+      // Read after the merge and after `applyUpcoming`, which is the point: these are the dates
+      // the other device should end up with, not the ones TMDB alone reported.
+      dates: { digital: movie.digitalRelease ?? null, streaming: movie.streamingRelease ?? null },
+      providerSince: movie.providerSince ?? null,
+      tmdbFetched: new Date(movie.tmdbFetchedAt).toISOString(),
+    };
     notify.tick();
   });
   notify.done();
