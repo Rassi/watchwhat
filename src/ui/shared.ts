@@ -493,6 +493,47 @@ export function watchBadge(providers: ProvidersRecord | undefined): WatchBadge |
   return free ? "free" : stream ? "stream" : rent ? "rent" : null;
 }
 
+/**
+ * The ratings line, each score a link to the site that gave it.
+ *
+ * IMDb and TMDB have ids, so they land on the title itself. Rotten Tomatoes is
+ * bought from OMDb as a bare percentage with no id or slug attached, so the best
+ * that can be offered is a search for the title — still one tap from the page.
+ * TMDB comes last: it is the one nobody asked for, kept because it is the only
+ * score that is always there.
+ */
+export function ratingsLine(item: {
+  title: string;
+  rating?: number | null;
+  extRatings?: { imdb: string | null; rottenTomatoes: string | null };
+  ids: { imdb?: string | null; tmdb?: number | null };
+  kind: "tv" | "movie";
+}): HTMLElement | null {
+  const bits: (Node | string)[] = [];
+  const add = (text: string, href: string | null): void => {
+    if (bits.length > 0) bits.push("  ·  ");
+    bits.push(href ? el("a", { class: "rating-link", href, target: "_blank", rel: "noopener" }, text) : text);
+  };
+
+  if (item.extRatings?.imdb) {
+    add(`IMDb ${item.extRatings.imdb}`, item.ids.imdb ? `https://www.imdb.com/title/${item.ids.imdb}/` : null);
+  }
+  if (item.extRatings?.rottenTomatoes) {
+    add(
+      `🍅 ${item.extRatings.rottenTomatoes}`,
+      `https://www.rottentomatoes.com/search?search=${encodeURIComponent(item.title)}`,
+    );
+  }
+  if (item.rating) {
+    add(
+      `★ ${item.rating.toFixed(1)} TMDB`,
+      item.ids.tmdb ? `https://www.themoviedb.org/${item.kind}/${item.ids.tmdb}` : null,
+    );
+  }
+
+  return bits.length > 0 ? el("p", { class: "about-rating" }, ...bits) : null;
+}
+
 export function castStripCard(cast: CastMemberRec[] | undefined): HTMLElement | null {
   if (!cast?.length) return null;
   const strip = el("div", { class: "cast-strip" });

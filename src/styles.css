@@ -991,6 +991,18 @@ button {
   margin: 0 0 8px;
 }
 
+.rating-link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, currentcolor 45%, transparent);
+}
+
+.rating-link:hover {
+  text-decoration-color: currentcolor;
+}
+
 .card .about-overview {
   color: var(--text);
   font-size: 14px;

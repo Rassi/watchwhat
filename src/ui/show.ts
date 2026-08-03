@@ -1,7 +1,7 @@
 import type { Route } from "../router";
 import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
 import { addNeverMarkPrevious, getNeverMarkPrevious } from "../data/settings";
-import { castStripCard, whereToWatchCard } from "./shared";
+import { castStripCard, ratingsLine, whereToWatchCard } from "./shared";
 import {
   addToWatchlist,
   setShowHidden,
@@ -512,7 +512,6 @@ function renderPage(
 
     const extLinks: [string, string][] = [];
     if (show.trailer) extLinks.push(["▶ Trailer", show.trailer]);
-    extLinks.push(["Trakt", `https://trakt.tv/shows/${show.ids.slug ?? show.traktId}`]);
     if (show.ids.imdb) extLinks.push(["IMDb", `https://www.imdb.com/title/${show.ids.imdb}/`]);
     if (show.ids.tmdb) extLinks.push(["TMDB", `https://www.themoviedb.org/tv/${show.ids.tmdb}`]);
     if (show.ids.tvdb) extLinks.push(["TheTVDB", `https://thetvdb.com/dereferrer/series/${show.ids.tvdb}`]);
@@ -534,14 +533,13 @@ function renderPage(
         { class: "card" },
         el("h2", {}, "Show info"),
         el("p", { class: "about-meta" }, meta.join(" • ")),
-        (() => {
-          const bits = [
-            show.rating ? `★ ${show.rating.toFixed(1)} TMDB` : null,
-            show.extRatings?.imdb ? `IMDb ${show.extRatings.imdb}` : null,
-            show.extRatings?.rottenTomatoes ? `🍅 ${show.extRatings.rottenTomatoes}` : null,
-          ].filter(Boolean);
-          return bits.length > 0 ? el("p", { class: "about-rating" }, bits.join("  ·  ")) : null;
-        })(),
+        ratingsLine({
+          title: show.title,
+          rating: show.rating,
+          extRatings: show.extRatings,
+          ids: show.ids,
+          kind: "tv",
+        }),
         el("p", { class: "about-overview" }, show.overview || "No description available."),
         el("p", { class: "about-facts" }, facts.join("  ·  ")),
         linkRow,

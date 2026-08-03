@@ -6,7 +6,7 @@ import { ensureMovieDetails, ensureMovieExtRatings, loadMovieLists, loadMovies, 
 import { describeEstimate, estimateRelease } from "../data/releaseEstimate";
 import { isTmdbKeyed, type MovieListRec, type MovieRec } from "../data/model";
 import { backdropUrl, fetchMovieSummary } from "../api/tmdb";
-import { castStripCard, movieListsDropdown, whereToWatchCard } from "./shared";
+import { castStripCard, movieListsDropdown, ratingsLine, whereToWatchCard } from "./shared";
 
 export const movieRoute: Route = {
   name: "movie",
@@ -188,21 +188,19 @@ function renderPage(
     // About
     const extLinks: [string, string][] = [];
     if (movie.trailer) extLinks.push(["▶ Trailer", movie.trailer]);
-    extLinks.push(["Trakt", `https://trakt.tv/movies/${movie.ids.slug ?? movie.traktId}`]);
     if (movie.ids.imdb) extLinks.push(["IMDb", `https://www.imdb.com/title/${movie.ids.imdb}/`]);
     if (movie.ids.tmdb) extLinks.push(["TMDB", `https://www.themoviedb.org/movie/${movie.ids.tmdb}`]);
     const about = el(
       "div",
       { class: "card" },
       el("h2", {}, "About"),
-      (() => {
-        const bits = [
-          movie.rating ? `★ ${movie.rating.toFixed(1)} TMDB` : null,
-          movie.extRatings?.imdb ? `IMDb ${movie.extRatings.imdb}` : null,
-          movie.extRatings?.rottenTomatoes ? `🍅 ${movie.extRatings.rottenTomatoes}` : null,
-        ].filter(Boolean);
-        return bits.length > 0 ? el("p", { class: "about-rating" }, bits.join("  ·  ")) : null;
-      })(),
+      ratingsLine({
+        title: movie.title,
+        rating: movie.rating,
+        extRatings: movie.extRatings,
+        ids: movie.ids,
+        kind: "movie",
+      }),
       el("p", { class: "about-overview" }, movie.overview || "No description available."),
       movie.released ? el("p", { class: "about-facts" }, `Released ${movie.released}`) : null,
       // Two dates, kept apart: when you can buy or rent it, and when it starts streaming on a
