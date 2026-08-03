@@ -36,6 +36,45 @@ CREATE TABLE IF NOT EXISTS events (
 -- no row keeps following the default compiled into the app, exactly as an absent
 -- key does in the client's localStorage; two devices editing different fields
 -- both survive; and the shape matches the client's partial-settings map as-is.
+-- Facts a title's external sources report about it, shared so that two devices
+-- stop asking the same questions at different times and getting different
+-- answers. Also deliberately NOT in the log, and for a different reason than
+-- settings: this is a *cache*, and a cache in an append-only table would grow
+-- without bound while only its newest row ever mattered.
+--
+-- See docs/shared-title-cache.md. Phase 1 populates the `jw_*` columns only;
+-- the rest are created now so that Phase 2 needs no ALTER against a live
+-- database. Unused columns cost nothing and a migration costs attention.
+--
+-- `id` is "movie:1325734" — kind and TMDB id in one text key, so a batch read is
+-- `WHERE id IN (?, ?, …)` rather than a pile of OR'd pairs. **TMDB ids, never
+-- traktId**: the movie route is keyed by traktId and confusing the two here would
+-- look exactly like a title JustWatch cannot see.
+CREATE TABLE IF NOT EXISTS titles (
+  id              TEXT PRIMARY KEY,
+
+  -- Phase 2. Nothing writes these yet.
+  tmdb_providers  TEXT,   -- JSON, watch countries only
+  tmdb_fetched    TEXT,
+  dates           TEXT,   -- JSON: digitalRelease + streamingRelease
+  provider_since  TEXT,   -- JSON: "DK:Netflix" -> when the listing was first seen
+
+  -- Phase 1. The cached result of one fetchJustWatchOffers call.
+  --
+  -- Kept SEPARATE from tmdb_providers rather than pre-merged: mergeJustWatch is
+  -- purely additive and never removes, which is safe only because every refresh
+  -- re-merges onto a *fresh* TMDB answer. A merged blob read back as its own base
+  -- would make JustWatch's additions permanent.
+  jw_providers    TEXT,   -- JSON: country -> offers
+  jw_upcoming     TEXT,   -- JSON: announced releases, from the same request
+  jw_node_id      TEXT,   -- JustWatch's own id; never changes, so it never expires
+  -- 'ok' | 'search'. Failures are never stored: an outage is a fact about a
+  -- device's network, not about the title, and caching one would hand a second
+  -- device a problem it does not have.
+  jw_verified     TEXT,
+  jw_fetched      TEXT    -- ISO 8601; the whole freshness contract. Newest wins.
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key     TEXT PRIMARY KEY,
   -- JSON. The literal `null` is meaningful and distinct from an absent row: it

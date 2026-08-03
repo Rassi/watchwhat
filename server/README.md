@@ -17,7 +17,15 @@ Both endpoints need `Authorization: Bearer <SYNC_TOKEN>`.
 | `GET /events?since=<seq>` | `{ events, seq, more }` — up to 500 events after the cursor, oldest first. Keep calling while `more` is true, passing the returned `seq`. |
 | `POST /events` | `{ events: [{ id, device, ts, kind, body }] }` → `{ accepted, seq }`. Up to 1000 per request. `id` is a client-generated UUID and re-sending one is a no-op, so retrying after a dropped response is always safe. |
 | `GET /settings` | `{ settings: { key: { value, updated } } }` — every setting held, no paging. |
+| `GET /titles?ids=movie:1,movie:2` | `{ titles: { "movie:1": { jwProviders, jwUpcoming, jwNodeId, jwVerified, jwFetched } } }` — the shared JustWatch answer per title. Ids the table has never seen are simply absent: a cache miss is not an error. Up to 500 ids. |
+| `POST /titles` | Same shape in → `{ received, applied }`. Upserts per id and **rejects any title whose `jwFetched` is not newer than the stored one**, so newest *fetch* wins rather than newest write. `applied` counts what the guard let through, which is why it can be less than `received`. |
 | `PUT /settings` | Same shape in, and the full post-write state back. Upserts per key, and **rejects any field whose `updated` is not newer than the stored one**, so a device flushing a stale offline edit cannot clobber a newer one. `value: null` means "back on the app's default" and is how a Reset travels. |
+
+`titles` is a shared *cache* of what TMDB and JustWatch say about a title, so that
+two devices stop asking the same questions independently — reasoning in
+[`../docs/shared-title-cache.md`](../docs/shared-title-cache.md). It is not in the
+log for its own reason: a cache in an append-only table would grow without bound
+while only its newest row ever mattered. Phase 1 fills the `jw_*` columns only.
 
 Settings are deliberately not events: they are mutable state, so an append-only
 log would accumulate every API key ever rotated — and, more to the point, they

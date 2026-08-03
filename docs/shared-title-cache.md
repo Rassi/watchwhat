@@ -1,8 +1,15 @@
 # Shared title cache
 
-> **Status: proposed, not built** (written 2026-08-03). Nothing described here
-> exists in the code yet. `docs/where-to-watch.md` describes what actually ships
-> today, and where the two disagree, that one is right.
+> **Status (2026-08-03): Phase 1 built, Phase 2 not.** The `titles` table, the
+> `/titles` route and the JustWatch read-through all exist. Everything under
+> "Phase 2" below — sharing TMDB providers, the announced dates, `provider_since`,
+> and the convergence trigger — does not. The TMDB columns exist in the table and
+> nothing reads or writes them.
+>
+> **Phase 1 does not make two devices agree.** It shares the JustWatch top-up so
+> the second device stops paying for the same question; the divergence that
+> prompted this document is TMDB-derived and needs Phase 2. See the note under
+> "Order of work".
 
 A third D1 table holding what a title's external sources say about it — watch
 providers, the JustWatch node id, the announced dates — so that two devices stop
@@ -55,21 +62,41 @@ puts the disagreement at the top of the page.
 
 One new table, alongside `events` and `settings`:
 
+As built (`server/schema.sql`):
+
 ```sql
 CREATE TABLE IF NOT EXISTS titles (
-  kind            TEXT    NOT NULL,   -- 'movie' | 'show'
-  tmdb_id         INTEGER NOT NULL,
+  id              TEXT PRIMARY KEY,   -- "movie:1325734" — kind and TMDB id in one key
+
+  -- Phase 2. Nothing writes these yet.
   tmdb_providers  TEXT,               -- JSON, watch countries only
   tmdb_fetched    TEXT,
-  jw_providers    TEXT,               -- JSON — kept separate, never pre-merged
-  jw_fetched      TEXT,
-  jw_verified     TEXT,               -- 'ok' | 'search'
-  jw_node_id      TEXT,               -- never changes; the cheapest win here
   dates           TEXT,               -- JSON: digitalRelease + streamingRelease
-  provider_since  TEXT,               -- JSON: "DK:Netflix" -> ISO date first seen
-  PRIMARY KEY (kind, tmdb_id)
+  provider_since  TEXT,               -- JSON: "DK:Netflix" -> when first seen
+
+  -- Phase 1. The cached result of one fetchJustWatchOffers call.
+  jw_providers    TEXT,               -- JSON: country -> offers
+  jw_upcoming     TEXT,               -- JSON: announced releases, same request
+  jw_node_id      TEXT,               -- never changes, so it never expires
+  jw_verified     TEXT,               -- 'ok' | 'search'
+  jw_fetched      TEXT                -- ISO 8601. Newest wins.
 );
 ```
+
+Two deviations from the original sketch, both deliberate:
+
+- **A single text `id` rather than `(kind, tmdb_id)`.** A batch read is then
+  `WHERE id IN (?, ?, …)` instead of a pile of OR'd pairs, and it matches how the
+  client already addresses a title.
+- **`jw_upcoming` is its own column.** It arrives on the same JustWatch request as
+  the offers and feeds `applyUpcoming`. Without it, a device adopting a shared row
+  would get the providers but silently lose the announced date — worse than not
+  using the cache at all. The row caches the *whole* result of the call, which is
+  what makes replaying it equivalent to having made it.
+
+The whole table is created up front even though half of it is unused, because
+`CREATE TABLE IF NOT EXISTS` makes re-running `schema.sql` the migration story and
+`ALTER TABLE` against a live database does not.
 
 Shows populate the TMDB columns only — they have no JustWatch path at all, by
 design, and that does not change.
@@ -119,14 +146,39 @@ points converges the devices at exactly the moments they already sync.
 
 ## Order of work
 
-**Phase 1 — the JustWatch half** (`jw_node_id`, `jw_providers`, `jw_verified`).
+**Phase 1 — the JustWatch half** (`jw_node_id`, `jw_providers`, `jw_upcoming`,
+`jw_verified`). **Built.**
 Smallest change and the biggest reduction in risk: JustWatch is the only
 dependency with no contract, it is already proxied through the Worker for CORS
 reasons, and `jw_node_id` alone saves the 1–2 search requests every device pays
 on every cold title. The merge stays client-side and the TMDB path is untouched.
 
 **Phase 2 — the TMDB half** (`tmdb_providers`, `dates`, `provider_since`), plus
-the convergence trigger above.
+the convergence trigger above. **Not built.**
+
+### How Phase 1 actually behaves
+
+`pullSharedTopUps` runs once per `ensureMovieDetails` batch, before the loop, and
+asks only about the films that look likely to want a top-up. `publishSharedTopUps`
+runs once after it. So a batch costs at most two extra requests however many films
+it covers, and zero when sync is unconfigured or nothing is eligible.
+
+- **Eligibility is judged on the dates already cached, before TMDB is asked.** A
+  refresh can move a film in or out of the window afterwards, so this can miss one
+  and can ask about one that turns out not to need it. Both are harmless: a miss
+  fetches directly and publishes its answer. The alternative is a request per film,
+  or splitting the loop into two passes over the network, and neither is worth it
+  for a handful of titles.
+- **Failures are never published.** Only `ok` and `search` are written. `reach` and
+  `offers` describe this device's network or a schema change, and publishing one
+  would hand a second device a problem it does not have.
+- **Adopting a row sets `topUp` from it**, so the card says the same thing on both
+  devices. That is the "a warning on one device means nothing about another" gotcha
+  already gone for the shared half, ahead of the full `topUp` split below.
+- **A hand-pressed ↻ skips the shared row entirely** and writes back afterwards.
+- **The whole thing is best-effort.** Both calls swallow their errors: an
+  unreachable Worker means every device behaves exactly as it did before this
+  existed, which is also what a device with no sync URL configured does.
 
 > **Phase 1 does not fix the divergence that prompted this.** All three cases in
 > the table above are TMDB-derived — two dates and a provider set. The phases are

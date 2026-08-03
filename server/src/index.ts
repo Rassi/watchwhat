@@ -65,6 +65,19 @@ const MAX_SETTING_KEYS = 100;
 const MAX_SETTING_KEY_CHARS = 64;
 const MAX_SETTING_VALUE_CHARS = 4096;
 
+/**
+ * Bounds for `/titles`. In practice a request carries the near-release handful —
+ * about 18 titles — so these are far above anything the app sends.
+ */
+const MAX_TITLE_IDS = 500;
+/** D1 caps bound parameters per statement; a SELECT binds one per id. */
+const TITLE_SELECT_CHUNK = 200;
+/** A country's offers are a few short names; the whole row is well under this. */
+const MAX_TITLE_VALUE_CHARS = 16384;
+
+/** "movie:1325734" — kind and TMDB id, never a traktId. */
+const TITLE_ID = /^(movie|show):[1-9][0-9]{0,9}$/;
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get("Origin");
@@ -76,7 +89,7 @@ export default {
 
     const url = new URL(request.url);
     const route = url.pathname;
-    if (route !== "/events" && route !== "/justwatch" && route !== "/settings") {
+    if (route !== "/events" && route !== "/justwatch" && route !== "/settings" && route !== "/titles") {
       return json({ error: "Not found" }, 404, cors);
     }
 
@@ -92,6 +105,11 @@ export default {
       if (route === "/settings") {
         if (request.method === "GET") return await handleGetSettings(env, cors);
         if (request.method === "PUT") return await handlePutSettings(request, env, cors);
+        return json({ error: "Method not allowed" }, 405, cors);
+      }
+      if (route === "/titles") {
+        if (request.method === "GET") return await handleGetTitles(url, env, cors);
+        if (request.method === "POST") return await handlePostTitles(request, env, cors);
         return json({ error: "Method not allowed" }, 405, cors);
       }
       if (request.method === "GET") return await handleGet(url, env, cors);
@@ -271,6 +289,164 @@ async function readSettings(env: Env): Promise<Record<string, { value: unknown; 
     out[row.key] = { value: JSON.parse(row.value) as unknown, updated: row.updated };
   }
   return out;
+}
+
+/**
+ * What one title's JustWatch answer looks like over the wire. Phase 1 of
+ * docs/shared-title-cache.md — the TMDB columns exist in the table but nothing
+ * reads or writes them yet.
+ */
+interface TitleRow {
+  id: string;
+  jw_providers: string | null;
+  jw_upcoming: string | null;
+  jw_node_id: string | null;
+  jw_verified: string | null;
+  jw_fetched: string | null;
+}
+
+/**
+ * The rows for a batch of ids. Absent ids are simply missing from the response —
+ * a cache miss is not an error, and answering with nulls for 400 unknown titles
+ * would be a bigger reply than the hits.
+ */
+async function handleGetTitles(url: URL, env: Env, cors: HeadersInit): Promise<Response> {
+  const raw = (url.searchParams.get("ids") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (raw.length === 0) return json({ titles: {} }, 200, cors);
+  if (raw.length > MAX_TITLE_IDS) return json({ error: `At most ${MAX_TITLE_IDS} ids per request` }, 400, cors);
+  for (const id of raw) {
+    if (!TITLE_ID.test(id)) return json({ error: `\`${id}\`: expected "movie:123" or "show:123"` }, 400, cors);
+  }
+
+  const ids = [...new Set(raw)];
+  const titles: Record<string, unknown> = {};
+  // Chunked so the bound-parameter cap is a property of this loop rather than of
+  // how many films happen to be near release today.
+  for (let i = 0; i < ids.length; i += TITLE_SELECT_CHUNK) {
+    const chunk = ids.slice(i, i + TITLE_SELECT_CHUNK);
+    const { results } = await env.DB.prepare(
+      `SELECT id, jw_providers, jw_upcoming, jw_node_id, jw_verified, jw_fetched ` +
+        `FROM titles WHERE id IN (${chunk.map(() => "?").join(",")})`,
+    )
+      .bind(...chunk)
+      .all<TitleRow>();
+
+    for (const row of results ?? []) {
+      // A row with no jw_fetched was created by the TMDB side (Phase 2) and has
+      // nothing to say here; sending it would look like a verified empty answer.
+      if (!row.jw_fetched) continue;
+      titles[row.id] = {
+        jwProviders: parseOrNull(row.jw_providers),
+        jwUpcoming: parseOrNull(row.jw_upcoming),
+        jwNodeId: row.jw_node_id,
+        jwVerified: row.jw_verified,
+        jwFetched: row.jw_fetched,
+      };
+    }
+  }
+  return json({ titles }, 200, cors);
+}
+
+/**
+ * Upsert the JustWatch half of a title, newest fetch wins.
+ *
+ * The guard is on `jw_fetched`, not on arrival order — which is the whole reason
+ * this is safe to share at all. A device flushing an hour-old answer cannot
+ * overwrite a fresher one, and because the comparison is in the statement there
+ * is no read-modify-write window to lose a race in. `IS NULL` covers the row
+ * having been created by the TMDB side with no JustWatch data yet.
+ *
+ * Only outcomes worth remembering arrive here: the client never sends a failure,
+ * because "could not reach JustWatch" is a fact about a network rather than about
+ * a film.
+ */
+async function handlePostTitles(request: Request, env: Env, cors: HeadersInit): Promise<Response> {
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return json({ error: "Body must be JSON" }, 400, cors);
+  }
+
+  const incoming = (payload as { titles?: unknown })?.titles;
+  if (typeof incoming !== "object" || incoming === null || Array.isArray(incoming)) {
+    return json({ error: "Expected { titles: { \"movie:123\": { … } } }" }, 400, cors);
+  }
+
+  const entries = Object.entries(incoming as Record<string, unknown>);
+  if (entries.length > MAX_TITLE_IDS) {
+    return json({ error: `At most ${MAX_TITLE_IDS} titles per request` }, 400, cors);
+  }
+
+  const rows: TitleRow[] = [];
+  for (const [id, candidate] of entries) {
+    if (!TITLE_ID.test(id)) return json({ error: `\`${id}\`: expected "movie:123" or "show:123"` }, 400, cors);
+    if (typeof candidate !== "object" || candidate === null) return json({ error: `\`${id}\`: must be an object` }, 400, cors);
+    const { jwProviders, jwUpcoming, jwNodeId, jwVerified, jwFetched } = candidate as Record<string, unknown>;
+
+    if (typeof jwFetched !== "string" || Number.isNaN(Date.parse(jwFetched))) {
+      return json({ error: `\`${id}\`: \`jwFetched\` must be an ISO 8601 timestamp` }, 400, cors);
+    }
+    if (jwVerified !== "ok" && jwVerified !== "search") {
+      return json({ error: `\`${id}\`: \`jwVerified\` must be "ok" or "search"` }, 400, cors);
+    }
+    if (jwNodeId !== null && typeof jwNodeId !== "string") {
+      return json({ error: `\`${id}\`: \`jwNodeId\` must be a string or null` }, 400, cors);
+    }
+
+    let providers: string | null;
+    let upcoming: string | null;
+    try {
+      providers = jwProviders == null ? null : JSON.stringify(jwProviders);
+      upcoming = jwUpcoming == null ? null : JSON.stringify(jwUpcoming);
+    } catch {
+      return json({ error: `\`${id}\`: offers must be JSON-serialisable` }, 400, cors);
+    }
+    if ((providers?.length ?? 0) + (upcoming?.length ?? 0) > MAX_TITLE_VALUE_CHARS) {
+      return json({ error: `\`${id}\`: payload is too long` }, 400, cors);
+    }
+
+    rows.push({
+      id,
+      jw_providers: providers,
+      jw_upcoming: upcoming,
+      jw_node_id: jwNodeId,
+      jw_verified: jwVerified,
+      jw_fetched: jwFetched,
+    });
+  }
+
+  if (rows.length) {
+    const upsert = env.DB.prepare(
+      "INSERT INTO titles (id, jw_providers, jw_upcoming, jw_node_id, jw_verified, jw_fetched) " +
+        "VALUES (?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET " +
+        "jw_providers = excluded.jw_providers, jw_upcoming = excluded.jw_upcoming, " +
+        "jw_node_id = excluded.jw_node_id, jw_verified = excluded.jw_verified, " +
+        "jw_fetched = excluded.jw_fetched " +
+        "WHERE titles.jw_fetched IS NULL OR excluded.jw_fetched > titles.jw_fetched",
+    );
+    const written = await env.DB.batch(
+      rows.map((r) => upsert.bind(r.id, r.jw_providers, r.jw_upcoming, r.jw_node_id, r.jw_verified, r.jw_fetched)),
+    );
+    // `applied` counts rows the freshness guard actually let through, which is not
+    // the same as rows received — reporting the latter would call a discarded
+    // write a success, and the discard is the interesting case here.
+    const applied = written.reduce((n, r) => n + (r.meta?.changes ?? 0), 0);
+    return json({ received: rows.length, applied }, 200, cors);
+  }
+
+  return json({ received: 0, applied: 0 }, 200, cors);
+}
+
+/** A column this server wrote as JSON. Corrupt beats crashing: the client treats null as a miss. */
+function parseOrNull(value: string | null): unknown {
+  if (value == null) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 /**

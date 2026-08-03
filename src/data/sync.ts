@@ -21,6 +21,7 @@ import { fetchJustWatchOffers, type JustWatchUpcoming } from "../api/justwatch";
 import { announcementWindow, gapQuartiles, type GapQuartiles } from "./releaseEstimate";
 import { dbGet, dbGetAll, dbPut } from "./db";
 import { enqueue, now } from "./outbox";
+import { pullTitles, pushTitles, syncConfigured, type SharedTitle } from "../api/syncserver";
 import type {
   EpisodesRec,
   Library,
@@ -734,6 +735,69 @@ function applyUpcoming(movie: MovieRec, upcoming: JustWatchUpcoming[]): void {
   }
 }
 
+/**
+ * How long another device's JustWatch answer stands in for asking again.
+ *
+ * Matched to the 6h bucket in `detailsMaxAge` that drives the top-up in the first place, so the
+ * shared row is fresh for exactly as long as this device would have considered its own answer
+ * fresh. Longer would be a different TTL wearing a disguise.
+ */
+const SHARED_JW_TTL = 6 * 3600 * 1000;
+
+/**
+ * Fetch the shared JustWatch answers for whichever of this batch look likely to want a top-up.
+ *
+ * **Eligibility is judged on the dates already cached, before TMDB is asked.** After the refresh
+ * a film's dates can change and move it in or out of the window, so this can miss one and it can
+ * ask about one that turns out not to need it. Both are harmless — a miss just fetches directly
+ * and publishes, and the alternative is either one request per film or restructuring the loop
+ * into two passes over the network. Neither is worth it for a handful of titles.
+ *
+ * Failure is not an error here. The shared cache is an optimisation, and a Worker that cannot be
+ * reached means every device simply behaves as it did before this existed.
+ */
+async function pullSharedTopUps(
+  movies: Map<number, MovieRec>,
+  stale: number[],
+  streamGap: GapQuartiles,
+): Promise<Map<number, SharedTitle>> {
+  const out = new Map<number, SharedTitle>();
+  if (!syncConfigured()) return out;
+
+  const byTmdb = new Map<string, number>();
+  for (const traktId of stale) {
+    const movie = movies.get(traktId);
+    if (!movie?.ids.tmdb) continue;
+    if (!nearRelease(movie) && !awaitingRelease(movie, streamGap)) continue;
+    byTmdb.set(`movie:${movie.ids.tmdb}`, traktId);
+  }
+  if (byTmdb.size === 0) return out;
+
+  try {
+    const rows = await pullTitles([...byTmdb.keys()]);
+    for (const [key, row] of Object.entries(rows)) {
+      const traktId = byTmdb.get(key);
+      const fetchedAt = Date.parse(row.jwFetched);
+      if (traktId === undefined || !Number.isFinite(fetchedAt)) continue;
+      if (Date.now() - fetchedAt > SHARED_JW_TTL) continue; // there, but no fresher than asking
+      out.set(traktId, row);
+    }
+  } catch {
+    // Deliberately silent: nothing is broken, there is just no shortcut this time.
+  }
+  return out;
+}
+
+/** Publish what this device learned, so the other one does not have to ask. Best-effort. */
+async function publishSharedTopUps(publish: Record<string, SharedTitle>): Promise<void> {
+  if (Object.keys(publish).length === 0 || !syncConfigured()) return;
+  try {
+    await pushTitles(publish);
+  } catch {
+    // The answer is already stored locally; sharing it is a bonus, not a commitment.
+  }
+}
+
 /** TMDB artwork/cast/providers for movies missing or outgrowing their cache, limited concurrency. */
 export async function ensureMovieDetails(
   movies: Map<number, MovieRec>,
@@ -767,6 +831,8 @@ export async function ensureMovieDetails(
 
   // Once for the whole batch: the window is a property of the library, not of any one film.
   const streamGap = gapQuartiles(movies.values(), "stream");
+  const shared = opts?.force ? new Map<number, SharedTitle>() : await pullSharedTopUps(movies, stale, streamGap);
+  const publish: Record<string, SharedTitle> = {};
   const notify = batchNotify(onUpdate);
   await mapWithConcurrency(stale, 4, async (traktId) => {
     const movie = movies.get(traktId)!;
@@ -786,20 +852,45 @@ export async function ensureMovieDetails(
     // the other ~320 titles. A hand-asked refresh always tops up, whatever the dates say: someone
     // pressing the button is reporting that TMDB looks wrong, which is why this fallback exists.
     if (movie.ids.tmdb && (opts?.force || nearRelease(movie) || awaitingRelease(movie, streamGap))) {
-      const { offers, upcoming, outcome, nodeId } = await fetchJustWatchOffers(
-        movie.title,
-        movie.ids.tmdb,
-        watchCountryList(),
-        movie.jwNodeId,
-      );
-      // Written back even when null: an id that stopped resolving is worse than none, since it
-      // costs a wasted request before the search it was meant to save.
-      movie.jwNodeId = nodeId;
-      if (offers) movie.providers = mergeJustWatch(movie.providers ?? {}, offers);
-      if (upcoming) applyUpcoming(movie, upcoming);
-      // Kept per title rather than read from the global health record afterwards: this loop runs
-      // four movies at once, so the shared record belongs to whichever finished last.
-      movie.topUp = outcome;
+      // Another device asked recently enough — replay its answer rather than asking again. This
+      // is the whole point of the shared table: the top-up runs on a 6h cadence for the
+      // near-release handful, so two devices otherwise pay for the same question twice.
+      const cached = shared.get(traktId);
+      if (cached) {
+        movie.jwNodeId = cached.jwNodeId;
+        if (cached.jwProviders) movie.providers = mergeJustWatch(movie.providers ?? {}, cached.jwProviders);
+        if (cached.jwUpcoming) applyUpcoming(movie, cached.jwUpcoming);
+        // Adopted rather than observed, so the card says the same thing on both devices — which
+        // is exactly the "a warning on one device means nothing about another" gotcha, gone.
+        movie.topUp = { at: Date.parse(cached.jwFetched), stage: cached.jwVerified };
+      } else {
+        const { offers, upcoming, outcome, nodeId } = await fetchJustWatchOffers(
+          movie.title,
+          movie.ids.tmdb,
+          watchCountryList(),
+          movie.jwNodeId,
+        );
+        // Written back even when null: an id that stopped resolving is worse than none, since it
+        // costs a wasted request before the search it was meant to save.
+        movie.jwNodeId = nodeId;
+        if (offers) movie.providers = mergeJustWatch(movie.providers ?? {}, offers);
+        if (upcoming) applyUpcoming(movie, upcoming);
+        // Kept per title rather than read from the global health record afterwards: this loop runs
+        // four movies at once, so the shared record belongs to whichever finished last.
+        movie.topUp = outcome;
+        // Only a real answer is worth sharing. `reach` and `offers` describe this device's
+        // network or a schema change, not the film, and publishing one would hand a second
+        // device a problem it does not have.
+        if (outcome.stage === "ok" || outcome.stage === "search") {
+          publish[`movie:${movie.ids.tmdb}`] = {
+            jwProviders: offers,
+            jwUpcoming: upcoming,
+            jwNodeId: nodeId,
+            jwVerified: outcome.stage,
+            jwFetched: new Date(outcome.at).toISOString(),
+          };
+        }
+      }
     }
     // After the JustWatch merge, so a listing that only JustWatch knows about is stamped on the
     // day it actually appeared rather than whenever TMDB catches up.
@@ -809,6 +900,7 @@ export async function ensureMovieDetails(
     notify.tick();
   });
   notify.done();
+  await publishSharedTopUps(publish);
 }
 
 export async function setMovieWatched(

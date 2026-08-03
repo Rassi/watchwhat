@@ -7,6 +7,7 @@
  */
 
 import { getSettings, type CloudEntry } from "../data/settings";
+import type { JustWatchOffer, JustWatchUpcoming } from "./justwatch";
 
 /** An event as the server hands it back — the same shape plus its assigned seq. */
 export interface RemoteEvent {
@@ -94,6 +95,43 @@ export async function pushSettings(settings: Record<string, CloudEntry>): Promis
     body: JSON.stringify({ settings }),
   })) as { settings?: Record<string, CloudEntry> };
   return body.settings ?? {};
+}
+
+/**
+ * One title's shared JustWatch answer — the cached result of a
+ * `fetchJustWatchOffers` call, so that a second device can replay it instead of
+ * asking again. See `docs/shared-title-cache.md`.
+ */
+export interface SharedTitle {
+  jwProviders: Record<string, JustWatchOffer[]> | null;
+  jwUpcoming: JustWatchUpcoming[] | null;
+  jwNodeId: string | null;
+  /** Only ever a real answer: 'ok' confirmed, 'search' means JustWatch has no match. */
+  jwVerified: "ok" | "search";
+  jwFetched: string;
+}
+
+/** Shared rows for `["movie:1325734", …]`. Ids the server has never seen are simply absent. */
+export async function pullTitles(ids: string[]): Promise<Record<string, SharedTitle>> {
+  if (ids.length === 0) return {};
+  const body = (await request(`/titles?ids=${encodeURIComponent(ids.join(","))}`)) as {
+    titles?: Record<string, SharedTitle>;
+  };
+  return body.titles ?? {};
+}
+
+/**
+ * Publish what this device just learned. The server keeps whichever answer was
+ * *fetched* most recently, not whichever arrived last, so a slow flush cannot
+ * overwrite a fresher one.
+ */
+export async function pushTitles(titles: Record<string, SharedTitle>): Promise<void> {
+  if (Object.keys(titles).length === 0) return;
+  await request("/titles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ titles }),
+  });
 }
 
 /**
