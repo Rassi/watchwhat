@@ -142,7 +142,12 @@ function renderPage(
   const expanded = new Set<number>();
   const expandedEpisodes = new Set<string>(); // "season:number" rows showing their description
   const unfolded = new Set<number>(); // seasons pulled out of a collapsed band
-  let activeTab: "about" | "episodes" = "episodes";
+  // Episodes for a show you already follow — that's what you came to tick off. A show you
+  // don't follow, arriving from a search result, opens on an empty or unticked season list,
+  // and what you actually wanted was what it is and where to watch it.
+  const followed =
+    (lib.watched.get(show.traktId)?.plays ?? 0) > 0 || lib.watchlist.some((e) => e.traktId === show.traktId);
+  let activeTab: "about" | "episodes" = followed ? "episodes" : "about";
   let ratingsSeason =
     episodesRec.seasons.find((s) => s.number > 0 && s.episodes.some((e) => (e.rating ?? 0) > 0))?.number ?? 1;
 
