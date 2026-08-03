@@ -479,10 +479,14 @@ export function watchBadge(providers: ProvidersRecord | undefined): WatchBadge |
       }
       const v = verdict(p.name, cc);
       if (v === "mine") return "mine";
-      // Blocked drops to plain "streams somewhere" — never the yellow free badge, which is a
-      // promise you can watch it for nothing.
-      if (v === "blocked") stream = true;
-      else if (p.kind === "free" || p.kind === "ads") free = true;
+      // A blocked service counts for nothing at all. It used to drop to "streams somewhere",
+      // which was true but unreadable: at poster size the grey ▶ and the green one are the
+      // same shape, and its tooltip said "Available for streaming" about the one service you
+      // had just said you can't use. So a title whose only streamer is blocked now falls
+      // through to the rent badge, or to no badge — the chips on the title page are where
+      // "it's here, but not for you" gets said.
+      if (v === "blocked") continue;
+      if (p.kind === "free" || p.kind === "ads") free = true;
       else stream = true;
     }
   }
