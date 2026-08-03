@@ -13,7 +13,7 @@ import { ensureUnlocked } from "./gate";
 import { installPullToRefresh, stripReloadParam } from "./ui/refresh";
 import { dbDelete } from "./data/db";
 import { purgeTraktRemnants, seedCloudStamps } from "./data/settings";
-import { seedProviderSince, trimProviderCountries } from "./data/sync";
+import { migrateMovieListsToSettings, seedProviderSince, trimProviderCountries } from "./data/sync";
 import { installSyncTriggers, syncEvents } from "./data/replay";
 
 applyTheme();
@@ -36,6 +36,9 @@ seedCloudStamps();
 void (async () => {
   await trimProviderCountries();
   await seedProviderSince();
+  // And move the custom list catalogue into the synced settings, so a device set up from sync
+  // alone gets the list *names* rather than replaying memberships onto lists it cannot see.
+  await migrateMovieListsToSettings();
 })();
 await ensureUnlocked();
 

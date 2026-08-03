@@ -11,6 +11,20 @@ export interface AppSettings {
   myServices: string;
   /** Comma-separated ISO country codes for Where to watch. */
   watchCountries: string;
+  /**
+   * The custom movie lists, as JSON: `[{ traktId, name, slug }]`.
+   *
+   * Synced because **the event log carries list ids and nothing else.** `list.add` says
+   * "movie 1314481 is on list 36041308", so a device set up from sync alone replayed every
+   * membership and had no idea any list was called "Family" — and `movies.ts` hides the picker
+   * entirely when the catalogue is empty, so the lists were not merely unnamed but unreachable.
+   *
+   * A JSON string rather than an array because everything in this file compares values with
+   * `===`: `saveSettings` uses it to tell a real edit from a no-op, and `readStored` uses it to
+   * drop a value that has caught up with its default. Two equal arrays are never `===`, so an
+   * array field would stamp itself as changed on every save and push over other devices' edits.
+   */
+  movieLists: string;
   /** Base URL of the sync Worker. Empty disables sync entirely. */
   syncUrl: string;
   /**
@@ -33,7 +47,7 @@ const NEVER_MARK_PREVIOUS_KEY = "watchwhat.neverMarkPrevious";
  * reach the server, so they cannot come from it; `theme` is left per-device
  * because a phone in dark and a desktop in light is a reasonable thing to want.
  */
-export const CLOUD_KEYS = ["tmdbApiKey", "omdbApiKey", "staleDays", "myServices", "watchCountries"] as const;
+export const CLOUD_KEYS = ["tmdbApiKey", "omdbApiKey", "staleDays", "myServices", "watchCountries", "movieLists"] as const;
 
 export type CloudKey = (typeof CLOUD_KEYS)[number];
 
@@ -88,6 +102,7 @@ const defaults: AppSettings = {
   // NRK, SBS and ABC iview carry things the others don't). Grouping the Nordics together reads
   // more tidily but buries US halfway down the card.
   watchCountries: "DK, US, GB, SE, NO, AU",
+  movieLists: "",
   // The URL is not a secret, so it ships as a default and only the token has to be
   // typed on each device.
   syncUrl: "https://watchwhat-sync.rassi.workers.dev",

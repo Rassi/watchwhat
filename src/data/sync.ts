@@ -19,7 +19,7 @@ import { fetchMovieExtras, fetchSeasonNumbers, fetchShowExtras, fetchShowImages,
 import { fetchOmdbRatings } from "../api/omdb";
 import { fetchJustWatchOffers, type JustWatchUpcoming } from "../api/justwatch";
 import { announcementWindow, gapQuartiles, type GapQuartiles } from "./releaseEstimate";
-import { dbGet, dbGetAll, dbPut } from "./db";
+import { dbDelete, dbGet, dbGetAll, dbPut } from "./db";
 import { enqueue, now } from "./outbox";
 import { pullTitles, pullTitlesSince, pushTitles, syncConfigured, type SharedTitle, type TitleWrite } from "../api/syncserver";
 import type {
@@ -34,7 +34,7 @@ import type {
   WatchlistEntry,
 } from "./model";
 import { isEnded } from "./model";
-import { getSettings } from "./settings";
+import { getSettings, saveSettings } from "./settings";
 
 export const dataEvents = new EventTarget();
 
@@ -497,7 +497,35 @@ export async function loadMovies(): Promise<Map<number, MovieRec>> {
 }
 
 export async function loadMovieLists(): Promise<MovieListRec[]> {
-  return (await dbGet<MovieListRec[]>("meta", "movieLists")) ?? [];
+  const raw = getSettings().movieLists.trim();
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as MovieListRec[]) : [];
+  } catch {
+    // A corrupt catalogue hides the picker; it does not lose a membership, which lives on each
+    // movie record. Better an empty list than a screen that throws on every render.
+    return [];
+  }
+}
+
+/**
+ * Move the list catalogue out of IndexedDB and into the synced settings, once.
+ *
+ * It had been sitting in `meta` since the Trakt import, written by nothing and read by one line
+ * — which meant a device set up from sync alone got every membership and no catalogue, and
+ * `movies.ts` hides the picker when the catalogue is empty, so "Family" and "Rasmus" were
+ * unreachable rather than merely unnamed.
+ *
+ * The old key is deleted rather than kept in step. Two homes for one fact is how they drift.
+ */
+export async function migrateMovieListsToSettings(): Promise<void> {
+  const legacy = await dbGet<MovieListRec[]>("meta", "movieLists");
+  if (!legacy?.length) return;
+  // Only if the synced copy has nothing yet: another device may already have migrated, and its
+  // version is the one the settings merge has been reconciling.
+  if (!getSettings().movieLists.trim()) saveSettings({ movieLists: JSON.stringify(legacy) });
+  await dbDelete("meta", "movieLists");
 }
 
 /**

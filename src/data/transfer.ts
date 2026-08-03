@@ -9,6 +9,7 @@
  */
 
 import { STORES, dbBulkPut, dbClear, dbGetAllEntries, type StoreName } from "./db";
+import { getSettings, saveSettings } from "./settings";
 
 const FORMAT = "watchwhat-backup";
 const VERSION = 1;
@@ -18,6 +19,13 @@ export interface BackupFile {
   version: number;
   exportedAt: string;
   stores: Record<string, [IDBValidKey, unknown][]>;
+  /**
+   * The custom list catalogue, which lives in settings rather than in a store since it started
+   * syncing — and so would otherwise have quietly dropped out of every export. Deliberately the
+   * *only* setting carried: the rest are API keys and a sync token, and an export is a file that
+   * gets copied around and attached to things.
+   */
+  movieLists?: string;
 }
 
 /** What a backup holds, in the terms the user thinks in. */
@@ -43,7 +51,13 @@ export function summarize(backup: BackupFile): BackupSummary {
 export async function exportBackup(): Promise<BackupFile> {
   const stores: Record<string, [IDBValidKey, unknown][]> = {};
   for (const store of STORES) stores[store] = await dbGetAllEntries(store);
-  return { format: FORMAT, version: VERSION, exportedAt: new Date().toISOString(), stores };
+  return {
+    format: FORMAT,
+    version: VERSION,
+    exportedAt: new Date().toISOString(),
+    stores,
+    movieLists: getSettings().movieLists || undefined,
+  };
 }
 
 export function backupFilename(): string {
@@ -96,4 +110,7 @@ export async function importBackup(backup: BackupFile): Promise<void> {
     await dbClear(store);
     await dbBulkPut(store, entries);
   }
+  // Only when the file carries one. An older export has no catalogue to give, and clearing the
+  // device's own would turn an import into a way to lose your lists.
+  if (backup.movieLists) saveSettings({ movieLists: backup.movieLists });
 }
