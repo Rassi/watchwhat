@@ -46,32 +46,37 @@ interface HomeFilters {
   /** Let in films that are merely *newly available* rather than newly made. Off by default. */
   includeCatalogue: boolean;
   hideKnown: boolean;
+  /**
+   * "newest" is the primary release date — how new the *film* is. TMDB has no sort on the
+   * digital date, so it parts company with "just arrived" on a long gap: Demon Slayer opened
+   * in cinemas a full year before it streamed and sorts as old despite landing last week. The
+   * date window is what makes the set right; this only orders it.
+   */
   sortBy: "newest" | "popular" | "rated";
 }
 
+/**
+ * No score floor, no vote floor, ranked by popularity.
+ *
+ * A vote floor looked like a quality filter and was mostly an *age* filter: votes accumulate,
+ * so a film three weeks old has few of them however good or big it is, and a feed of new
+ * releases is the one place that hurts most. It cut `Borderline` at 10 votes and `The Debt
+ * Collector` at 55 while TMDB's own popularity had them at 163 and 171 — well inside the top
+ * twenty of the month.
+ *
+ * `popularity` is the signal that floor was reaching for. It is engagement over the last day
+ * or so — page views, watchlist adds, searches — so it is already high the week a film lands,
+ * and it sorts the window without excluding anything from it. Where a score matters it is on
+ * the card to be read rather than in the query as a gate.
+ */
 const filters: HomeFilters = {
   days: 30,
-  // 6.5 is a guess at "not bad", not a translation of anything. Rotten Tomatoes' upright
-  // popcorn means 60% of voters liked it; TMDB's is an average of 0..10 votes and it sits
-  // much more compressed — competent mainstream films cluster 6.0–7.5 — so the two scales
-  // do not map onto each other. This is the number to tune once you've compared a few weeks.
-  minRating: 6.5,
-  // 100 votes is a heavy floor for this shelf. Small films and streaming originals — much of
-  // what Rotten Tomatoes puts under *movies at home* — collect single-digit TMDB votes while
-  // carrying a perfectly real RT audience score, because the two sites' voters are not the
-  // same crowd. `Maddie's Secret` had four. Kept as the default anyway, because dropping it
-  // trades those films for a feed full of things with no usable score at all; the lower rungs
-  // are there for when you want to go looking.
-  minVotes: 100,
+  minRating: 0,
+  minVotes: 0,
   onMyServices: false,
   includeCatalogue: false,
   hideKnown: true,
-  // Ordered by how new the *film* is. TMDB has no sort on the digital date, so "newest" can
-  // only mean the primary release — near enough, since digital follows cinema by a fairly
-  // steady month or three. It parts company with the truth on a long gap: Demon Slayer opened
-  // in cinemas a full year before it streamed, so it sorts as old despite only just arriving.
-  // The date *window* is what makes the set right; this only orders it.
-  sortBy: "newest",
+  sortBy: "popular",
 };
 
 /**
@@ -464,8 +469,8 @@ function filterBar(reload: () => void, repaint: () => void): HTMLElement {
     select(
       "Order by",
       [
-        { value: "newest" as const, label: "Newest" },
         { value: "popular" as const, label: "Most popular" },
+        { value: "newest" as const, label: "Newest" },
         { value: "rated" as const, label: "Highest score" },
       ],
       filters.sortBy,
