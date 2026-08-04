@@ -29,6 +29,20 @@ watched films and ranks whatever keeps coming back, count first and TMDB's score
 only breaking ties. TMDB has no endpoint that reads a whole library, so this is
 the closest thing to Trakt's recommendations that exists without one.
 
+Its one control, *Ignore horror I've watched*, filters the **question** rather
+than the answer: a horror film you watched stops being asked "what's like this?",
+and the scan reaches further back so twelve are still asked. On by default,
+because one late-night horror otherwise turns the whole screen into a genre feed
+— unticking it put *The Conjuring*, *The Taking of Deborah Logan*, *Haunter*,
+*The Cell*, *Saw* and *Eraserhead* back into the first thirty. Horror can still
+arrive through a seed that merely shares a director or a cast (*Succubus*, *The
+Invisible Man* and *Lights Out* survive the filter), which is the intended
+behaviour: the box is about what you're asking, not a genre ban.
+
+A seed's genres come from its record when its page has been opened and cost a
+`/movie/{id}` request when it hasn't — up to twelve on first load, held for the
+session and never written back.
+
 Nothing on this screen is written to IndexedDB. These are other people's films
 until you put one on a list, and caching them would push every title you scrolled
 past once into the sync log and every export.
@@ -97,6 +111,11 @@ on a budget of nothing, and TMDB gave it a popularity of 239 off eight votes
 because people searching for Nolan's landed on it. No score or vote floor reaches
 them — their "Master of the Universe" had 40 votes and popularity 125. Excluding
 the company (`without_companies=1311`) is the only cut that costs nothing real.
+
+**Genre names come in two vocabularies.** TMDB title-cases and spaces them
+(`Science Fiction`, `Horror`); every record cached while Trakt was alive carries
+its slugs (`science-fiction`, `horror`). The horror filter matched nothing at all
+until both were flattened to one key — the same casing trap as the show statuses.
 
 **The forward window needs its own query.** Not for volume — because a single
 widened window comes back with no way to tell which results are already out.

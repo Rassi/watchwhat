@@ -16,6 +16,7 @@ import { el, posterCard, sectionHeader, spinner, toast } from "./components";
 import {
   discoverMovies,
   fetchMovieRecommendations,
+  fetchMovieSummary,
   fetchTrendingMovies,
   fetchWatchProviders,
   posterUrl,
@@ -62,6 +63,54 @@ const filters: HomeFilters = {
   onMyServices: false,
   hideKnown: false,
 };
+
+/**
+ * FOR YOU's one knob. Same reasoning as `filters` — session state, not the address bar.
+ *
+ * It filters the *question*, not the answer: a horror film you watched stops being asked
+ * "what's like this?", which is where a run of horror recommendations comes from. Horror can
+ * still come back through a seed that merely shares a director or a cast, and that is fine —
+ * what it stops is a couple of late-night horrors turning the whole screen into a genre feed.
+ * On by default, because that is the failure mode this exists to fix.
+ */
+const forYouFilters = {
+  skipHorror: true,
+};
+
+/**
+ * The genre, normalised — see `genreKey`. Two spellings of it are in the data: TMDB sends
+ * `Horror` and every record cached while Trakt was alive says `horror`.
+ */
+const HORROR = "horror";
+
+/**
+ * Genre names arrive in two vocabularies. TMDB title-cases and spaces them (`Science
+ * Fiction`); records that predate the move off Trakt carry its slugs (`science-fiction`).
+ * Comparing either against a literal matches half the library, so both are flattened to the
+ * same key before anything is asked about them.
+ */
+const genreKey = (name: string): string => name.toLowerCase().replace(/[^a-z]+/g, "-");
+
+/**
+ * How many watched films are asked about. Twelve is what the blurb promises, and with the
+ * horror filter on it stays twelve — the scan reaches further back rather than returning a
+ * thinner list, so ticking the box changes which films are asked, not how many.
+ */
+const SEED_COUNT = 12;
+
+/**
+ * How far back the scan will go looking for twelve non-horror seeds. A library that really is
+ * all horror would otherwise walk every film in it, one TMDB request at a time, to arrive at
+ * nothing.
+ */
+const SEED_SCAN_LIMIT = 48;
+
+/**
+ * Genres fetched for a seed this session. A film's genres are only cached on its record once
+ * its page has been opened, so the ones that need asking about get asked about once and then
+ * held here — untangling this from the database on purpose, since Discover writes nothing.
+ */
+const seedGenres = new Map<number, string[]>();
 
 /**
  * How far back a film's digital release may be.
@@ -353,7 +402,7 @@ export const discoverRoute: Route = {
      * question every time the box is ticked.
      */
     const feedKey = (): string => {
-      if (view !== "home") return view;
+      if (view !== "home") return `foryou\n${forYouFilters.skipHorror}`;
       return `home\n${filters.onMyServices}`;
     };
 
@@ -433,6 +482,15 @@ export const discoverRoute: Route = {
           { class: "discover-blurb" },
           "TMDB has no endpoint that reads a whole library, so this asks “what's like this?” about your twelve most recent films and ranks whatever keeps coming back.",
         ),
+        el(
+          "div",
+          { class: "filter-bar" },
+          // Changes which films are asked about, so the answer has to be fetched again.
+          checkbox("Ignore horror I've watched", forYouFilters.skipHorror, (on) => {
+            forYouFilters.skipHorror = on;
+            reload();
+          }),
+        ),
       );
     }
 
@@ -459,10 +517,10 @@ function tab(label: string, href: string, active: boolean): HTMLElement {
  * so the count leads and TMDB's score only breaks ties.
  */
 async function buildForYou(movies: Map<number, MovieRec>): Promise<TmdbDiscoverHit[]> {
-  const seeds = [...movies.values()]
+  const watched = [...movies.values()]
     .filter((m) => m.plays > 0 && m.ids.tmdb)
-    .sort((a, b) => (b.lastWatchedAt ?? "").localeCompare(a.lastWatchedAt ?? ""))
-    .slice(0, 12);
+    .sort((a, b) => (b.lastWatchedAt ?? "").localeCompare(a.lastWatchedAt ?? ""));
+  const seeds = forYouFilters.skipHorror ? await withoutHorror(watched) : watched.slice(0, SEED_COUNT);
   if (seeds.length === 0) return [];
 
   const results = await Promise.all(seeds.map((m) => fetchMovieRecommendations(m.ids.tmdb!)));
@@ -485,6 +543,41 @@ async function buildForYou(movies: Map<number, MovieRec>): Promise<TmdbDiscoverH
     .sort((a, b) => b.count - a.count || (b.hit.rating ?? 0) - (a.hit.rating ?? 0))
     .slice(0, 60)
     .map((e) => e.hit);
+}
+
+/**
+ * A film's genres as `genreKey`s, from its record if that page has been opened and from TMDB
+ * if not. `[]` for a film TMDB won't answer about, which reads as "not horror" — the right way
+ * to fail, since a failed lookup should not silently drop a seed.
+ */
+async function genresOf(movie: MovieRec): Promise<string[]> {
+  if (movie.genres?.length) return movie.genres.map(genreKey);
+  const id = movie.ids.tmdb!;
+  const held = seedGenres.get(id);
+  if (held) return held;
+  const genres = ((await fetchMovieSummary(id))?.genres ?? []).map(genreKey);
+  seedGenres.set(id, genres);
+  return genres;
+}
+
+/**
+ * The most recent `SEED_COUNT` watched films that aren't horror.
+ *
+ * A batch at a time, because the genre of a film whose page has never been opened costs a
+ * TMDB request, and asking one film at a time down a list of hundreds would take longer than
+ * the recommendations themselves. A batch is looked up in parallel, and the next one is only
+ * reached for if the last didn't fill the quota.
+ */
+async function withoutHorror(watched: MovieRec[]): Promise<MovieRec[]> {
+  const seeds: MovieRec[] = [];
+  for (let i = 0; i < Math.min(watched.length, SEED_SCAN_LIMIT) && seeds.length < SEED_COUNT; i += SEED_COUNT) {
+    const batch = watched.slice(i, i + SEED_COUNT);
+    const genres = await Promise.all(batch.map(genresOf));
+    batch.forEach((movie, j) => {
+      if (seeds.length < SEED_COUNT && !genres[j].includes(HORROR)) seeds.push(movie);
+    });
+  }
+  return seeds;
 }
 
 function checkbox(label: string, current: boolean, onToggle: (on: boolean) => void): HTMLElement {
