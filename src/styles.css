@@ -1180,29 +1180,17 @@ button {
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 12px;
-  align-items: flex-end;
-  margin: 12px 0 4px;
+  gap: 8px 16px;
+  align-items: center;
+  margin: 14px 0 2px;
 }
 
-.filter-field {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 11px;
-  color: var(--text-dim);
-  letter-spacing: 0.3px;
-}
-
-/* The two checkboxes sit on their own line under the selects rather than in the flow:
-   they read as afterthoughts to the query, not as more of it. */
 .filter-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
   color: var(--text-dim);
-  padding-bottom: 8px;
 }
 
 .filter-check {

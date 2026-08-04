@@ -1,10 +1,10 @@
 /**
  * Discover: films you don't own yet, from TMDB rather than from your library.
  *
- * Three views, because "what should I watch" is really three questions. NEW AT HOME is the
- * one with knobs on — it rebuilds the Rotten Tomatoes *movies at home / newest* browse out
- * of TMDB's own filters. TRENDING is the global chart. FOR YOU is built here, by asking
- * TMDB what resembles the films you've actually watched and counting the overlaps.
+ * Two views. POPULAR is the one with knobs on: three queries — what reached home lately,
+ * what is about to, and what is trending anywhere — merged, deduplicated and ranked together.
+ * FOR YOU is built here, by asking TMDB what resembles the films you've actually watched and
+ * counting the overlaps.
  *
  * Nothing on this screen is cached to the database. These are other people's films until you
  * put one on a list, and a discover feed that wrote 500 records a session would bloat every
@@ -20,6 +20,7 @@ import {
   fetchWatchProviders,
   posterUrl,
   RELEASE_TYPES_AT_HOME,
+  type DiscoverMoviePage,
   type DiscoverMovieQuery,
   type TmdbDiscoverHit,
 } from "../api/tmdb";
@@ -28,63 +29,111 @@ import { getSettings } from "../data/settings";
 import { normalizeService, serviceRules } from "./shared";
 import { tmdbKey, type MovieRec } from "../data/model";
 
-type View = "home" | "trending" | "foryou";
-const isView = (s: string | undefined): s is View => s === "home" || s === "trending" || s === "foryou";
+type View = "home" | "foryou";
+const isView = (s: string | undefined): s is View => s === "home" || s === "foryou";
 
 /**
- * The filter bar's state, kept in the module rather than the address. Unlike Search's query
- * these aren't worth linking to, and unlike a list picker they're a standing preference for
- * the session — you set your score floor once and then browse. Leaving to look at a film and
- * coming back must not reset them, which is the whole reason they don't live in `render`.
+ * The filter bar's two toggles, kept in the module rather than the address. Unlike Search's
+ * query these aren't worth linking to; they're a standing preference for the session, and
+ * leaving to look at a film and coming back must not reset them — which is the whole reason
+ * they don't live in `render`.
  */
 interface HomeFilters {
-  /** How far back to look for the *digital* release. */
-  days: number;
-  minRating: number;
-  minVotes: number;
   onMyServices: boolean;
-  /** Let in films that are merely *newly available* rather than newly made. Off by default. */
-  includeCatalogue: boolean;
   hideKnown: boolean;
-  /**
-   * "newest" is the primary release date — how new the *film* is. TMDB has no sort on the
-   * digital date, so it parts company with "just arrived" on a long gap: Demon Slayer opened
-   * in cinemas a full year before it streamed and sorts as old despite landing last week. The
-   * date window is what makes the set right; this only orders it.
-   */
-  sortBy: "newest" | "popular" | "rated";
 }
 
 /**
- * No score floor, no vote floor, ranked by popularity.
+ * Films that have reached home lately, ranked by attention. No score floor and no vote floor.
  *
- * A vote floor looked like a quality filter and was mostly an *age* filter: votes accumulate,
- * so a film three weeks old has few of them however good or big it is, and a feed of new
- * releases is the one place that hurts most. It cut `Borderline` at 10 votes and `The Debt
- * Collector` at 55 while TMDB's own popularity had them at 163 and 171 — well inside the top
- * twenty of the month.
+ * Both were tried and dropped. A vote floor looked like a quality filter and was mostly an
+ * *age* filter — votes accumulate, so a film three weeks old has few of them however big it
+ * is, and this is a screen about films three weeks old. A score floor on top of it hid the
+ * small ones entirely: `Maddie's Secret` is 67% on Rotten Tomatoes and 5.0 from four votes
+ * here, because the two sites' voters are not the same crowd.
  *
- * `popularity` is the signal that floor was reaching for. It is engagement over the last day
- * or so — page views, watchlist adds, searches — so it is already high the week a film lands,
- * and it sorts the window without excluding anything from it. Where a score matters it is on
- * the card to be read rather than in the query as a gate.
+ * `popularity` is the signal all that filtering was reaching for. It counts engagement over
+ * the last day or so, so it is already high the week a film lands, and it *ranks* the window
+ * rather than excluding anything from it. Scores still appear on the cards — to be read, not
+ * to be a gate. The one thing popularity cannot survive on its own is a deliberate
+ * name-collision, which is what `EXCLUDED_COMPANIES` is for.
  */
 const filters: HomeFilters = {
-  days: 30,
-  minRating: 0,
-  minVotes: 0,
   onMyServices: false,
-  includeCatalogue: false,
-  hideKnown: true,
-  sortBy: "popular",
+  hideKnown: false,
 };
 
 /**
- * How old a film may be and still count as new *at home*. Ordering by the true digital date
- * exposed a category the old primary-date sort had been accidentally suppressing: catalogue.
- * A service adding *Heat* (1995) or *Brazil* (1985) registers a digital release that week, so
- * a feed of genuine arrivals filled up with films from the eighties. Rotten Tomatoes' shelf
- * has none of it — every title on it is from the last year or two — so the default matches.
+ * How far back a film's digital release may be.
+ *
+ * Was a dropdown until the numbers were looked at. TMDB serves twenty results a page whatever
+ * the window, so widening it never returns *more* — it returns better, because more films
+ * compete for the same twenty slots. The floor rises from popularity 43.8 at a fortnight to
+ * 99.5 at a month to 124.8 at three, and then stops: a six-month window gives a page
+ * identical to the three-month one. Ninety days is where the list saturates, so it is the
+ * whole of the useful range and the control had nothing left to offer.
+ */
+const AT_HOME_DAYS = 90;
+
+/**
+ * How far ahead to look for films that have a digital date but haven't reached it yet.
+ *
+ * This needs its own query rather than just a later `release_date.lte`, and not because of
+ * volume: a single widened window comes back with no way to tell which of its results are
+ * already out. Asking separately means everything the second query returns is, by
+ * construction, still ahead — which is what earns the badge.
+ */
+const FORWARD_DAYS = 90;
+
+/**
+ * Popularity a film must reach to be worth showing before it is out.
+ *
+ * The forward set is shallow — 188 films, of which 60 in every 80 sit below popularity 3 —
+ * so taking a full page of twenty filled a third of the grid with titles nobody has heard of:
+ * *Beast Race* at 4.0, *Drawn Together* at 3.3, *Uprooted* at 3.1, none with a single vote.
+ * A vote floor cannot help, because a film that hasn't come out has no votes by definition,
+ * and TMDB's discover has no `popularity.gte` to do it server-side.
+ *
+ * The exact number matters less than it looks. Nothing at all lives between 12 and 20, so
+ * anything from 5 to 20 clears out the same junk; ten keeps four films where fifteen keeps
+ * three. What it is *not* is a stable measure — TMDB computes popularity from a single day's
+ * views, votes and watchlist adds, and documents no scale for it, so this is a film's share of
+ * yesterday's attention rather than a property of the film. Expect the odd title near the line
+ * to come and go.
+ */
+const FORWARD_MIN_POPULARITY = 10;
+
+/**
+ * Which country's release dates the window is read against.
+ *
+ * Not the user's country, deliberately. TMDB's release-date coverage is heavily US-weighted:
+ * the same 30-day digital window returns 452 films for `US` and 8 for `DK` — and those eight
+ * are local documentaries, not the films anyone is looking for. Leaving it unset is worse
+ * still, because then *any* territory's date counts and a film out in June matches a window
+ * covering next month. Where a film can actually be watched from here is a question the
+ * provider data answers; this one is only about which country has the data.
+ */
+const RELEASE_DATE_REGION = "US";
+
+/**
+ * Studios whose output is excluded outright.
+ *
+ * Ranking by popularity has one failure mode, and this is it: popularity measures attention,
+ * and a deliberate name-collision *is* attention. The Asylum ships mockbusters timed and
+ * titled to shadow big releases — their "The Odyssey" is 86 minutes on a budget of nothing,
+ * and TMDB gives it a popularity of 239 off eight votes, because people searching for Nolan's
+ * land on it instead. No score or vote floor reaches them: the same list carried their
+ * "Master of the Universe" at 40 votes and popularity 125. Excluding the label is the only
+ * cut that costs nothing real.
+ *
+ * A list rather than a single id, because this will not be the last such studio.
+ */
+const EXCLUDED_COMPANIES = [1311]; // The Asylum
+
+/**
+ * How old a film may be and still count as newly at home. A service adding *Heat* (1995) to
+ * its catalogue registers a digital release that week, and without this such a film reads as
+ * a new arrival.
  */
 const CATALOGUE_YEARS = 3;
 
@@ -98,6 +147,8 @@ let lastFeed: { key: string; hits: TmdbDiscoverHit[]; nextPage: number; totalPag
 const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
 
 const daysAgo = (days: number): string => isoDay(new Date(Date.now() - days * 86_400_000));
+
+const daysAhead = (days: number): string => isoDay(new Date(Date.now() + days * 86_400_000));
 
 /** The country `watch_region` is asked about — the first of your watch countries. */
 function primaryRegion(): string {
@@ -139,8 +190,7 @@ export const discoverRoute: Route = {
       el(
         "div",
         { class: "home-tabs" },
-        tab("NEW AT HOME", "#/discover", view === "home"),
-        tab("TRENDING", "#/discover/trending", view === "trending"),
+        tab("POPULAR", "#/discover", view === "home"),
         tab("FOR YOU", "#/discover/foryou", view === "foryou"),
       ),
     );
@@ -180,7 +230,9 @@ export const discoverRoute: Route = {
         // Same as the library grids: the title doubles as the subtitle so the browser's
         // own in-page search can find a card by name.
         subtitle: `${hit.title}${hit.year ? ` (${hit.year})` : ""}`,
-        note: scoreNote(hit),
+        // For a film still ahead, that it is coming beats what strangers made of it — and it
+        // usually has no score anyway.
+        note: upcoming.has(hit.tmdbId) ? "Coming soon" : trendingOnly.has(hit.tmdbId) ? "Trending" : scoreNote(hit),
       });
     }
 
@@ -189,11 +241,27 @@ export const discoverRoute: Route = {
     let nextPage = 1;
     let totalPages = 0;
     let loading = false;
+    /**
+     * Films whose digital date is still ahead — everything the forward query returned.
+     *
+     * Membership only, no date. TMDB's discover response doesn't carry release dates, so
+     * saying *when* each one lands costs a `/release_dates` request per film: twenty extra
+     * calls to turn "Coming soon" into "Coming 10 Aug". The window is three months and the
+     * film's own page has the exact date, so the badge is left vague on purpose.
+     */
+    const upcoming = new Set<number>();
+    /**
+     * Films that only the trending query knew about. Mostly still in cinemas, but not
+     * reliably so — *Project Hail Mary* has been at home since May and lands here because it
+     * fell outside the window. So the note says "Trending", which is the one thing that is
+     * true of all of them, rather than guessing at where they can be watched.
+     */
+    const trendingOnly = new Set<number>();
 
     const hasMore = (): boolean => nextPage <= totalPages;
 
     function paint(): void {
-      const shown = filters.hideKnown && view !== "foryou" ? hits.filter((h) => !isKnown(h)) : hits;
+        const shown = filters.hideKnown && view === "home" ? hits.filter((h) => !isKnown(h)) : hits;
       grid.replaceChildren(...shown.map(card));
       footer.replaceChildren();
       status.replaceChildren();
@@ -212,7 +280,7 @@ export const discoverRoute: Route = {
               ? "Everything here is already watched or on a list. Untick “Hide watched & listed” to see it."
               : view === "foryou"
                 ? "Nothing to go on yet — mark a few films watched and this fills up."
-                : "Nothing matched. Try a longer window, or lower the score and vote floors.",
+                : "Nothing matched. Try a longer window.",
           ),
         );
         return;
@@ -222,23 +290,59 @@ export const discoverRoute: Route = {
         more.addEventListener("click", () => void loadPage());
         footer.append(more);
       }
-      // The count is worth saying out loud once you start filtering: it's the difference
-      // between "the score floor is too high" and "there just wasn't much this month".
+      // Worth saying out loud, because the hidden tally is the interesting half: a short
+      // list is usually a library you've already filled, not a month with nothing in it.
       status.replaceChildren(
         el("div", { class: "discover-count" }, `${shown.length} film${shown.length === 1 ? "" : "s"}${filters.hideKnown && shown.length < hits.length ? ` · ${hits.length - shown.length} hidden` : ""}`),
       );
     }
 
-    /** The filters that don't concern dates or ordering — shared by both fetch paths. */
+    /** Everything both queries share: what a film is, never when it landed. */
     async function baseQuery(): Promise<DiscoverMovieQuery> {
       const region = primaryRegion();
       return {
-        minRating: filters.minRating > 0 ? filters.minRating : undefined,
-        minVotes: filters.minVotes > 0 ? filters.minVotes : undefined,
         releaseTypes: RELEASE_TYPES_AT_HOME,
-        ...(filters.includeCatalogue ? {} : { madeSince: daysAgo(CATALOGUE_YEARS * 365) }),
+        region: RELEASE_DATE_REGION,
+        madeSince: daysAgo(CATALOGUE_YEARS * 365),
+        withoutCompanies: EXCLUDED_COMPANIES,
         ...(filters.onMyServices ? { watchRegion: region, providers: await myProviderIds(region) } : {}),
       };
+    }
+
+    /** Films that have already reached home, within the window the bar asks for. */
+    async function homePage(page: number): Promise<DiscoverMoviePage> {
+      return discoverMovies({ ...(await baseQuery()), atHomeFrom: daysAgo(AT_HOME_DAYS), atHomeTo: isoDay(new Date()), page });
+    }
+
+    /** Films with a digital date announced but not yet reached. One page is plenty — there
+     * are around 190 in a three-month window, and the point is the imminent handful. */
+    async function forwardPage(): Promise<DiscoverMoviePage> {
+      return discoverMovies({
+        ...(await baseQuery()),
+        atHomeFrom: daysAhead(1),
+        atHomeTo: daysAhead(FORWARD_DAYS),
+        page: 1,
+      });
+    }
+
+    /**
+     * Re-sort the merged list. Two queries arrive each already ordered, but interleaved they
+     * are not, and a film landing next week should sit among its peers rather than in a lump
+     * at the end.
+     */
+    /**
+     * **First batch only.** Three queries arriving at once are each ordered but not ordered
+     * against each other, so the join has to be sorted once. Later pages come from the
+     * at-home query alone, already in order, and are appended instead.
+     *
+     * Re-sorting on every Load more was what made the list move under you: a film sitting at
+     * position 24 slid to 40 as twenty more popular ones arrived, and the upcoming titles —
+     * low popularity almost by definition, since nobody has watched them yet — sank further
+     * with every click. Appending costs a visible seam where a page boundary falls, and buys
+     * a list where nothing already read ever moves.
+     */
+    function reorder(): void {
+      hits = [...hits].sort((a, b) => b.popularity - a.popularity);
     }
 
     /**
@@ -249,14 +353,24 @@ export const discoverRoute: Route = {
      */
     const feedKey = (): string => {
       if (view !== "home") return view;
-      const { days, minRating, minVotes, onMyServices, includeCatalogue, sortBy } = filters;
-      return `home\n${days}\n${minRating}\n${minVotes}\n${onMyServices}\n${includeCatalogue}\n${sortBy}`;
+      return `home\n${filters.onMyServices}`;
     };
 
-    /** Merge a batch in, dropping anything already held. */
+    /**
+     * Merge a batch in, dropping anything already held *and* anything repeated inside the
+     * batch. The second half matters now that three queries arrive as one batch: thirteen of
+     * trending's twenty are also in the at-home page, so checking only against what was
+     * already held let every one of them through twice.
+     */
     function absorb(batch: TmdbDiscoverHit[]): void {
       const seen = new Set(hits.map((h) => h.tmdbId));
-      hits = [...hits, ...batch.filter((h) => !seen.has(h.tmdbId))];
+      const fresh: TmdbDiscoverHit[] = [];
+      for (const hit of batch) {
+        if (seen.has(hit.tmdbId)) continue;
+        seen.add(hit.tmdbId);
+        fresh.push(hit);
+      }
+      hits = [...hits, ...fresh];
     }
 
     async function loadPage(): Promise<void> {
@@ -266,24 +380,24 @@ export const discoverRoute: Route = {
       try {
         if (view === "foryou") {
           hits = await buildForYou(movies);
+        } else if (nextPage === 1) {
+          // First page only, and the only place three queries are spent: what is at home, what
+          // is about to be, and what is big anywhere. Overlap between them is heavy — thirteen
+          // of trending's twenty were already in the other two — so `absorb` does the work.
+          const [out, ahead, trend] = await Promise.all([homePage(1), forwardPage(), fetchTrendingMovies("week", 1)]);
+          const coming = ahead.hits.filter((h) => h.popularity >= FORWARD_MIN_POPULARITY);
+          const alreadyPlaced = new Set([...out.hits, ...coming].map((h) => h.tmdbId));
+          for (const hit of coming) upcoming.add(hit.tmdbId);
+          for (const hit of trend.hits) if (!alreadyPlaced.has(hit.tmdbId)) trendingOnly.add(hit.tmdbId);
+          absorb([...out.hits, ...coming, ...trend.hits]);
+          reorder();
+          nextPage = 2;
+          totalPages = out.totalPages;
         } else {
-          const page =
-            view === "trending"
-              ? await fetchTrendingMovies("week", nextPage)
-              : await discoverMovies({
-                  ...(await baseQuery()),
-                  sortBy:
-                    filters.sortBy === "newest"
-                      ? "primary_release_date.desc"
-                      : filters.sortBy === "popular"
-                        ? "popularity.desc"
-                        : "vote_average.desc",
-                  releasedFrom: daysAgo(filters.days),
-                  // Capped at today: TMDB carries announced future digital dates, and without
-                  // this the newest-first sort opens on films nobody can watch yet.
-                  releasedTo: isoDay(new Date()),
-                  page: nextPage,
-                });
+          // Paging only continues the at-home query. The other two are single-page by nature:
+          // trending is a chart of twenty, and the forward window is the imminent handful.
+          const page = await homePage(nextPage);
+          // Appended, deliberately not re-sorted — see `reorder`.
           // Dedupe: paging a feed sorted by a field with ties can repeat a title across pages.
           absorb(page.hits);
           nextPage = page.page + 1;
@@ -303,17 +417,13 @@ export const discoverRoute: Route = {
       hits = [];
       nextPage = 1;
       totalPages = 0;
+      upcoming.clear();
+      trendingOnly.clear();
       lastFeed = null;
       void loadPage();
     }
 
     if (view === "home") controls.append(filterBar(reload, paint));
-    // Trending gets the hide toggle on its own, without the rest of the bar. It has no query
-    // to tune, but it is the view most likely to be *mostly* films you already know — and a
-    // count saying "11 hidden" with no way to see them is a dead end.
-    if (view === "trending") {
-      controls.append(el("div", { class: "filter-bar" }, hideKnownToggle(paint)));
-    }
     if (view === "foryou") {
       controls.append(
         sectionHeader("Because you watched"),
@@ -383,7 +493,7 @@ function checkbox(label: string, current: boolean, onToggle: (on: boolean) => vo
   return el("label", { class: "filter-toggle" }, box, el("span", {}, label));
 }
 
-/** Shared by NEW AT HOME and TRENDING: the one control that only changes what's drawn. */
+/** The one control that only changes what's drawn, not what's asked for. */
 function hideKnownToggle(repaint: () => void): HTMLElement {
   return checkbox("Hide watched & listed", filters.hideKnown, (on) => {
     filters.hideKnown = on;
@@ -392,102 +502,15 @@ function hideKnownToggle(repaint: () => void): HTMLElement {
 }
 
 /**
- * The knobs on NEW AT HOME. `reload` for anything that changes the question TMDB is asked;
+ * The knobs on POPULAR. `reload` for anything that changes the question TMDB is asked;
  * `repaint` for the one that only changes what's drawn from the answer already in hand.
  */
 function filterBar(reload: () => void, repaint: () => void): HTMLElement {
   const bar = el("div", { class: "filter-bar" });
 
-  const select = <T extends string | number>(
-    label: string,
-    options: { value: T; label: string }[],
-    current: T,
-    onPick: (value: T) => void,
-  ): HTMLElement => {
-    const sel = el("select", { class: "season-select" }) as HTMLSelectElement;
-    for (const opt of options) {
-      const node = el("option", { value: String(opt.value) }, opt.label);
-      if (opt.value === current) node.setAttribute("selected", "");
-      sel.append(node);
-    }
-    sel.addEventListener("change", () => {
-      const picked = options.find((o) => String(o.value) === sel.value);
-      if (picked) onPick(picked.value);
-    });
-    return el("label", { class: "filter-field" }, el("span", {}, label), sel);
-  };
-
-  bar.append(
-    select(
-      "At home since",
-      [
-        { value: 7, label: "7 days" },
-        { value: 14, label: "14 days" },
-        { value: 30, label: "30 days" },
-        { value: 60, label: "60 days" },
-        { value: 90, label: "3 months" },
-        { value: 180, label: "6 months" },
-      ],
-      filters.days,
-      (v) => {
-        filters.days = v;
-        reload();
-      },
-    ),
-    select(
-      "Score at least",
-      [
-        { value: 0, label: "Any" },
-        { value: 5.5, label: "5.5" },
-        { value: 6, label: "6.0" },
-        { value: 6.5, label: "6.5" },
-        { value: 7, label: "7.0" },
-        { value: 7.5, label: "7.5" },
-      ],
-      filters.minRating,
-      (v) => {
-        filters.minRating = v;
-        reload();
-      },
-    ),
-    select(
-      "Votes at least",
-      [
-        { value: 0, label: "Any" },
-        { value: 5, label: "5" },
-        { value: 25, label: "25" },
-        { value: 50, label: "50" },
-        { value: 100, label: "100" },
-        { value: 300, label: "300" },
-      ],
-      filters.minVotes,
-      (v) => {
-        filters.minVotes = v;
-        reload();
-      },
-    ),
-    select(
-      "Order by",
-      [
-        { value: "popular" as const, label: "Most popular" },
-        { value: "newest" as const, label: "Newest" },
-        { value: "rated" as const, label: "Highest score" },
-      ],
-      filters.sortBy,
-      (v) => {
-        filters.sortBy = v;
-        reload();
-      },
-    ),
-  );
-
   bar.append(
     checkbox(`On my services (${primaryRegion()})`, filters.onMyServices, (on) => {
       filters.onMyServices = on;
-      reload();
-    }),
-    checkbox("Include older films", filters.includeCatalogue, (on) => {
-      filters.includeCatalogue = on;
       reload();
     }),
     hideKnownToggle(repaint),

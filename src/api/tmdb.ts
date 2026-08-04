@@ -514,6 +514,11 @@ export interface TmdbDiscoverHit {
   rating: number | null;
   votes: number;
   released: string | null;
+  /**
+   * TMDB's rolling engagement score. Carried on the hit rather than left to `sort_by`, because
+   * a screen that merges two queries has to re-order the join itself.
+   */
+  popularity: number;
 }
 
 interface RawDiscoverHit {
@@ -524,6 +529,7 @@ interface RawDiscoverHit {
   poster_path?: string | null;
   vote_average?: number;
   vote_count?: number;
+  popularity?: number;
 }
 
 function toDiscoverHit(raw: RawDiscoverHit): TmdbDiscoverHit {
@@ -536,43 +542,50 @@ function toDiscoverHit(raw: RawDiscoverHit): TmdbDiscoverHit {
     rating: raw.vote_average ?? null,
     votes: raw.vote_count ?? 0,
     released: raw.release_date || null,
+    popularity: raw.popularity ?? 0,
   };
 }
 
 /**
  * TMDB release types. 4 is Digital and 6 is TV — together, "you can watch this at home
- * tonight", which is what Rotten Tomatoes shelves under *movies at home*. 3 is Theatrical
- * and is deliberately absent: a film still only in cinemas is the thing being excluded.
+ * tonight". 3 is Theatrical and is deliberately absent: a film still only in cinemas is the
+ * thing being excluded.
  */
 export const RELEASE_TYPES_AT_HOME = "4|6";
 
 export interface DiscoverMovieQuery {
-  /**
-   * TMDB sorts by the *primary* (usually theatrical) release date — there is no sort on the
-   * digital date, which is the one "newest at home" actually means. Inside a short window it
-   * is a fair proxy, because digital follows cinema by a fairly steady month or three, but a
-   * film that reaches streaming years late will sort as old. `releasedFrom` is what makes the
-   * set right; this only orders it.
-   */
-  sortBy?: "primary_release_date.desc" | "popularity.desc" | "vote_average.desc";
-  /** Floor on TMDB's user score, 0..10. Only meaningful alongside `minVotes`. */
-  minRating?: number;
-  minVotes?: number;
-  /** Pipe-separated TMDB release types; scopes the date window to those releases. */
+  /** Pipe-separated TMDB release types; scopes the `atHome*` window to those releases. */
   releaseTypes?: string;
-  releasedFrom?: string;
-  releasedTo?: string;
   /**
-   * Floor on the *primary* release date — how old the film itself is, as opposed to how
-   * recently it reached home. The two come apart constantly: a service adding *Brazil* (1985)
-   * to its catalogue registers a digital release this week, and without this it leads a feed
-   * of new arrivals. Rotten Tomatoes' *movies at home* shelf carries no catalogue at all.
+   * The window on the release dates named by `releaseTypes` — with types 4 and 6, "reached
+   * home between these dates".
+   *
+   * **Matches any country unless `region` is set**, which is looser than it looks: a film out
+   * in the US since June still matches a window covering next month, because some small
+   * territory's digital date falls in it. That is why the same titles appear whatever the
+   * forward cutoff.
+   */
+  atHomeFrom?: string;
+  atHomeTo?: string;
+  /**
+   * Restricts every release-date filter to one country's dates. TMDB's coverage is heavily
+   * US-weighted — a 30-day digital window returns 452 films for `US` and 8 for `DK` — so this
+   * is about which country *has data*, not about where the user lives. Availability where
+   * they actually are comes from the providers, not from release dates.
+   */
+  region?: string;
+  /**
+   * Floor on the *primary* release date — how old the film itself is, as opposed to when it
+   * reached home. A service adding *Brazil* (1985) to its catalogue registers a digital
+   * release that week, and without this such a film counts as newly at home.
    */
   madeSince?: string;
   /** One ISO country code. Required by `providers`. */
   watchRegion?: string;
   /** TMDB provider ids, OR-ed together. */
   providers?: number[];
+  /** TMDB production-company ids to exclude outright. */
+  withoutCompanies?: number[];
   page?: number;
 }
 
@@ -594,20 +607,20 @@ export async function discoverMovies(query: DiscoverMovieQuery): Promise<Discove
     include_adult: "false",
     include_video: "false",
     page: String(query.page ?? 1),
-    sort_by: query.sortBy ?? "primary_release_date.desc",
+    // Always popularity. The alternatives were offered and both failed: `primary_release_date`
+    // sorts by the cinema date, which buries a film that reached streaming a year later, and
+    // `vote_average` without a vote floor returns nothing but ten-out-of-ten from a single
+    // vote. There is no third caller wanting something else.
+    sort_by: "popularity.desc",
   });
-  if (query.minRating != null) params.set("vote_average.gte", String(query.minRating));
-  if (query.minVotes != null) params.set("vote_count.gte", String(query.minVotes));
   if (query.releaseTypes) params.set("with_release_type", query.releaseTypes);
-  // `release_date.*` rather than `primary_release_date.*` on purpose: paired with
-  // `with_release_type` it filters on the dates of *those* release types, which is the only
-  // way to ask "reached digital in the last two months". The primary-date pair would filter
-  // on the cinema date and quietly answer a different question.
-  if (query.releasedFrom) params.set("release_date.gte", query.releasedFrom);
-  if (query.releasedTo) params.set("release_date.lte", query.releasedTo);
+  if (query.atHomeFrom) params.set("release_date.gte", query.atHomeFrom);
+  if (query.atHomeTo) params.set("release_date.lte", query.atHomeTo);
+  if (query.region) params.set("region", query.region);
   if (query.madeSince) params.set("primary_release_date.gte", query.madeSince);
   if (query.watchRegion) params.set("watch_region", query.watchRegion);
   if (query.providers?.length) params.set("with_watch_providers", query.providers.join("|"));
+  if (query.withoutCompanies?.length) params.set("without_companies", query.withoutCompanies.join(","));
 
   const res = await fetch(`${API}/discover/movie?${params.toString()}`);
   if (!res.ok) {
