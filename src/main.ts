@@ -6,6 +6,7 @@ import { showRoute } from "./ui/show";
 import { moviesRoute } from "./ui/movies";
 import { movieRoute } from "./ui/movie";
 import { releasesRoute } from "./ui/releases";
+import { discoverRoute } from "./ui/discover";
 import { searchRoute } from "./ui/search";
 import { settingsRoute } from "./ui/settings";
 import { applyTheme } from "./theme";
@@ -51,6 +52,7 @@ registerRoute(showRoute);
 registerRoute(moviesRoute);
 registerRoute(movieRoute);
 registerRoute(releasesRoute);
+registerRoute(discoverRoute);
 registerRoute(searchRoute);
 registerRoute(settingsRoute);
 

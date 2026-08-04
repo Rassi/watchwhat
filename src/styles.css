@@ -78,6 +78,8 @@ button {
   z-index: 10;
 }
 
+/* Padding is tight because five tabs have to fit a 360px phone without wrapping —
+   "Discover" is the widest label and sets the floor. */
 #tabbar a {
   display: flex;
   flex-direction: column;
@@ -85,7 +87,8 @@ button {
   gap: 2px;
   font-size: 11px;
   color: var(--text-dim);
-  padding: 4px 16px;
+  padding: 4px 8px;
+  min-width: 0;
 }
 
 #tabbar a.active {
@@ -1171,6 +1174,60 @@ button {
 .release-estimate {
   color: var(--text-dim);
   font-style: italic;
+}
+
+/* ---------- discover ---------- */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: flex-end;
+  margin: 12px 0 4px;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.3px;
+}
+
+/* The two checkboxes sit on their own line under the selects rather than in the flow:
+   they read as afterthoughts to the query, not as more of it. */
+.filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding-bottom: 8px;
+}
+
+.filter-check {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+}
+
+.discover-count {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 8px 0 10px;
+}
+
+.discover-blurb {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  margin: 0 0 14px;
+}
+
+.discover-footer {
+  display: flex;
+  justify-content: center;
+  margin: 18px 0 8px;
 }
 
 .list-picker {

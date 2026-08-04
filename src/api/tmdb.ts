@@ -493,3 +493,186 @@ export async function fetchShowExtras(tmdbId: number, seasonNumbers: number[]): 
 export function backdropUrl(path: string | null | undefined, size = "w780"): string | null {
   return path ? `${IMG}${size}${path}` : null;
 }
+
+// ---------- discover ----------
+
+/**
+ * A result from discover, trending or recommendations — the fields a poster card needs.
+ *
+ * `rating` is TMDB's own registered users voting 0..10, and it is the *only* score TMDB
+ * publishes: there is nothing here from IMDb, Metacritic or Rotten Tomatoes, and no
+ * endpoint that would add them. That is the whole reason `votes` rides along. Anyone can
+ * rate on TMDB, so a forgotten film with four votes averaging 9.3 outranks everything real
+ * the moment you sort or filter by score; a vote floor is what makes the score mean anything.
+ */
+export interface TmdbDiscoverHit {
+  tmdbId: number;
+  title: string;
+  year: number | null;
+  overview: string | null;
+  poster: string | null;
+  rating: number | null;
+  votes: number;
+  released: string | null;
+}
+
+interface RawDiscoverHit {
+  id: number;
+  title?: string;
+  release_date?: string;
+  overview?: string | null;
+  poster_path?: string | null;
+  vote_average?: number;
+  vote_count?: number;
+}
+
+function toDiscoverHit(raw: RawDiscoverHit): TmdbDiscoverHit {
+  return {
+    tmdbId: raw.id,
+    title: raw.title ?? "",
+    year: yearOf(raw.release_date),
+    overview: raw.overview || null,
+    poster: raw.poster_path ?? null,
+    rating: raw.vote_average ?? null,
+    votes: raw.vote_count ?? 0,
+    released: raw.release_date || null,
+  };
+}
+
+/**
+ * TMDB release types. 4 is Digital and 6 is TV — together, "you can watch this at home
+ * tonight", which is what Rotten Tomatoes shelves under *movies at home*. 3 is Theatrical
+ * and is deliberately absent: a film still only in cinemas is the thing being excluded.
+ */
+export const RELEASE_TYPES_AT_HOME = "4|6";
+
+export interface DiscoverMovieQuery {
+  /**
+   * TMDB sorts by the *primary* (usually theatrical) release date — there is no sort on the
+   * digital date, which is the one "newest at home" actually means. Inside a short window it
+   * is a fair proxy, because digital follows cinema by a fairly steady month or three, but a
+   * film that reaches streaming years late will sort as old. `releasedFrom` is what makes the
+   * set right; this only orders it.
+   */
+  sortBy?: "primary_release_date.desc" | "popularity.desc" | "vote_average.desc";
+  /** Floor on TMDB's user score, 0..10. Only meaningful alongside `minVotes`. */
+  minRating?: number;
+  minVotes?: number;
+  /** Pipe-separated TMDB release types; scopes the date window to those releases. */
+  releaseTypes?: string;
+  releasedFrom?: string;
+  releasedTo?: string;
+  /** One ISO country code. Required by `providers`. */
+  watchRegion?: string;
+  /** TMDB provider ids, OR-ed together. */
+  providers?: number[];
+  page?: number;
+}
+
+export interface DiscoverMoviePage {
+  hits: TmdbDiscoverHit[];
+  page: number;
+  totalPages: number;
+  totalResults: number;
+}
+
+const EMPTY_PAGE: DiscoverMoviePage = { hits: [], page: 1, totalPages: 0, totalResults: 0 };
+
+export async function discoverMovies(query: DiscoverMovieQuery): Promise<DiscoverMoviePage> {
+  const { tmdbApiKey } = getSettings();
+  if (!tmdbApiKey) return EMPTY_PAGE;
+
+  const params = new URLSearchParams({
+    api_key: tmdbApiKey,
+    include_adult: "false",
+    include_video: "false",
+    page: String(query.page ?? 1),
+    sort_by: query.sortBy ?? "primary_release_date.desc",
+  });
+  if (query.minRating != null) params.set("vote_average.gte", String(query.minRating));
+  if (query.minVotes != null) params.set("vote_count.gte", String(query.minVotes));
+  if (query.releaseTypes) params.set("with_release_type", query.releaseTypes);
+  // `release_date.*` rather than `primary_release_date.*` on purpose: paired with
+  // `with_release_type` it filters on the dates of *those* release types, which is the only
+  // way to ask "reached digital in the last two months". The primary-date pair would filter
+  // on the cinema date and quietly answer a different question.
+  if (query.releasedFrom) params.set("release_date.gte", query.releasedFrom);
+  if (query.releasedTo) params.set("release_date.lte", query.releasedTo);
+  if (query.watchRegion) params.set("watch_region", query.watchRegion);
+  if (query.providers?.length) params.set("with_watch_providers", query.providers.join("|"));
+
+  const res = await fetch(`${API}/discover/movie?${params.toString()}`);
+  if (!res.ok) {
+    throw new Error(
+      res.status === 401 ? "TMDB rejected the API key — check it in Settings." : `TMDB discover failed: ${res.status}`,
+    );
+  }
+  const data = (await res.json()) as { results?: RawDiscoverHit[]; page?: number; total_pages?: number; total_results?: number };
+  return {
+    hits: (data.results ?? []).map(toDiscoverHit),
+    page: data.page ?? 1,
+    // TMDB refuses pages past 500 whatever it claims here.
+    totalPages: Math.min(data.total_pages ?? 0, 500),
+    totalResults: data.total_results ?? 0,
+  };
+}
+
+/** What everyone has been watching. TMDB's trending is global and not personalised. */
+export async function fetchTrendingMovies(window: "day" | "week" = "week", page = 1): Promise<DiscoverMoviePage> {
+  const { tmdbApiKey } = getSettings();
+  if (!tmdbApiKey) return EMPTY_PAGE;
+  const res = await fetch(`${API}/trending/movie/${window}?api_key=${encodeURIComponent(tmdbApiKey)}&page=${page}`);
+  if (!res.ok) throw new Error(`TMDB trending failed: ${res.status}`);
+  const data = (await res.json()) as { results?: RawDiscoverHit[]; page?: number; total_pages?: number; total_results?: number };
+  return {
+    hits: (data.results ?? []).map(toDiscoverHit),
+    page: data.page ?? 1,
+    totalPages: Math.min(data.total_pages ?? 0, 500),
+    totalResults: data.total_results ?? 0,
+  };
+}
+
+/**
+ * "More like this one". TMDB has no endpoint that reads a whole library, so a
+ * recommendation feed has to be built by asking this about several films and counting
+ * which answers keep coming back — see `src/ui/discover.ts`.
+ */
+export async function fetchMovieRecommendations(tmdbId: number): Promise<TmdbDiscoverHit[]> {
+  const { tmdbApiKey } = getSettings();
+  if (!tmdbApiKey) return [];
+  const res = await fetch(`${API}/movie/${tmdbId}/recommendations?api_key=${encodeURIComponent(tmdbApiKey)}`);
+  if (!res.ok) return []; // one seed failing shouldn't empty the whole row
+  return ((await res.json()) as { results?: RawDiscoverHit[] }).results?.map(toDiscoverHit) ?? [];
+}
+
+export interface TmdbWatchProvider {
+  id: number;
+  name: string;
+}
+
+/**
+ * Every streaming service TMDB knows in one country, with the ids `with_watch_providers`
+ * wants. Cached for the session: it is a long, near-static list, and the only thing that
+ * changes it is editing My services, which is already a page reload away.
+ */
+const providerLists = new Map<string, Promise<TmdbWatchProvider[]>>();
+
+export function fetchWatchProviders(region: string): Promise<TmdbWatchProvider[]> {
+  const cached = providerLists.get(region);
+  if (cached) return cached;
+  const pending = (async (): Promise<TmdbWatchProvider[]> => {
+    const { tmdbApiKey } = getSettings();
+    if (!tmdbApiKey) return [];
+    const res = await fetch(
+      `${API}/watch/providers/movie?api_key=${encodeURIComponent(tmdbApiKey)}&watch_region=${encodeURIComponent(region)}`,
+    );
+    if (!res.ok) {
+      providerLists.delete(region); // a failed lookup must not be remembered as "none"
+      return [];
+    }
+    const data = (await res.json()) as { results?: { provider_id: number; provider_name: string }[] };
+    return (data.results ?? []).map((p) => ({ id: p.provider_id, name: p.provider_name }));
+  })();
+  providerLists.set(region, pending);
+  return pending;
+}
