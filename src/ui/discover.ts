@@ -43,22 +43,45 @@ interface HomeFilters {
   minRating: number;
   minVotes: number;
   onMyServices: boolean;
+  /** Let in films that are merely *newly available* rather than newly made. Off by default. */
+  includeCatalogue: boolean;
   hideKnown: boolean;
-  sortBy: NonNullable<DiscoverMovieQuery["sortBy"]>;
+  sortBy: "newest" | "popular" | "rated";
 }
 
 const filters: HomeFilters = {
-  days: 60,
+  days: 30,
   // 6.5 is a guess at "not bad", not a translation of anything. Rotten Tomatoes' upright
   // popcorn means 60% of voters liked it; TMDB's is an average of 0..10 votes and it sits
   // much more compressed — competent mainstream films cluster 6.0–7.5 — so the two scales
   // do not map onto each other. This is the number to tune once you've compared a few weeks.
   minRating: 6.5,
+  // 100 votes is a heavy floor for this shelf. Small films and streaming originals — much of
+  // what Rotten Tomatoes puts under *movies at home* — collect single-digit TMDB votes while
+  // carrying a perfectly real RT audience score, because the two sites' voters are not the
+  // same crowd. `Maddie's Secret` had four. Kept as the default anyway, because dropping it
+  // trades those films for a feed full of things with no usable score at all; the lower rungs
+  // are there for when you want to go looking.
   minVotes: 100,
   onMyServices: false,
+  includeCatalogue: false,
   hideKnown: true,
-  sortBy: "primary_release_date.desc",
+  // Ordered by how new the *film* is. TMDB has no sort on the digital date, so "newest" can
+  // only mean the primary release — near enough, since digital follows cinema by a fairly
+  // steady month or three. It parts company with the truth on a long gap: Demon Slayer opened
+  // in cinemas a full year before it streamed, so it sorts as old despite only just arriving.
+  // The date *window* is what makes the set right; this only orders it.
+  sortBy: "newest",
 };
+
+/**
+ * How old a film may be and still count as new *at home*. Ordering by the true digital date
+ * exposed a category the old primary-date sort had been accidentally suppressing: catalogue.
+ * A service adding *Heat* (1995) or *Brazil* (1985) registers a digital release that week, so
+ * a feed of genuine arrivals filled up with films from the eighties. Rotten Tomatoes' shelf
+ * has none of it — every title on it is from the last year or two — so the default matches.
+ */
+const CATALOGUE_YEARS = 3;
 
 /**
  * The last answer drawn, so returning from a film's page repaints the same grid instead of
@@ -162,6 +185,8 @@ export const discoverRoute: Route = {
     let totalPages = 0;
     let loading = false;
 
+    const hasMore = (): boolean => nextPage <= totalPages;
+
     function paint(): void {
       const shown = filters.hideKnown && view !== "foryou" ? hits.filter((h) => !isKnown(h)) : hits;
       grid.replaceChildren(...shown.map(card));
@@ -182,12 +207,12 @@ export const discoverRoute: Route = {
               ? "Everything here is already watched or on a list. Untick “Hide watched & listed” to see it."
               : view === "foryou"
                 ? "Nothing to go on yet — mark a few films watched and this fills up."
-                : "Nothing matched. Try a longer window or a lower score.",
+                : "Nothing matched. Try a longer window, or lower the score and vote floors.",
           ),
         );
         return;
       }
-      if (nextPage <= totalPages) {
+      if (hasMore()) {
         const more = el("button", { class: "btn" }, "Load more");
         more.addEventListener("click", () => void loadPage());
         footer.append(more);
@@ -199,18 +224,14 @@ export const discoverRoute: Route = {
       );
     }
 
-    /** The query the filter bar currently describes. Also the cache key, stringified. */
-    async function homeQuery(): Promise<DiscoverMovieQuery> {
+    /** The filters that don't concern dates or ordering — shared by both fetch paths. */
+    async function baseQuery(): Promise<DiscoverMovieQuery> {
       const region = primaryRegion();
       return {
-        sortBy: filters.sortBy,
         minRating: filters.minRating > 0 ? filters.minRating : undefined,
         minVotes: filters.minVotes > 0 ? filters.minVotes : undefined,
         releaseTypes: RELEASE_TYPES_AT_HOME,
-        releasedFrom: daysAgo(filters.days),
-        // Capped at today: TMDB carries announced future digital dates, and without this the
-        // newest-first sort opens on films nobody can watch yet.
-        releasedTo: isoDay(new Date()),
+        ...(filters.includeCatalogue ? {} : { madeSince: daysAgo(CATALOGUE_YEARS * 365) }),
         ...(filters.onMyServices ? { watchRegion: region, providers: await myProviderIds(region) } : {}),
       };
     }
@@ -223,9 +244,15 @@ export const discoverRoute: Route = {
      */
     const feedKey = (): string => {
       if (view !== "home") return view;
-      const { days, minRating, minVotes, onMyServices, sortBy } = filters;
-      return `home\n${days}\n${minRating}\n${minVotes}\n${onMyServices}\n${sortBy}`;
+      const { days, minRating, minVotes, onMyServices, includeCatalogue, sortBy } = filters;
+      return `home\n${days}\n${minRating}\n${minVotes}\n${onMyServices}\n${includeCatalogue}\n${sortBy}`;
     };
+
+    /** Merge a batch in, dropping anything already held. */
+    function absorb(batch: TmdbDiscoverHit[]): void {
+      const seen = new Set(hits.map((h) => h.tmdbId));
+      hits = [...hits, ...batch.filter((h) => !seen.has(h.tmdbId))];
+    }
 
     async function loadPage(): Promise<void> {
       if (loading) return;
@@ -234,16 +261,26 @@ export const discoverRoute: Route = {
       try {
         if (view === "foryou") {
           hits = await buildForYou(movies);
-          nextPage = 1;
-          totalPages = 0;
         } else {
           const page =
             view === "trending"
               ? await fetchTrendingMovies("week", nextPage)
-              : await discoverMovies({ ...(await homeQuery()), page: nextPage });
+              : await discoverMovies({
+                  ...(await baseQuery()),
+                  sortBy:
+                    filters.sortBy === "newest"
+                      ? "primary_release_date.desc"
+                      : filters.sortBy === "popular"
+                        ? "popularity.desc"
+                        : "vote_average.desc",
+                  releasedFrom: daysAgo(filters.days),
+                  // Capped at today: TMDB carries announced future digital dates, and without
+                  // this the newest-first sort opens on films nobody can watch yet.
+                  releasedTo: isoDay(new Date()),
+                  page: nextPage,
+                });
           // Dedupe: paging a feed sorted by a field with ties can repeat a title across pages.
-          const seen = new Set(hits.map((h) => h.tmdbId));
-          hits = [...hits, ...page.hits.filter((h) => !seen.has(h.tmdbId))];
+          absorb(page.hits);
           nextPage = page.page + 1;
           totalPages = page.totalPages;
         }
@@ -379,11 +416,12 @@ function filterBar(reload: () => void, repaint: () => void): HTMLElement {
     select(
       "At home since",
       [
+        { value: 7, label: "7 days" },
+        { value: 14, label: "14 days" },
         { value: 30, label: "30 days" },
         { value: 60, label: "60 days" },
         { value: 90, label: "3 months" },
         { value: 180, label: "6 months" },
-        { value: 365, label: "1 year" },
       ],
       filters.days,
       (v) => {
@@ -411,10 +449,11 @@ function filterBar(reload: () => void, repaint: () => void): HTMLElement {
       "Votes at least",
       [
         { value: 0, label: "Any" },
+        { value: 5, label: "5" },
+        { value: 25, label: "25" },
         { value: 50, label: "50" },
         { value: 100, label: "100" },
         { value: 300, label: "300" },
-        { value: 1000, label: "1000" },
       ],
       filters.minVotes,
       (v) => {
@@ -425,9 +464,9 @@ function filterBar(reload: () => void, repaint: () => void): HTMLElement {
     select(
       "Order by",
       [
-        { value: "primary_release_date.desc" as const, label: "Newest" },
-        { value: "popularity.desc" as const, label: "Most popular" },
-        { value: "vote_average.desc" as const, label: "Highest score" },
+        { value: "newest" as const, label: "Newest" },
+        { value: "popular" as const, label: "Most popular" },
+        { value: "rated" as const, label: "Highest score" },
       ],
       filters.sortBy,
       (v) => {
@@ -440,6 +479,10 @@ function filterBar(reload: () => void, repaint: () => void): HTMLElement {
   bar.append(
     checkbox(`On my services (${primaryRegion()})`, filters.onMyServices, (on) => {
       filters.onMyServices = on;
+      reload();
+    }),
+    checkbox("Include older films", filters.includeCatalogue, (on) => {
+      filters.includeCatalogue = on;
       reload();
     }),
     hideKnownToggle(repaint),

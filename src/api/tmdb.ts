@@ -562,6 +562,13 @@ export interface DiscoverMovieQuery {
   releaseTypes?: string;
   releasedFrom?: string;
   releasedTo?: string;
+  /**
+   * Floor on the *primary* release date — how old the film itself is, as opposed to how
+   * recently it reached home. The two come apart constantly: a service adding *Brazil* (1985)
+   * to its catalogue registers a digital release this week, and without this it leads a feed
+   * of new arrivals. Rotten Tomatoes' *movies at home* shelf carries no catalogue at all.
+   */
+  madeSince?: string;
   /** One ISO country code. Required by `providers`. */
   watchRegion?: string;
   /** TMDB provider ids, OR-ed together. */
@@ -598,6 +605,7 @@ export async function discoverMovies(query: DiscoverMovieQuery): Promise<Discove
   // on the cinema date and quietly answer a different question.
   if (query.releasedFrom) params.set("release_date.gte", query.releasedFrom);
   if (query.releasedTo) params.set("release_date.lte", query.releasedTo);
+  if (query.madeSince) params.set("primary_release_date.gte", query.madeSince);
   if (query.watchRegion) params.set("watch_region", query.watchRegion);
   if (query.providers?.length) params.set("with_watch_providers", query.providers.join("|"));
 
