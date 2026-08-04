@@ -9,15 +9,19 @@ import { backdropUrl, fetchMovieRecommendations, fetchMovieSummary, posterUrl, t
 import { castStripCard, movieListsDropdown, ratingsLine, scoreNote, whereToWatchCard } from "./shared";
 
 /**
- * The last film whose similar list was asked for.
+ * Films whose similar list has been asked for, and how far along the row you had scrolled.
  *
  * Held outside `renderPage` because that function is called again from scratch by the
- * background refresh's repaint — without this, providers arriving a second after you pressed
- * the button would wipe the row and leave you pressing it again. One entry, not a map: you
- * look at one film at a time, and keeping every film's row for the session would be a cache
- * nobody asked for on a screen whose whole point is that it costs nothing until asked.
+ * background refresh's repaint and by every mark-watched — without this, providers arriving a
+ * second after you pressed the button would wipe the row and leave you pressing it again.
+ *
+ * Keyed by film rather than a single entry, which is what the obvious journey demands: tap a
+ * recommendation, open *its* similar row, come back. A one-slot cache is evicted by that
+ * second row and the film you started on is back to showing a button, having already paid for
+ * its answer. Session-only and unbounded, exactly like the router's `scrollPositions` — an
+ * entry is 20 hits and you would have to walk hundreds of films to notice.
  */
-let lastSimilar: { tmdbId: number; hits: TmdbDiscoverHit[] } | null = null;
+const similarByMovie = new Map<number, { hits: TmdbDiscoverHit[]; scrollLeft: number }>();
 
 export const movieRoute: Route = {
   name: "movie",
@@ -293,7 +297,9 @@ function renderPage(
       const knownByTmdb = new Map<number, MovieRec>();
       for (const m of movies.values()) if (m.ids.tmdb) knownByTmdb.set(m.ids.tmdb, m);
 
-      function show(hits: TmdbDiscoverHit[]): void {
+      // An arrow, not a declaration: a hoisted `function` is treated as created before the
+      // `if (!tmdbId) return null` above, so it wouldn't see `tmdbId` narrowed to a number.
+      const show = (hits: TmdbDiscoverHit[]): void => {
         if (hits.length === 0) {
           slot.replaceChildren(el("p", { class: "about-facts" }, "TMDB has nothing to suggest for this one."));
           return;
@@ -316,11 +322,22 @@ function renderPage(
             }),
           );
         }
+        // Recorded as you go rather than read back on the way out: by the time a tap has
+        // navigated away, this element is already gone and there is nothing left to ask.
+        strip.addEventListener(
+          "scroll",
+          () => {
+            const held = similarByMovie.get(tmdbId);
+            if (held) held.scrollLeft = strip.scrollLeft;
+          },
+          { passive: true },
+        );
         slot.replaceChildren(strip);
-      }
+      };
 
-      if (lastSimilar?.tmdbId === tmdbId) {
-        show(lastSimilar.hits);
+      const held = similarByMovie.get(tmdbId);
+      if (held) {
+        show(held.hits);
         return card;
       }
 
@@ -330,7 +347,7 @@ function renderPage(
         // `fetchMovieRecommendations` answers `[]` rather than throwing, so a failed request
         // and a film TMDB has no suggestions for arrive the same way and read the same way.
         const hits = await fetchMovieRecommendations(tmdbId);
-        lastSimilar = { tmdbId, hits };
+        similarByMovie.set(tmdbId, { hits, scrollLeft: 0 });
         show(hits);
       });
       slot.replaceChildren(ask);
@@ -351,6 +368,17 @@ function renderPage(
     const similar = similarCard();
     if (similar) pieces.push(similar);
     body.replaceChildren(...pieces);
+
+    // Only now, because `scrollLeft` on a detached element is a no-op — there is no layout to
+    // scroll until the card is in the document. Safe to set immediately rather than waiting on
+    // the posters: every card is a fixed 105px and its height is reserved by `aspect-ratio`, so
+    // the row is already its full width with every image still loading.
+    const tmdbId = movie.ids.tmdb;
+    const held = tmdbId ? similarByMovie.get(tmdbId) : undefined;
+    if (held) {
+      const strip = body.querySelector<HTMLElement>(".similar-strip");
+      if (strip) strip.scrollLeft = held.scrollLeft;
+    }
   }
 
   renderContent();
