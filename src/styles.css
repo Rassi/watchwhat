@@ -173,6 +173,12 @@ button {
   border-radius: 4px;
 }
 
+/* Already watched — green, the same "you're covered" green as a service you pay for. */
+.poster-card .badge.seen {
+  background: var(--green);
+  color: #fff;
+}
+
 .poster-card .stream-badge {
   position: absolute;
   top: 6px;

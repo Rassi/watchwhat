@@ -92,6 +92,12 @@ export interface PosterCardOpts {
   /** 0..1 progress under the poster; null hides the bar */
   progress?: number | null;
   badge?: string | null;
+  /**
+   * Recolours the badge green. Yellow is the default because a badge is normally the one
+   * thing on a grid worth stopping at; where two badges sit side by side and one of them
+   * means "done" — SEEN next to LISTED on Discover — same colour twice reads as one state.
+   */
+  badgeTone?: "seen" | null;
   subtitle?: string | null;
   /**
    * A second subtitle line, brighter than the first. Split from `subtitle` rather than
@@ -167,7 +173,7 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
   } else {
     card.append(el("div", { class: "poster placeholder" }, el("span", {}, opts.title)));
   }
-  if (opts.badge) card.append(el("span", { class: "badge" }, opts.badge));
+  if (opts.badge) card.append(el("span", { class: opts.badgeTone ? `badge ${opts.badgeTone}` : "badge" }, opts.badge));
   if (opts.watch) {
     const label =
       opts.watch === "mine"

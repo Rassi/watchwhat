@@ -227,6 +227,7 @@ export const discoverRoute: Route = {
         href: `#/movie/${rec ? rec.traktId : tmdbKey(hit.tmdbId)}`,
         posterUrl: posterUrl(hit.poster),
         badge,
+        badgeTone: badge === "SEEN" ? "seen" : null,
         // Same as the library grids: the title doubles as the subtitle so the browser's
         // own in-page search can find a card by name.
         subtitle: `${hit.title}${hit.year ? ` (${hit.year})` : ""}`,
