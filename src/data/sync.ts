@@ -15,7 +15,7 @@
  * rewriting every stored record for no functional gain, so they stay.
  */
 
-import { fetchMovieExtras, fetchSeasonNumbers, fetchShowExtras, fetchShowImages, fetchShowSummary } from "../api/tmdb";
+import { fetchMovieExtras, fetchMovieSummary, fetchSeasonNumbers, fetchShowExtras, fetchShowImages, fetchShowSummary } from "../api/tmdb";
 import { fetchOmdbRatings } from "../api/omdb";
 import { fetchJustWatchOffers, type JustWatchUpcoming } from "../api/justwatch";
 import { announcementWindow, gapQuartiles, type GapQuartiles } from "./releaseEstimate";
@@ -629,7 +629,7 @@ async function saveMovieFields(movie: MovieRec, keys: readonly (keyof MovieRec)[
 
 /** What a TMDB refresh owns. Everything else on the record belongs to the event log. */
 const TMDB_DERIVED_FIELDS = [
-  "poster", "backdrop", "overview", "trailer", "cast",
+  "poster", "backdrop", "overview", "trailer", "cast", "genres",
   "providers", "providersVersion", "providerSince", "providerSeen",
   "digitalRelease", "streamingRelease", "jwNodeId", "topUp", "tmdbFetchedAt",
 ] as const satisfies readonly (keyof MovieRec)[];
@@ -1034,6 +1034,11 @@ export async function ensureMovieDetails(
     movie.poster = extras.poster;
     movie.backdrop = extras.backdrop;
     if (!movie.overview && extras.overview) movie.overview = extras.overview;
+    // Came down with the same request either way. Overwrites rather than filling a gap, so a
+    // library still spelling these the Trakt way ("science-fiction") converges on TMDB's
+    // ("Science Fiction") as records refresh — see `genreKey` in discover.ts for why nothing
+    // compares them raw.
+    if (extras.genres.length > 0) movie.genres = extras.genres;
     movie.trailer = extras.trailer;
     movie.cast = extras.cast;
     movie.providers = extras.providersByCountry;
@@ -1175,6 +1180,33 @@ export async function ensureMovieExtRatings(movies: Map<number, MovieRec>, movie
   // Same hazard as the TMDB refresh: OMDb was just awaited, so the stored record may have moved.
   await saveMovieFields(movie, ["extRatings"]);
   return true;
+}
+
+/**
+ * A film's genres, fetched and **kept** if the record hasn't got them.
+ *
+ * The gap is narrow — every path that creates a MovieRec sets these, so across a 371-film
+ * library there is currently not one record without them — but Discover's horror filter is the
+ * first thing that has to know the genre of a film whose page may never have been opened, and
+ * holding the answer only for the session would re-ask on every rebuild forever.
+ *
+ * This is not the rule that Discover caches nothing being broken. That rule is about not
+ * writing records for other people's films; this fills a field on a film already in the
+ * library, from the same TMDB endpoint `ensureMovieDetails` reads, and like every other
+ * derived field it stays local — no outbox event, so no sync traffic and nothing added to the
+ * log.
+ */
+export async function ensureMovieGenres(movies: Map<number, MovieRec>, movie: MovieRec): Promise<string[]> {
+  if (movie.genres?.length) return movie.genres;
+  if (!movie.ids.tmdb) return [];
+  const summary = await fetchMovieSummary(movie.ids.tmdb);
+  if (!summary?.genres?.length) return [];
+  const genres = summary.genres;
+  movie.genres = genres;
+  movies.set(movie.traktId, movie);
+  // TMDB was just awaited, so the stored record may have moved underneath — see saveMovieFields.
+  await saveMovieFields(movie, ["genres"]);
+  return genres;
 }
 
 /**

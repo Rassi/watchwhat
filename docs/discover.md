@@ -39,9 +39,30 @@ arrive through a seed that merely shares a director or a cast (*Succubus*, *The
 Invisible Man* and *Lights Out* survive the filter), which is the intended
 behaviour: the box is about what you're asking, not a genre ban.
 
-A seed's genres come from its record when its page has been opened and cost a
-`/movie/{id}` request when it hasn't — up to twelve on first load, held for the
-session and never written back.
+### What the filter costs
+
+Nothing, in practice. FOR YOU is twelve `/movie/{id}/recommendations` calls with
+the box either way; the filter changes which twelve films are asked about, not
+how many requests are spent.
+
+A seed's genres come off its own record. Every path that creates a MovieRec
+already sets them — across a 371-film library there is not one record without —
+so the fallback that fetches a missing set has nothing to do. Where it does fire
+it costs one `/movie/{id}` per record lacking genres, a batch of twelve in
+parallel, and the scan stops after 48 films so a library that really is all
+horror can't walk itself.
+
+That fallback **writes what it fetches** (`ensureMovieGenres`), so a gap costs one
+request ever rather than one per session. This is not the "Discover caches
+nothing" rule bending: that rule is about not creating records for other people's
+films, and this fills a field on a film already in your library. Like every other
+TMDB-derived field it goes through `saveMovieFields` — merged onto the stored
+record rather than over it, and local-only, so the outbox stays empty and no
+other device hears about it.
+
+`fetchMovieExtras` was already paying for `genres` on every detail refresh and
+parsing them away; it now keeps them, and `genres` joined `TMDB_DERIVED_FIELDS`.
+So records converge on TMDB's spelling as they refresh, at no extra request.
 
 Nothing on this screen is written to IndexedDB. These are other people's films
 until you put one on a list, and caching them would push every title you scrolled

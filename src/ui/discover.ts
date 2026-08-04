@@ -16,7 +16,6 @@ import { el, posterCard, sectionHeader, spinner, toast } from "./components";
 import {
   discoverMovies,
   fetchMovieRecommendations,
-  fetchMovieSummary,
   fetchTrendingMovies,
   fetchWatchProviders,
   posterUrl,
@@ -25,7 +24,7 @@ import {
   type DiscoverMovieQuery,
   type TmdbDiscoverHit,
 } from "../api/tmdb";
-import { loadMovies } from "../data/sync";
+import { ensureMovieGenres, loadMovies } from "../data/sync";
 import { getSettings } from "../data/settings";
 import { normalizeService, serviceRules } from "./shared";
 import { tmdbKey, type MovieRec } from "../data/model";
@@ -104,13 +103,6 @@ const SEED_COUNT = 12;
  * nothing.
  */
 const SEED_SCAN_LIMIT = 48;
-
-/**
- * Genres fetched for a seed this session. A film's genres are only cached on its record once
- * its page has been opened, so the ones that need asking about get asked about once and then
- * held here — untangling this from the database on purpose, since Discover writes nothing.
- */
-const seedGenres = new Map<number, string[]>();
 
 /**
  * How far back a film's digital release may be.
@@ -520,7 +512,7 @@ async function buildForYou(movies: Map<number, MovieRec>): Promise<TmdbDiscoverH
   const watched = [...movies.values()]
     .filter((m) => m.plays > 0 && m.ids.tmdb)
     .sort((a, b) => (b.lastWatchedAt ?? "").localeCompare(a.lastWatchedAt ?? ""));
-  const seeds = forYouFilters.skipHorror ? await withoutHorror(watched) : watched.slice(0, SEED_COUNT);
+  const seeds = forYouFilters.skipHorror ? await withoutHorror(watched, movies) : watched.slice(0, SEED_COUNT);
   if (seeds.length === 0) return [];
 
   const results = await Promise.all(seeds.map((m) => fetchMovieRecommendations(m.ids.tmdb!)));
@@ -546,35 +538,23 @@ async function buildForYou(movies: Map<number, MovieRec>): Promise<TmdbDiscoverH
 }
 
 /**
- * A film's genres as `genreKey`s, from its record if that page has been opened and from TMDB
- * if not. `[]` for a film TMDB won't answer about, which reads as "not horror" — the right way
- * to fail, since a failed lookup should not silently drop a seed.
- */
-async function genresOf(movie: MovieRec): Promise<string[]> {
-  if (movie.genres?.length) return movie.genres.map(genreKey);
-  const id = movie.ids.tmdb!;
-  const held = seedGenres.get(id);
-  if (held) return held;
-  const genres = ((await fetchMovieSummary(id))?.genres ?? []).map(genreKey);
-  seedGenres.set(id, genres);
-  return genres;
-}
-
-/**
  * The most recent `SEED_COUNT` watched films that aren't horror.
  *
- * A batch at a time, because the genre of a film whose page has never been opened costs a
- * TMDB request, and asking one film at a time down a list of hundreds would take longer than
- * the recommendations themselves. A batch is looked up in parallel, and the next one is only
- * reached for if the last didn't fill the quota.
+ * A batch at a time, because a record without genres costs a TMDB request to fill in, and
+ * asking one film at a time down a list of hundreds would take longer than the recommendations
+ * themselves. A batch is looked up in parallel, and the next one is only reached for if the
+ * last didn't fill the quota. In practice the requests don't happen at all — every path that
+ * creates a film sets its genres — so this is the shape of a cost that is currently zero.
  */
-async function withoutHorror(watched: MovieRec[]): Promise<MovieRec[]> {
+async function withoutHorror(watched: MovieRec[], movies: Map<number, MovieRec>): Promise<MovieRec[]> {
   const seeds: MovieRec[] = [];
   for (let i = 0; i < Math.min(watched.length, SEED_SCAN_LIMIT) && seeds.length < SEED_COUNT; i += SEED_COUNT) {
     const batch = watched.slice(i, i + SEED_COUNT);
-    const genres = await Promise.all(batch.map(genresOf));
+    // `[]` for a film TMDB won't answer about, which reads as "not horror" — the right way to
+    // fail, since a lookup that didn't work should not silently drop a seed.
+    const genres = await Promise.all(batch.map((m) => ensureMovieGenres(movies, m)));
     batch.forEach((movie, j) => {
-      if (seeds.length < SEED_COUNT && !genres[j].includes(HORROR)) seeds.push(movie);
+      if (seeds.length < SEED_COUNT && !genres[j].map(genreKey).includes(HORROR)) seeds.push(movie);
     });
   }
   return seeds;

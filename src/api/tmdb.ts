@@ -28,6 +28,12 @@ export interface TmdbMovieExtras {
   overview: string | null;
   trailer: string | null;
   cast: TmdbCastMember[];
+  /**
+   * Free — `/movie/{id}` carries them alongside everything else here, and the field was being
+   * parsed away for no reason. Discover's horror filter is the first thing to need them on a
+   * film whose page has never been opened.
+   */
+  genres: string[];
   providersByCountry: Record<string, TmdbCountryProviders>;
   /** Earliest digital release that is not a subscription launch — when it can be bought or rented. */
   digitalRelease: { date: string; country: string } | null;
@@ -105,6 +111,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
     poster_path: string | null;
     backdrop_path: string | null;
     overview: string | null;
+    genres?: { name: string }[];
     credits?: { cast?: { id: number; name: string; character?: string | null; profile_path: string | null }[] };
     "watch/providers"?: {
       results?: Record<
@@ -163,6 +170,7 @@ export async function fetchMovieExtras(tmdbId: number): Promise<TmdbMovieExtras 
     cast: (data.credits?.cast ?? [])
       .slice(0, 15)
       .map((c) => ({ tmdbId: c.id, name: c.name, character: c.character ?? null, profile: c.profile_path })),
+    genres: data.genres?.map((g) => g.name) ?? [],
     providersByCountry: {},
     digitalRelease: buyUser ?? buyGlobal,
     streamingRelease: noteUser,
