@@ -40,13 +40,19 @@ are all degradable by design, and all three already fail silently on purpose.
 | All Shows | all started shows; images for all shows | 2 TMDB calls per stale show |
 | **Movies** (either tab) | **every movie in the library** | 1 TMDB call per stale film, +2–3 JustWatch if near release |
 | Show page | that show's episodes + progress | 2 TMDB calls |
-| Movie page | that movie, then its OMDb ratings | 1 TMDB + 1 OMDb |
+| Movie page | that movie, then its OMDb ratings | 1 TMDB + 1 OMDb, +1 TMDB only if *Show similar films* is pressed |
 | Discover → Popular | none; reads TMDB directly and caches nothing | 3 TMDB calls, +1 per *Load more* |
 | Discover → For You | your 12 most recent watched films | 12 TMDB calls |
 
 Discover is the one screen with no TTL behind it, because it has no records to
 age: nothing it fetches is written to IndexedDB. Its cost is therefore flat and
 paid per visit rather than per stale item — see `discover.md`.
+
+*Movies like this* on the movie page reads the same
+`/movie/{id}/recommendations` endpoint FOR YOU is built on, and is behind a
+button for exactly the reason the table shows: the movie page is the most-opened
+screen in the app, and an automatic row would put a request on every open of it.
+Pressed, the answer is held for that one film until you open another.
 
 A show refresh is `fetchSeasonNumbers` + `fetchShowExtras`, and the latter chunks
 seasons into groups of 20 appends. Measured across the library: **2 calls for 151

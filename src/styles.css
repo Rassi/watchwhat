@@ -1043,12 +1043,31 @@ button {
   margin: 0;
 }
 
-.cast-strip {
+.cast-strip,
+.similar-strip {
   display: flex;
   gap: 10px;
   overflow-x: auto;
   padding-bottom: 6px;
   -webkit-overflow-scrolling: touch;
+}
+
+/* A row, not a grid: this is a supplementary strip at the foot of the page like the cast
+   above it, and twenty posters wrapping would outweigh the film they are about. Without
+   `flex-start` the cards stretch to the tallest and the card grows a dead 200px of whitespace
+   below the posters. */
+.similar-strip {
+  align-items: flex-start;
+}
+
+/* An explicit width, not `flex: 0 0 105px`. A flex item's default `min-width: auto` refuses
+   to go below its content, so a long title ("Phoenix Forgotten (2017)") overrode the basis and
+   that one card came out 123px wide while its neighbours were 105. Same width the poster grid's
+   columns collapse to, so a poster is the size it is everywhere else in the app. */
+.similar-strip .poster-card {
+  width: 105px;
+  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .cast-card {

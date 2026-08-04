@@ -1,12 +1,23 @@
-/** Movie detail page: artwork, mark watched, watchlist, where to watch, cast. */
+/** Movie detail page: artwork, mark watched, watchlist, where to watch, cast, similar films. */
 
 import type { Route } from "../router";
-import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
+import { dialog, el, posterCard, spinner, toast, withSyncIndicator } from "./components";
 import { ensureMovieDetails, ensureMovieExtRatings, loadMovieLists, loadMovies, setMovieWatched } from "../data/sync";
 import { describeEstimate, estimateRelease } from "../data/releaseEstimate";
-import { isTmdbKeyed, type MovieListRec, type MovieRec } from "../data/model";
-import { backdropUrl, fetchMovieSummary } from "../api/tmdb";
+import { isTmdbKeyed, tmdbKey, type MovieListRec, type MovieRec } from "../data/model";
+import { backdropUrl, fetchMovieRecommendations, fetchMovieSummary, posterUrl, type TmdbDiscoverHit } from "../api/tmdb";
 import { castStripCard, movieListsDropdown, ratingsLine, whereToWatchCard } from "./shared";
+
+/**
+ * The last film whose similar list was asked for.
+ *
+ * Held outside `renderPage` because that function is called again from scratch by the
+ * background refresh's repaint — without this, providers arriving a second after you pressed
+ * the button would wipe the row and leave you pressing it again. One entry, not a map: you
+ * look at one film at a time, and keeping every film's row for the session would be a cache
+ * nobody asked for on a screen whose whole point is that it costs nothing until asked.
+ */
+let lastSimilar: { tmdbId: number; hits: TmdbDiscoverHit[] } | null = null;
 
 export const movieRoute: Route = {
   name: "movie",
@@ -262,6 +273,67 @@ function renderPage(
       ),
     );
 
+    /**
+     * "More like this one", from the same TMDB endpoint Discover's FOR YOU is built on — but
+     * behind a button, because this page opens far more often than anyone wants a suggestion
+     * from it, and an automatic row would put a request on every single open.
+     *
+     * Unlike FOR YOU, films you already have are shown rather than dropped. There the row is
+     * the whole screen and a top half of your own history would be pointless; here it answers
+     * "what else is like this", and *you've seen that one* is part of the answer.
+     */
+    function similarCard(): HTMLElement | null {
+      const tmdbId = movie.ids.tmdb;
+      if (!tmdbId) return null;
+      const slot = el("div", {});
+      const card = el("div", { class: "card" }, el("h2", {}, "Movies like this"), slot);
+
+      // Resolved through the library so a card opens your real record — with its lists, its
+      // history and its providers — rather than a blank one keyed on the TMDB id.
+      const knownByTmdb = new Map<number, MovieRec>();
+      for (const m of movies.values()) if (m.ids.tmdb) knownByTmdb.set(m.ids.tmdb, m);
+
+      function show(hits: TmdbDiscoverHit[]): void {
+        if (hits.length === 0) {
+          slot.replaceChildren(el("p", { class: "about-facts" }, "TMDB has nothing to suggest for this one."));
+          return;
+        }
+        const strip = el("div", { class: "similar-strip" });
+        for (const hit of hits) {
+          const rec = knownByTmdb.get(hit.tmdbId);
+          const badge = rec == null ? null : rec.plays > 0 ? "SEEN" : rec.onWatchlist || rec.customLists?.length ? "LISTED" : null;
+          strip.append(
+            posterCard({
+              title: hit.title,
+              href: `#/movie/${rec ? rec.traktId : tmdbKey(hit.tmdbId)}`,
+              posterUrl: posterUrl(hit.poster),
+              badge,
+              badgeTone: badge === "SEEN" ? "seen" : null,
+              subtitle: `${hit.title}${hit.year ? ` (${hit.year})` : ""}`,
+            }),
+          );
+        }
+        slot.replaceChildren(strip);
+      }
+
+      if (lastSimilar?.tmdbId === tmdbId) {
+        show(lastSimilar.hits);
+        return card;
+      }
+
+      const ask = el("button", { class: "btn" }, "Show similar films");
+      ask.addEventListener("click", async () => {
+        slot.replaceChildren(spinner("Asking TMDB…"));
+        // `fetchMovieRecommendations` answers `[]` rather than throwing, so a failed request
+        // and a film TMDB has no suggestions for arrive the same way and read the same way.
+        const hits = await fetchMovieRecommendations(tmdbId);
+        lastSimilar = { tmdbId, hits };
+        show(hits);
+      });
+      slot.replaceChildren(ask);
+      return card;
+    }
+
     const pieces: HTMLElement[] = [header, actions, about];
     const wtw = whereToWatchCard(movie.providers, {
       fetchedAt: movie.tmdbFetchedAt,
@@ -273,6 +345,8 @@ function renderPage(
     if (wtw) pieces.push(wtw);
     const cast = castStripCard(movie.cast);
     if (cast) pieces.push(cast);
+    const similar = similarCard();
+    if (similar) pieces.push(similar);
     body.replaceChildren(...pieces);
   }
 
