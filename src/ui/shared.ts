@@ -2,10 +2,32 @@
 
 import { dialog, el, toast, withSyncIndicator } from "./components";
 import { getSettings } from "../data/settings";
-import { posterUrl } from "../api/tmdb";
+import { posterUrl, type TmdbDiscoverHit } from "../api/tmdb";
 import { setMovieOnCustomList, setMovieOnWatchlist } from "../data/sync";
 import type { CastMemberRec, MovieListRec, MovieRec } from "../data/model";
 import { openServiceChoice } from "./serviceChoice";
+
+/** "1.4k" past a thousand — the exact vote count is never the point, its order of magnitude is. */
+export function shortCount(votes: number): string {
+  return votes >= 1000 ? `${(votes / 1000).toFixed(votes >= 10_000 ? 0 : 1)}k` : String(votes);
+}
+
+/**
+ * The score line under a poster on any screen reading TMDB directly, `★ 6.9 · 1.4k`.
+ *
+ * `vote_average` and `vote_count` ride along on every discover, trending and recommendations
+ * response, so this is free wherever one of those has already been fetched — there is no
+ * second request behind a score on a card.
+ *
+ * Null at zero as well as at absent: TMDB sends `0.0` for a film nobody has voted on, and a
+ * card reading "★ 0.0 · 0" says the film is bad when it means nobody has said anything. The
+ * vote count is shown beside the score for the same reason — 6.9 from four voters and 6.9 from
+ * six thousand are not the same claim, and only one of them is worth acting on.
+ */
+export function scoreNote(hit: TmdbDiscoverHit): string | null {
+  if (hit.rating == null || hit.rating === 0) return null;
+  return `★ ${hit.rating.toFixed(1)} · ${shortCount(hit.votes)}`;
+}
 
 export type ProvidersRecord = Record<
   string,

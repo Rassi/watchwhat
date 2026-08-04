@@ -26,7 +26,7 @@ import {
 } from "../api/tmdb";
 import { ensureMovieGenres, loadMovies } from "../data/sync";
 import { getSettings } from "../data/settings";
-import { normalizeService, serviceRules } from "./shared";
+import { normalizeService, scoreNote, serviceRules } from "./shared";
 import { tmdbKey, type MovieRec } from "../data/model";
 
 type View = "home" | "foryou";
@@ -209,16 +209,6 @@ async function myProviderIds(region: string): Promise<number[]> {
   const names = new Set(mine.map((r) => r.name));
   const catalogue = await fetchWatchProviders(region);
   return catalogue.filter((p) => names.has(normalizeService(p.name))).map((p) => p.id);
-}
-
-/** "1.4k" past a thousand — the exact vote count is never the point, its order of magnitude is. */
-function shortCount(votes: number): string {
-  return votes >= 1000 ? `${(votes / 1000).toFixed(votes >= 10_000 ? 0 : 1)}k` : String(votes);
-}
-
-function scoreNote(hit: TmdbDiscoverHit): string | null {
-  if (hit.rating == null || hit.rating === 0) return null;
-  return `★ ${hit.rating.toFixed(1)} · ${shortCount(hit.votes)}`;
 }
 
 export const discoverRoute: Route = {

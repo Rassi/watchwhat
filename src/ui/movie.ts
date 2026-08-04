@@ -6,7 +6,7 @@ import { ensureMovieDetails, ensureMovieExtRatings, loadMovieLists, loadMovies, 
 import { describeEstimate, estimateRelease } from "../data/releaseEstimate";
 import { isTmdbKeyed, tmdbKey, type MovieListRec, type MovieRec } from "../data/model";
 import { backdropUrl, fetchMovieRecommendations, fetchMovieSummary, posterUrl, type TmdbDiscoverHit } from "../api/tmdb";
-import { castStripCard, movieListsDropdown, ratingsLine, whereToWatchCard } from "./shared";
+import { castStripCard, movieListsDropdown, ratingsLine, scoreNote, whereToWatchCard } from "./shared";
 
 /**
  * The last film whose similar list was asked for.
@@ -310,6 +310,9 @@ function renderPage(
               badge,
               badgeTone: badge === "SEEN" ? "seen" : null,
               subtitle: `${hit.title}${hit.year ? ` (${hit.year})` : ""}`,
+              // Already in the response that drew the card — TMDB puts `vote_average` and
+              // `vote_count` on every recommendation, so this costs nothing extra.
+              note: scoreNote(hit),
             }),
           );
         }
