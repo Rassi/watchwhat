@@ -4,8 +4,20 @@ import { dialog, el, toast, withSyncIndicator } from "./components";
 import { getSettings } from "../data/settings";
 import { posterUrl, type TmdbDiscoverHit } from "../api/tmdb";
 import { setMovieOnCustomList, setMovieOnWatchlist } from "../data/sync";
-import type { CastMemberRec, MovieListRec, MovieRec } from "../data/model";
+import { isUndated, type CastMemberRec, type MovieListRec, type MovieRec } from "../data/model";
 import { openServiceChoice } from "./serviceChoice";
+
+/**
+ * "3 Aug 2026" for a watch that has a date, and null for one that doesn't.
+ *
+ * Undated watches reach the UI two ways — marked "seen it, don't remember when", or replayed
+ * from a backfill event that had no date to send — and both used to print "1 Jan 1970", which
+ * looks like a fact rather than the absence of one.
+ */
+export function watchedDate(at: string | null | undefined): string | null {
+  if (!at || isUndated(at)) return null;
+  return new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
 
 /** "1.4k" past a thousand — the exact vote count is never the point, its order of magnitude is. */
 export function shortCount(votes: number): string {
@@ -394,11 +406,11 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
 // happened to be current: those die with the route that owned them, and Search throws its results
 // away on each keystroke. Clicks inside a dropdown never reach here — the wrap stops them.
 let closerInstalled = false;
-function installDropdownCloser(): void {
+export function installDropdownCloser(): void {
   if (closerInstalled) return;
   closerInstalled = true;
   document.addEventListener("click", () => {
-    document.querySelectorAll(".lists-dropdown.open").forEach((d) => d.classList.remove("open"));
+    document.querySelectorAll(".menu-dropdown.open").forEach((d) => d.classList.remove("open"));
   });
 }
 
@@ -420,7 +432,7 @@ export function movieListsDropdown(opts: {
   const { movies, record, lists, onChange } = opts;
   installDropdownCloser();
 
-  const wrap = el("div", { class: "lists-dropdown" });
+  const wrap = el("div", { class: "menu-dropdown" });
   const button = el("button", { class: "btn" });
   const menu = el("div", { class: "burger-menu" });
   // The wrap sits inside a search row that navigates on click, so nothing in here may bubble.

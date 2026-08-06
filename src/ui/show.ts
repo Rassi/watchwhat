@@ -1,7 +1,7 @@
 import type { Route } from "../router";
 import { dialog, el, spinner, toast, withSyncIndicator } from "./components";
 import { addNeverMarkPrevious, getNeverMarkPrevious } from "../data/settings";
-import { castStripCard, ratingsLine, whereToWatchCard } from "./shared";
+import { castStripCard, ratingsLine, watchedDate, whereToWatchCard } from "./shared";
 import {
   addToWatchlist,
   setShowHidden,
@@ -799,9 +799,8 @@ function renderPage(
           seasonBox.append(row);
           if (expandedEpisodes.has(epKey)) {
             const watchedAt = watched ? episodeWatchedAt(lib, show.traktId, season.number, e.number) : null;
-            const watchedLine = watchedAt
-              ? `Watched ${new Date(watchedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
-              : null;
+            const on = watchedDate(watchedAt);
+            const watchedLine = on ? `Watched ${on}` : null;
             seasonBox.append(
               el(
                 "div",

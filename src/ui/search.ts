@@ -9,10 +9,10 @@ import {
   searchTmdbShows,
   type TmdbSearchHit,
 } from "../api/tmdb";
-import { addToWatchlist, loadLibrary, loadMovieLists, loadMovies, removeFromWatchlist } from "../data/sync";
+import { addToWatchlist, loadLibrary, loadMovieLists, loadMovies, removeFromWatchlist, setMovieWatched } from "../data/sync";
 import { getSettings } from "../data/settings";
 import { movieListsDropdown } from "./shared";
-import { tmdbKey, type MovieRec, type ShowRec } from "../data/model";
+import { tmdbKey, UNDATED, type MovieRec, type ShowRec } from "../data/model";
 
 /** Titles starting with the query first, then the rest — both alphabetical. */
 function byRelevance<T extends { title: string }>(query: string, items: T[]): T[] {
@@ -184,9 +184,37 @@ export const searchRoute: Route = {
       // worth knowing at a glance — and a watched film can still go on a list, so it must not
       // disable anything the way the old button did.
       const watchedChip = el("span", { class: "type-chip watched" }, "WATCHED");
+
+      /**
+       * One tap to log a film you saw years ago, without opening it.
+       *
+       * Backfilling old films is what this is for — search a title, tap, search the next — and
+       * that flow is the whole reason it marks them `UNDATED` rather than now. You aren't
+       * choosing a date on the fortieth film of the evening, and stamping them all with today
+       * would leave For You recommending from your backfill and bury this week's real watches.
+       * Marking a date you *do* know is still the movie page's job.
+       */
+      const seenBtn = el("button", { class: "btn small seen-btn" }, "Seen it");
+      seenBtn.addEventListener("click", async (e) => {
+        // The row navigates on click, so this must not reach it.
+        e.stopPropagation();
+        seenBtn.disabled = true;
+        try {
+          const target = (rec ??= movies.get(movie.ids.trakt) ?? movie);
+          await withSyncIndicator(setMovieWatched(movies, target, true, { at: UNDATED }));
+          toast(`Marked "${movie.title}" as watched`);
+        } catch (err) {
+          toast(err instanceof Error ? err.message : "Update failed", "error");
+          seenBtn.disabled = false;
+        }
+        refreshWatched();
+      });
+
       const refreshWatched = (): void => {
         const current = movies.get(movie.ids.trakt);
-        watchedChip.hidden = !current || current.plays === 0;
+        const seen = current != null && current.plays > 0;
+        watchedChip.hidden = !seen;
+        seenBtn.hidden = seen;
       };
       refreshWatched();
       title.append(watchedChip);
@@ -195,7 +223,7 @@ export const searchRoute: Route = {
         { class: "search-row" },
         img,
         el("div", { class: "info" }, title, el("div", { class: "o" }, movie.overview ?? "")),
-        action,
+        el("div", { class: "row-actions" }, seenBtn, action),
       );
       rowEl.addEventListener("click", () => (location.hash = `#/movie/${movie.ids.trakt}`));
       return rowEl;

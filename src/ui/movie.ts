@@ -4,9 +4,17 @@ import type { Route } from "../router";
 import { dialog, el, posterCard, spinner, toast, withSyncIndicator } from "./components";
 import { ensureMovieDetails, ensureMovieExtRatings, loadMovieLists, loadMovies, setMovieWatched } from "../data/sync";
 import { describeEstimate, estimateRelease } from "../data/releaseEstimate";
-import { isTmdbKeyed, tmdbKey, type MovieListRec, type MovieRec } from "../data/model";
+import { isTmdbKeyed, tmdbKey, UNDATED, type MovieListRec, type MovieRec } from "../data/model";
 import { backdropUrl, fetchMovieRecommendations, fetchMovieSummary, posterUrl, type TmdbDiscoverHit } from "../api/tmdb";
-import { castStripCard, movieListsDropdown, ratingsLine, scoreNote, whereToWatchCard } from "./shared";
+import {
+  castStripCard,
+  installDropdownCloser,
+  movieListsDropdown,
+  ratingsLine,
+  scoreNote,
+  watchedDate,
+  whereToWatchCard,
+} from "./shared";
 
 /**
  * Films whose similar list has been asked for, and how far along the row you had scrolled.
@@ -138,10 +146,8 @@ function renderPage(
     if (movie.runtime) bits.push(`${movie.runtime} min`);
     if (movie.genres?.length) bits.push(movie.genres.slice(0, 3).join(", "));
     if (movie.plays > 0) {
-      const when = movie.lastWatchedAt
-        ? ` ${new Date(movie.lastWatchedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
-        : "";
-      bits.push(`watched${when}${movie.plays > 1 ? ` (${movie.plays}×)` : ""}`);
+      const on = watchedDate(movie.lastWatchedAt);
+      bits.push(`watched${on ? ` ${on}` : ""}${movie.plays > 1 ? ` (${movie.plays}×)` : ""}`);
     }
 
     const header = el(
@@ -167,7 +173,8 @@ function renderPage(
       { class: `btn ${movie.plays > 0 ? "" : "primary"}` },
       movie.plays > 0 ? "✓ Watched — unmark" : "Mark watched",
     );
-    watchedBtn.addEventListener("click", async () => {
+
+    const mark = async (at?: string): Promise<void> => {
       watchedBtn.disabled = true;
       try {
         if (movie.plays > 0) {
@@ -180,14 +187,43 @@ function renderPage(
             toast(`Unmarked "${movie.title}"`);
           }
         } else {
-          await withSyncIndicator(setMovieWatched(movies, movie, true));
+          await withSyncIndicator(setMovieWatched(movies, movie, true, at ? { at } : undefined));
           toast(`Marked "${movie.title}" as watched`);
         }
       } catch (e) {
         toast(e instanceof Error ? e.message : "Update failed", "error");
       }
       renderContent();
-    });
+    };
+
+    watchedBtn.addEventListener("click", () => void mark());
+
+    /**
+     * The caret beside it, for a film seen years ago: watched, with no date claimed.
+     *
+     * Not a list of "1 year ago", "2 years ago" — you don't remember which, and the app would
+     * then be storing a date you made up. `UNDATED` says only what you actually know, and sorts
+     * behind everything dated so a backfill of old films can't take over the For You seeds or
+     * bury this week's watches at the top of the Watched grid.
+     *
+     * Only offered while unwatched: once a film is marked, the button's job is unmarking, and a
+     * menu whose one item re-marks what is already marked is noise.
+     */
+    const watchedWrap = el("div", { class: "menu-dropdown split-btn" }, watchedBtn);
+    if (movie.plays === 0) {
+      installDropdownCloser();
+      const caret = el("button", { class: "btn primary split-caret", "aria-label": "Other watched options" }, "▾");
+      const undatedItem = el("button", { class: "burger-item" }, "Seen it — don't remember when");
+      undatedItem.addEventListener("click", () => {
+        watchedWrap.classList.remove("open");
+        void mark(UNDATED);
+      });
+      caret.addEventListener("click", (e) => {
+        e.stopPropagation();
+        watchedWrap.classList.toggle("open");
+      });
+      watchedWrap.append(caret, el("div", { class: "burger-menu" }, undatedItem));
+    }
 
     // Lists ▾ dropdown: toggle the watchlist and each custom list on/off. Shared with the search
     // results, so "add to Family" means the same thing and looks the same in both places.
@@ -198,7 +234,7 @@ function renderPage(
       onChange: () => renderContent(),
     });
 
-    const actions = el("div", { class: "card" }, el("div", { class: "manage-buttons" }, watchedBtn, listsWrap));
+    const actions = el("div", { class: "card" }, el("div", { class: "manage-buttons" }, watchedWrap, listsWrap));
 
     // About
     const extLinks: [string, string][] = [];

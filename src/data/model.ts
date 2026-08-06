@@ -22,6 +22,24 @@ export const tmdbKey = (tmdbId: number): number => -tmdbId;
 
 export const isTmdbKeyed = (key: number): boolean => key < 0;
 
+/**
+ * The timestamp for a watch nobody knows the date of: a film seen years ago and marked now,
+ * or history that reached the log carrying no date of its own.
+ *
+ * A sentinel rather than `null` because the timestamp *is* the watch's identity — replay
+ * dedups a `movie.watched` event by comparing its `at` against the stored one, so a null
+ * would make every pull of the log add another play. It also keeps the event body unchanged,
+ * which a device on an older build can still apply.
+ *
+ * The epoch sorts undated watches behind everything dated, which is what both the Watched
+ * grid and the For You seeds want: a film you saw in your twenties should not be what the
+ * recommendations are built from. Nothing may ever *render* it — see `isUndated`.
+ */
+export const UNDATED = "1970-01-01T00:00:00.000Z";
+
+/** True for a watch with no usable date, so the UI can say "watched" and stop there. */
+export const isUndated = (at: string | null | undefined): boolean => !at || at === UNDATED;
+
 /** Cached show metadata + TMDB artwork. */
 export interface ShowRec {
   traktId: number;

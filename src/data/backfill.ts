@@ -20,7 +20,7 @@
 
 import { MAX_BATCH, pushEvents, syncConfigured, type OutgoingEvent } from "../api/syncserver";
 import type { EventKind } from "./outbox";
-import type { MovieRec, ProgressRec } from "./model";
+import { UNDATED, type MovieRec, type ProgressRec } from "./model";
 import { dbGetAll } from "./db";
 import { getDeviceId } from "./settings";
 import { loadLibrary, loadMovies } from "./sync";
@@ -34,15 +34,6 @@ export interface BackfillProgress {
   sent: number;
   total: number;
 }
-
-/**
- * A timestamp for something the library never recorded one for. The epoch would
- * be honest but sorts every such entry to the dawn of time and, worse, reads as
- * a real date in the UI. `null`-ish history is better represented as "as far
- * back as this library goes", so undated entries land before everything dated
- * without pretending to a specific day.
- */
-const UNDATED = "1970-01-01T00:00:00.000Z";
 
 function event(id: string, kind: EventKind, body: Record<string, unknown>, at: string, device: string): OutgoingEvent {
   return { id, device, ts: at, kind, body };
