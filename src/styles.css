@@ -540,6 +540,12 @@ button {
   margin: -4px 0 14px;
 }
 
+/* The negative top margin above is for hugging a label. After the sync status line it
+   closes the gap entirely and the two run together as one paragraph. */
+.card p.diff-summary + p.field-help {
+  margin-top: 10px;
+}
+
 /* Sits under a button, so it needs the gap a paragraph after text would not. */
 .card p.attribution {
   margin: 14px 0 0;

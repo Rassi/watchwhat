@@ -10,7 +10,6 @@ import { checkJustWatch, getJustWatchHealth } from "../api/justwatch";
 import { downloadBackup, exportBackup, importBackup, parseBackup, summarize } from "../data/transfer";
 import { flush, getCursor, pendingCount, setCursor } from "../data/outbox";
 import { syncEvents, syncNow } from "../data/replay";
-import { describePlan, planBackfill, planListDateRepair, pushBackfill } from "../data/backfill";
 import { syncConfigured, testConnection } from "../api/syncserver";
 import { reconcileSettings } from "../data/cloudsettings";
 
@@ -203,100 +202,6 @@ export const settingsRoute: Route = {
       await refreshSyncStatus();
     });
 
-    // One-off seeding. Kept beside the sync controls but visually quieter than
-    // Save/Sync now, because it is something you do once and then never again.
-    const backfillBtn = el("button", { class: "btn small" }, "Seed the server from this device…");
-    backfillBtn.addEventListener("click", async () => {
-      if (!syncConfigured()) {
-        toast("Enter a URL and token, then Save first");
-        return;
-      }
-      backfillBtn.textContent = "Reading library…";
-      let plan;
-      try {
-        plan = await planBackfill();
-      } finally {
-        backfillBtn.textContent = "Seed the server from this device…";
-      }
-      if (plan.events.length === 0) {
-        toast("Nothing to send — this device's library is empty");
-        return;
-      }
-
-      const choice = await dialog(
-        "Seed the server?",
-        `This sends ${plan.events.length} events describing everything this device has: ` +
-          `${describePlan(plan.counts)}. Do this on the device whose library is the one you want to keep. ` +
-          `It is safe to run again if it fails partway — the server ignores anything it already has.`,
-        [
-          { label: "Cancel", value: "cancel", kind: "plain" },
-          { label: `Send ${plan.events.length} events`, value: "go", kind: "primary" },
-        ],
-      );
-      if (choice !== "go") return;
-
-      backfillBtn.textContent = "Sending…";
-      try {
-        await pushBackfill(plan, ({ sent, total }) => {
-          backfillBtn.textContent = `Sending ${sent}/${total}…`;
-        });
-        toast(`Seeded — ${plan.events.length} events sent`);
-      } catch (err) {
-        toast(`Seeding failed: ${err instanceof Error ? err.message : "unknown error"}. Safe to try again.`, "error");
-      } finally {
-        backfillBtn.textContent = "Seed the server from this device…";
-        await refreshSyncStatus();
-      }
-    });
-
-    // The other one-off, and a much smaller one: the first seeding could not date a list
-    // membership, so every one of them went up stamped 1970 and any device that learned a film
-    // from the log alone showed it at the bottom of the list for good. Run from the device whose
-    // dates are the real ones.
-    const repairBtn = el("button", { class: "btn small" }, "Re-send list dates…");
-    repairBtn.addEventListener("click", async () => {
-      if (!syncConfigured()) {
-        toast("Enter a URL and token, then Save first");
-        return;
-      }
-      repairBtn.textContent = "Reading lists…";
-      let plan;
-      try {
-        plan = await planListDateRepair();
-      } finally {
-        repairBtn.textContent = "Re-send list dates…";
-      }
-      if (plan.events.length === 0) {
-        toast("Nothing to send — no films on any custom list here");
-        return;
-      }
-
-      const choice = await dialog(
-        "Re-send list dates?",
-        `This re-sends ${plan.events.length} list memberships with the dates this device has for them, so the ` +
-          `other devices sort those lists the same way. Do this on the device whose ordering is the one you want. ` +
-          `Nothing is removed and it is safe to run again.`,
-        [
-          { label: "Cancel", value: "cancel", kind: "plain" },
-          { label: `Send ${plan.events.length} events`, value: "go", kind: "primary" },
-        ],
-      );
-      if (choice !== "go") return;
-
-      repairBtn.textContent = "Sending…";
-      try {
-        await pushBackfill(plan, ({ sent, total }) => {
-          repairBtn.textContent = `Sending ${sent}/${total}…`;
-        });
-        toast(`Sent — ${plan.events.length} list dates`);
-      } catch (err) {
-        toast(`Sending failed: ${err instanceof Error ? err.message : "unknown error"}. Safe to try again.`, "error");
-      } finally {
-        repairBtn.textContent = "Re-send list dates…";
-        await refreshSyncStatus();
-      }
-    });
-
     /**
      * Wind the cursor back to nothing and replay the log from the start.
      *
@@ -312,35 +217,36 @@ export const settingsRoute: Route = {
      * That property is the whole reason the log is append-only, so leaning on it here costs
      * nothing beyond the time to walk the log.
      */
-    const repullBtn = el("button", { class: "btn small" }, "Replay the whole log…");
+    const repullBtn = el("button", { class: "btn small" }, "Re-apply everything from the server…");
     repullBtn.addEventListener("click", async () => {
       if (!syncConfigured()) {
         toast("Enter a URL and token, then Save first");
         return;
       }
       const choice = await dialog(
-        "Replay the whole log?",
-        "Reads every event on the server again from the beginning and re-applies it here. Use this when this " +
+        "Re-apply everything from the server?",
+        "Reads every change on the server again from the beginning and re-applies it here. Use this when this " +
           "device is missing something the others have — usually because it synced while running an older " +
-          "version of the app. Nothing is deleted and nothing is uploaded; re-applying what this device " +
-          "already has changes nothing.",
+          "version of the app. Nothing is ever deleted, and re-applying something this device already has " +
+          "changes nothing, so it is safe to run whenever a device looks out of step. It uploads this " +
+          "device's own pending changes too, exactly as Sync now would.",
         [
           { label: "Cancel", value: "cancel", kind: "plain" },
-          { label: "Replay", value: "go", kind: "primary" },
+          { label: "Re-apply", value: "go", kind: "primary" },
         ],
       );
       if (choice !== "go") return;
 
-      repullBtn.textContent = "Replaying…";
+      repullBtn.textContent = "Re-applying…";
       try {
         await setCursor(0);
         const { applied, skipped } = await syncNow();
         const parts = [applied ? `${applied} applied` : "", skipped ? `${skipped} skipped` : ""].filter(Boolean);
-        toast(parts.length ? `Replayed — ${parts.join(", ")}` : "Replayed — nothing on the server");
+        toast(parts.length ? `Re-applied — ${parts.join(", ")}` : "Re-applied — nothing on the server");
       } catch (err) {
-        toast(`Replay failed: ${err instanceof Error ? err.message : "unknown error"}. Safe to try again.`, "error");
+        toast(`Re-apply failed: ${err instanceof Error ? err.message : "unknown error"}. Safe to try again.`, "error");
       } finally {
-        repullBtn.textContent = "Replay the whole log…";
+        repullBtn.textContent = "Re-apply everything from the server…";
         await refreshSyncStatus();
       }
     });
@@ -349,7 +255,9 @@ export const settingsRoute: Route = {
     syncHelp.innerHTML =
       `Keeps this device and the others in step through your own Cloudflare Worker. Every change is saved locally ` +
       `first and queued, so marking something watched offline still works — the queue uploads next time the app has ` +
-      `a connection. <b>Test</b> checks the saved values, so Save first if you have just edited them.`;
+      `a connection. This happens by itself at startup, when the network returns and when you come back to the ` +
+      `app; <b>Sync now</b> just does it on demand — uploading what is queued here and applying what is new ` +
+      `elsewhere. <b>Test</b> checks the saved values, so Save first if you have just edited them.`;
     const syncScopeHelp = el(
       "p",
       {},
@@ -366,11 +274,12 @@ export const settingsRoute: Route = {
       field("Token", syncTokenInput),
       el("div", { class: "field-row" }, saveSyncBtn, syncNowBtn, testSyncBtn),
       syncStatus,
-      el("p", { class: "field-help" }, "First time only — put this device's existing library into the log so the others can pull it."),
-      backfillBtn,
-      el("p", { class: "field-help" }, "One-off — the first seeding sent custom lists undated, so other devices order them wrongly."),
-      repairBtn,
-      el("p", { class: "field-help" }, "Missing something the other devices have? This device may have synced it while running an older version."),
+      el(
+        "p",
+        { class: "field-help" },
+        "Missing something the other devices have? Re-apply walks the whole history rather than just what is " +
+          "new. It only ever adds, so running it costs nothing but time.",
+      ),
       repullBtn,
     );
 
@@ -795,19 +704,20 @@ export const settingsRoute: Route = {
     const transferCard = el(
       "div",
       { class: "card" },
-      el("h2", {}, "Transfer data between devices"),
+      el("h2", {}, "Backup and restore"),
       el(
         "p",
         {},
-        "WatchWhat keeps your library on the device, so a second device starts empty. Export here, open the file " +
-          "on the other device (AirDrop, iCloud Drive, email — anything that lands it in Files), and import it " +
-          "there. Nothing is uploaded anywhere; the file never leaves your devices.",
+        "With Sync set up, a new device needs nothing from here — it rebuilds itself from the server. This is " +
+          "the way back when there is no server to rebuild from: a file to keep somewhere safe, and the way to " +
+          "start a device from an older library. Nothing is uploaded anywhere; the file never leaves your devices.",
       ),
       el(
         "p",
         {},
-        "Importing replaces the receiving device's library rather than merging it, so treat one device as the " +
-          "one you keep up to date and re-export whenever you want the other to catch up.",
+        "Importing replaces the receiving device's library rather than merging it, and the server is not told " +
+          "about any of it — the device carries on syncing from wherever it had got to, applying anything newer " +
+          "on top of what you imported.",
       ),
       el("div", { class: "btn-row" }, exportBtn, importBtn),
       importInput,

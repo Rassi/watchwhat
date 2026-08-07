@@ -139,6 +139,15 @@ Rough effort: 1–2 evenings for 1–3, plus a careful hour on the backfill.
 
 ## Running the backfill
 
+**Retired 2026-08-07.** `src/data/backfill.ts` and both its Settings actions
+("Seed the server from this device…", "Re-send list dates…") are gone. Seeding
+had one job — filling an empty log — and it was done; the list-date repair sent
+fixed `seed2:` ids into an `INSERT OR IGNORE` table, so after its one successful
+run it could never do anything again. What follows is the record of how it went,
+not a procedure to run. If the log is ever genuinely lost, the way back is
+export → import on each device, which leaves every device agreeing and the log
+simply starting again from empty.
+
 1. Paste the token into Settings → Sync on **both** devices and Save.
 2. **Export the phone to a file** and keep it. Everything below assumes the
    desktop wins.

@@ -680,11 +680,11 @@ const LIST_DATES_SEEDED_KEY = "watchwhat.listDatesSeeded";
  * coincidence — but it is also exactly what these lists have been ordered by all along, so
  * adopting it changes nothing on screen while giving each membership a date it owns from here
  * on. A film with no date at all keeps none: inventing today's would jump it to the top of the
- * list for no reason, and the repair pass has nothing truer to send either.
+ * list for no reason.
  *
- * This has to run before `planListDateRepair` reads the library, which startup order gives it —
- * otherwise the repair would re-send the same undated events under new ids and bake 1970 in for
- * good.
+ * Still here because it is what a library restored from an old export needs. The log itself no
+ * longer does: the dated `list.add` events went up once and every device has replayed them, so
+ * the repair pass that sent them has been retired.
  */
 export async function seedListAddedAt(): Promise<void> {
   if (localStorage.getItem(LIST_DATES_SEEDED_KEY)) return;
