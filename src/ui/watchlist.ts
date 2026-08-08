@@ -29,6 +29,20 @@ function rowData(lib: Library, watched: WatchedRec): RowData | null {
 const NEW_SEASON_GRACE_DAYS = 90;
 
 /**
+ * "Haven't watched for a while" is mostly archaeology: measured on a real library, only
+ * 5 of 35 stale shows were last watched inside a year, and the median was over four years
+ * old — a flat few shows per year going back to 2019. Left whole, the section buries
+ * "Haven't started" under a decade of abandoned series.
+ *
+ * A period rather than a card count, because the count would cut at an arbitrary date;
+ * a year is the line between "still meaning to finish it" and backlog.
+ */
+const FOLD_AFTER_DAYS = 365;
+
+/** Folding two or three cards away isn't worth the extra tap — cf. FOLD_MIN_RUN on the show page. */
+const FOLD_MIN = 4;
+
+/**
  * A whole new season awaits after completing everything before it (e.g. a
  * Netflix season drop). Like TV Time, these stay in Watch Next — but only
  * while the premiere is reasonably fresh; months-old untouched seasons are
@@ -110,6 +124,11 @@ export const watchlistRoute: Route = {
     const syncNote = el("div", { class: "empty-note" });
     container.append(grids, syncNote);
 
+    // Deliberately per-visit, not a stored preference: opening the fold is a one-off
+    // rummage through the backlog, and a fold left permanently open is just the old
+    // behaviour back again. Survives the re-renders that lazy loads trigger.
+    let showOldStale = false;
+
     const renderContent = (): void => {
       const cutoff = Date.now() - getSettings().staleDays * 24 * 3600 * 1000;
 
@@ -154,17 +173,44 @@ export const watchlistRoute: Route = {
         );
       }
       if (stale.length > 0) {
+        // The list is sorted most-recent-first, so the fold is simply its tail.
+        const foldFrom = stale.findIndex((r) => new Date(r.watched.lastWatchedAt).getTime() < Date.now() - FOLD_AFTER_DAYS * 24 * 3600 * 1000);
+        const folding = !showOldStale && foldFrom !== -1 && stale.length - foldFrom >= FOLD_MIN;
+        const shown = folding ? stale.slice(0, foldFrom) : stale;
+        const hiddenCount = stale.length - shown.length;
+
         grids.append(
           sectionHeader("Haven't watched for a while", {
             title: "Haven't watched for a while",
             points: [
               `Shows you've started but haven't watched an episode of in over ${days} days, and that have no fresh episode waiting.`,
               "Most recently watched first, so where you left off is at the top.",
+              "Anything you last watched over a year ago folds into one row at the end, so the backlog doesn't push the rest of the page down. Tap it to see them; it folds again next time.",
               "A show returns to Watch next the moment you watch an episode, or when a new episode airs.",
             ],
           }),
-          el("div", { class: "poster-grid" }, ...stale.map(card)),
+          el("div", { class: "poster-grid" }, ...shown.map(card)),
         );
+
+        if (folding) {
+          // The date the fold starts at, rather than "over a year ago": a real month is
+          // something you can place yourself against, and it says where the tail ends.
+          const since = new Date(stale[foldFrom].watched.lastWatchedAt).toLocaleDateString(undefined, {
+            month: "long",
+            year: "numeric",
+          });
+          const band = el(
+            "button",
+            { class: "fold-band", title: `Show all ${stale.length} shows` },
+            el("span", {}, `${hiddenCount} more, last watched before ${since}`),
+            el("span", { class: "fold-chevron" }, "⌄"),
+          );
+          band.addEventListener("click", () => {
+            showOldStale = true;
+            renderContent();
+          });
+          grids.append(band);
+        }
       }
       if (notStarted.length > 0) {
         grids.append(

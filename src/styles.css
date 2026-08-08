@@ -135,6 +135,33 @@ button {
   gap: 10px;
 }
 
+/* The tail of a grid, folded into one row — the poster-grid counterpart of .season-band. */
+.fold-band {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.fold-band:hover {
+  color: var(--text);
+}
+
+.fold-chevron {
+  font-size: 15px;
+  line-height: 1;
+}
+
 .poster-card {
   position: relative;
   display: block;
