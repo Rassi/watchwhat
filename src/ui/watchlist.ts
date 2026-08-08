@@ -29,15 +29,17 @@ function rowData(lib: Library, watched: WatchedRec): RowData | null {
 const NEW_SEASON_GRACE_DAYS = 90;
 
 /**
- * "Haven't watched for a while" is mostly archaeology: measured on a real library, only
- * 5 of 35 stale shows were last watched inside a year, and the median was over four years
- * old — a flat few shows per year going back to 2019. Left whole, the section buries
- * "Haven't started" under a decade of abandoned series.
+ * "Haven't watched for a while" is mostly archaeology: measured on a real library, the
+ * median stale show was last watched over four years ago, a flat few shows per year going
+ * back to 2019. Left whole, the section buries "Haven't started" under a decade of
+ * abandoned series.
  *
- * A period rather than a card count, because the count would cut at an arbitrary date;
- * a year is the line between "still meaning to finish it" and backlog.
+ * A period rather than a card count, because a count would cut at an arbitrary date. Three
+ * years rather than the one this first shipped with: a year folded all but 5 of 35 away,
+ * and a section that shows almost nothing is its own kind of useless — the point is to cut
+ * the tail off, not to hide the section.
  */
-const FOLD_AFTER_DAYS = 365;
+const FOLD_AFTER_DAYS = 3 * 365;
 
 /** Folding two or three cards away isn't worth the extra tap — cf. FOLD_MIN_RUN on the show page. */
 const FOLD_MIN = 4;
@@ -185,7 +187,7 @@ export const watchlistRoute: Route = {
             points: [
               `Shows you've started but haven't watched an episode of in over ${days} days, and that have no fresh episode waiting.`,
               "Most recently watched first, so where you left off is at the top.",
-              "Anything you last watched over a year ago folds into one row at the end, so the backlog doesn't push the rest of the page down. Tap it to see them; it folds again next time.",
+              "Anything you last watched over three years ago folds into one row at the end, so the backlog doesn't push the rest of the page down. Tap it to see them; it folds again next time.",
               "A show returns to Watch next the moment you watch an episode, or when a new episode airs.",
             ],
           }),
