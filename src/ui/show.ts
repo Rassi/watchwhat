@@ -497,76 +497,11 @@ function renderPage(
   function aboutView(): HTMLElement {
     const wrap = el("div", {});
 
-    // Show info
-    const meta: string[] = [];
-    const years = show.firstAired ? String(new Date(show.firstAired).getFullYear()) : show.year ? String(show.year) : "";
-    if (years) meta.push(years);
-    if (show.genres?.length) meta.push(show.genres.slice(0, 4).join(", "));
-    const facts: string[] = [];
-    if (show.airs?.day && !isEnded(show)) {
-      facts.push(`${show.airs.day}${show.airs.time ? ` | ${show.airs.time}` : ""}`);
-    }
-    if (show.runtime) facts.push(`${show.runtime} min`);
-    if (show.network) facts.push(show.network);
-    if (show.status) facts.push(show.status);
-
-    const extLinks: [string, string][] = [];
-    if (show.trailer) extLinks.push(["▶ Trailer", show.trailer]);
-    if (show.ids.imdb) extLinks.push(["IMDb", `https://www.imdb.com/title/${show.ids.imdb}/`]);
-    if (show.ids.tmdb) extLinks.push(["TMDB", `https://www.themoviedb.org/tv/${show.ids.tmdb}`]);
-    if (show.ids.tvdb) extLinks.push(["TheTVDB", `https://thetvdb.com/dereferrer/series/${show.ids.tvdb}`]);
-    const linkRow = el(
-      "div",
-      { class: "ext-links" },
-      ...extLinks.map(([label, href]) =>
-        el(
-          "a",
-          { class: `ext-link ${label.startsWith("▶") ? "trailer" : ""}`, href, target: "_blank", rel: "noopener" },
-          label.startsWith("▶") ? label : `${label} ↗`,
-        ),
-      ),
-    );
-
-    wrap.append(
-      el(
-        "div",
-        { class: "card" },
-        el("h2", {}, "Show info"),
-        el("p", { class: "about-meta" }, meta.join(" • ")),
-        ratingsLine({
-          title: show.title,
-          rating: show.rating,
-          extRatings: show.extRatings,
-          ids: show.ids,
-          kind: "tv",
-        }),
-        el("p", { class: "about-overview" }, show.overview || "No description available."),
-        el("p", { class: "about-facts" }, facts.join("  ·  ")),
-        linkRow,
-      ),
-    );
-
-    // The card replaces itself in place after a refresh, so nothing else on the page moves.
-    const wtwSlot = el("div", {});
-    const fillWtw = (rec: EpisodesRec): void => {
-      const card = whereToWatchCard(rec.providers, {
-        fetchedAt: rec.tmdbMergedAt,
-        onRefresh: onRefreshProviders && (async () => fillWtw(await onRefreshProviders())),
-        // Same record, redrawn: the providers didn't move, the verdict about them did.
-        onServicesChanged: () => fillWtw(rec),
-      });
-      wtwSlot.replaceChildren(...(card ? [card] : []));
-    };
-    fillWtw(episodesRec);
-    wrap.append(wtwSlot);
-
-    const castCard = castStripCard(episodesRec.cast);
-    if (castCard) wrap.append(castCard);
-
-    const chart = ratingsChart();
-    if (chart) wrap.append(chart);
-
-    // Manage: watchlist membership + stop/resume tracking, with confirmations
+    // Watchlist membership + stop/resume tracking, with confirmations.
+    //
+    // First thing under the tabs, where the movie page puts its own buttons. Down at the bottom
+    // it sat below the overview, the providers, the cast and a ratings chart, so adding a show
+    // you'd just searched for meant scrolling past all of it to find the one button you came for.
     const onList = lib.watchlist.some((e) => e.traktId === show.traktId);
     const started = (lib.watched.get(show.traktId)?.plays ?? 0) > 0;
     const isHidden = lib.hidden.has(show.traktId);
@@ -636,9 +571,80 @@ function renderPage(
       );
     }
 
+    // No "Manage" heading, unlike the old bottom card: at the top the buttons are the first
+    // thing you see and say what they do, exactly as they do on a film.
     if (manageButtons.length > 0) {
-      wrap.append(el("div", { class: "card" }, el("h2", {}, "Manage"), el("div", { class: "manage-buttons" }, ...manageButtons)));
+      wrap.append(el("div", { class: "card" }, el("div", { class: "manage-buttons" }, ...manageButtons)));
     }
+
+    // Show info
+    const meta: string[] = [];
+    const years = show.firstAired ? String(new Date(show.firstAired).getFullYear()) : show.year ? String(show.year) : "";
+    if (years) meta.push(years);
+    if (show.genres?.length) meta.push(show.genres.slice(0, 4).join(", "));
+    const facts: string[] = [];
+    if (show.airs?.day && !isEnded(show)) {
+      facts.push(`${show.airs.day}${show.airs.time ? ` | ${show.airs.time}` : ""}`);
+    }
+    if (show.runtime) facts.push(`${show.runtime} min`);
+    if (show.network) facts.push(show.network);
+    if (show.status) facts.push(show.status);
+
+    const extLinks: [string, string][] = [];
+    if (show.trailer) extLinks.push(["▶ Trailer", show.trailer]);
+    if (show.ids.imdb) extLinks.push(["IMDb", `https://www.imdb.com/title/${show.ids.imdb}/`]);
+    if (show.ids.tmdb) extLinks.push(["TMDB", `https://www.themoviedb.org/tv/${show.ids.tmdb}`]);
+    if (show.ids.tvdb) extLinks.push(["TheTVDB", `https://thetvdb.com/dereferrer/series/${show.ids.tvdb}`]);
+    const linkRow = el(
+      "div",
+      { class: "ext-links" },
+      ...extLinks.map(([label, href]) =>
+        el(
+          "a",
+          { class: `ext-link ${label.startsWith("▶") ? "trailer" : ""}`, href, target: "_blank", rel: "noopener" },
+          label.startsWith("▶") ? label : `${label} ↗`,
+        ),
+      ),
+    );
+
+    wrap.append(
+      el(
+        "div",
+        { class: "card" },
+        el("h2", {}, "Show info"),
+        el("p", { class: "about-meta" }, meta.join(" • ")),
+        ratingsLine({
+          title: show.title,
+          rating: show.rating,
+          extRatings: show.extRatings,
+          ids: show.ids,
+          kind: "tv",
+        }),
+        el("p", { class: "about-overview" }, show.overview || "No description available."),
+        el("p", { class: "about-facts" }, facts.join("  ·  ")),
+        linkRow,
+      ),
+    );
+
+    // The card replaces itself in place after a refresh, so nothing else on the page moves.
+    const wtwSlot = el("div", {});
+    const fillWtw = (rec: EpisodesRec): void => {
+      const card = whereToWatchCard(rec.providers, {
+        fetchedAt: rec.tmdbMergedAt,
+        onRefresh: onRefreshProviders && (async () => fillWtw(await onRefreshProviders())),
+        // Same record, redrawn: the providers didn't move, the verdict about them did.
+        onServicesChanged: () => fillWtw(rec),
+      });
+      wtwSlot.replaceChildren(...(card ? [card] : []));
+    };
+    fillWtw(episodesRec);
+    wrap.append(wtwSlot);
+
+    const castCard = castStripCard(episodesRec.cast);
+    if (castCard) wrap.append(castCard);
+
+    const chart = ratingsChart();
+    if (chart) wrap.append(chart);
 
     return wrap;
   }
