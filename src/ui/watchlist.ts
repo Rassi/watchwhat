@@ -201,17 +201,14 @@ export const watchlistRoute: Route = {
             month: "long",
             year: "numeric",
           });
-          const band = el(
-            "button",
-            { class: "fold-band", title: `Show all ${stale.length} shows` },
-            el("span", {}, `${hiddenCount} more, last watched before ${since}`),
-            el("span", { class: "fold-chevron" }, "⌄"),
-          );
-          band.addEventListener("click", () => {
+          // A plain button with a verb on it, like Discover's "Load more" — the dashed band
+          // this replaced said what was behind it but never that it could be opened.
+          const more = el("button", { class: "btn" }, `Show ${hiddenCount} older shows, last watched before ${since}`);
+          more.addEventListener("click", () => {
             showOldStale = true;
             renderContent();
           });
-          grids.append(band);
+          grids.append(el("div", { class: "grid-more" }, more));
         }
       }
       if (notStarted.length > 0) {
