@@ -16,6 +16,7 @@ import { dbDelete } from "./data/db";
 import { purgeTraktRemnants, seedCloudStamps } from "./data/settings";
 import { migrateMovieListsToSettings, seedListAddedAt, seedProviderSince, trimProviderCountries } from "./data/sync";
 import { installSyncTriggers, syncEvents } from "./data/replay";
+import { maybeRecordThisLaunch } from "./ui/debugflicker";
 
 applyTheme();
 stripReloadParam();
@@ -55,6 +56,10 @@ registerRoute(releasesRoute);
 registerRoute(discoverRoute);
 registerRoute(searchRoute);
 registerRoute(settingsRoute);
+
+// Temporary, with the rest of the flicker investigation: does nothing unless Settings armed it.
+// Before the router, so the very first render is in the recording.
+maybeRecordThisLaunch();
 
 startRouter(document.getElementById("app")!);
 

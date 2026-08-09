@@ -12,6 +12,16 @@ import { flush, getCursor, pendingCount, setCursor } from "../data/outbox";
 import { syncEvents, syncNow } from "../data/replay";
 import { syncConfigured, testConnection } from "../api/syncserver";
 import { reconcileSettings } from "../data/cloudsettings";
+import {
+  armNextLaunch,
+  backdateProgress,
+  formatReport,
+  isArmed,
+  lastReport,
+  progressAges,
+  reportAsJson,
+  startRecording,
+} from "./debugflicker";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -765,25 +775,70 @@ export const settingsRoute: Route = {
       reloadBtn,
     );
 
-    // --- Poster flicker test ---
-    // Temporary, and meant to be deleted along with public/lazytest.html once the flicker after a
-    // 12-hour-old open is understood. It lives here because the symptom only ever appears on the
-    // home-screen app, which has no address bar to type a URL into. A plain link, not a new tab:
-    // iOS would hand target="_blank" to Safari and the test would then run in a different engine
-    // context than the one being measured. The page itself offers the way back.
+    // --- Poster flicker recording ---
+    // Temporary; goes when the flicker is understood, along with src/ui/debugflicker.ts.
+    // Deliberately instruments the real app rather than a test page: a standalone page has to
+    // guess which ingredient of a stale open matters, and the first two guesses each removed the
+    // one that did.
+    const flickerStatus = el("p", {}, "");
+    const flickerOut = el("pre", { class: "flicker-report" });
+    const showLast = (): void => {
+      const report = lastReport();
+      flickerOut.textContent = report ? `${report.verdict}\n\n${formatReport(report)}` : "";
+    };
+    const armBtn = el("button", { class: "btn primary" }, "Arm, then force-quit and reopen");
+    armBtn.addEventListener("click", () => {
+      void (async () => {
+        armBtn.disabled = true;
+        const n = await armNextLaunch();
+        flickerStatus.textContent =
+          `${n} shows aged. Now force-quit the app and open it again — it records the first 30 ` +
+          `seconds of that launch by itself. Then come back here.`;
+      })();
+    });
+    const recordBtn = el("button", { class: "btn" }, "Or record right now");
+    recordBtn.addEventListener("click", () => {
+      void (async () => {
+        recordBtn.disabled = true;
+        flickerStatus.textContent = "Ageing the library past its TTL…";
+        const n = await backdateProgress();
+        flickerStatus.textContent = `${n} shows aged. Recording 30s — watch the posters.`;
+        startRecording();
+        // Straight to Shows, which is where the bulk refresh actually runs.
+        location.hash = "#/library";
+      })();
+    });
+    const copyBtn = el("button", { class: "btn" }, "Copy recording");
+    copyBtn.addEventListener("click", () => {
+      const report = lastReport();
+      if (!report) return void toast("Nothing recorded yet");
+      void navigator.clipboard.writeText(reportAsJson(report)).then(
+        () => toast("Recording copied"),
+        () => toast("Could not copy", "error"),
+      );
+    });
     const flickerCard = el(
       "div",
       { class: "card" },
-      el("h2", {}, "Poster flicker test"),
+      el("h2", {}, "Poster flicker recording"),
       el(
         "p",
         {},
-        "Rebuilds a grid of already-loaded posters the way a bulk refresh does, to find out why " +
-          "they blank out for a few seconds after a long-closed open. Takes about 25 seconds — " +
-          "watch the posters while it runs.",
+        "Ages every show past the 12-hour TTL so the bulk refresh that follows a long-closed open " +
+          "runs on demand. Arming is the faithful one: the symptom needs a cold start as well as " +
+          "a stale library, and only a real relaunch gives that.",
       ),
-      el("a", { class: "btn", href: "lazytest.html" }, "Open the test"),
+      flickerStatus,
+      el("div", { class: "btn-row" }, armBtn, recordBtn, copyBtn),
+      flickerOut,
     );
+    void progressAges().then((s) => {
+      if (flickerStatus.textContent) return;
+      flickerStatus.textContent = isArmed()
+        ? `Armed — force-quit and reopen. (${s}.)`
+        : `Right now: ${s}.`;
+    });
+    showLast();
 
     // Ordered by how often a card is actually wanted, not by how fundamental it is.
     // Reload is the most-used control on this screen — it is the only way to pick up
