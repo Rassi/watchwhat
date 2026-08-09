@@ -13,14 +13,13 @@ import { syncEvents, syncNow } from "../data/replay";
 import { syncConfigured, testConnection } from "../api/syncserver";
 import { reconcileSettings } from "../data/cloudsettings";
 import {
-  armNextLaunch,
-  backdateProgress,
+  armColdSimulation,
+  armForRealOpen,
+  armedMode,
   formatReport,
-  isArmed,
   lastReport,
-  progressAges,
+  libraryState,
   reportAsJson,
-  startRecording,
 } from "./debugflicker";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
@@ -786,26 +785,23 @@ export const settingsRoute: Route = {
       const report = lastReport();
       flickerOut.textContent = report ? `${report.verdict}\n\n${formatReport(report)}` : "";
     };
-    const armBtn = el("button", { class: "btn primary" }, "Arm, then force-quit and reopen");
-    armBtn.addEventListener("click", () => {
-      void (async () => {
-        armBtn.disabled = true;
-        const n = await armNextLaunch();
-        flickerStatus.textContent =
-          `${n} shows aged. Now force-quit the app and open it again — it records the first 30 ` +
-          `seconds of that launch by itself. Then come back here.`;
-      })();
+    const realBtn = el("button", { class: "btn primary" }, "Wait for the real one");
+    realBtn.addEventListener("click", () => {
+      realBtn.disabled = true;
+      armForRealOpen();
+      flickerStatus.textContent =
+        "Armed. Nothing has been faked — it sits until you open the app on a library that is " +
+        "genuinely over 12 hours stale, records that launch, and disarms. Tonight and tomorrow " +
+        "morning, in other words.";
     });
-    const recordBtn = el("button", { class: "btn" }, "Or record right now");
-    recordBtn.addEventListener("click", () => {
+    const coldBtn = el("button", { class: "btn" }, "Or fake one now");
+    coldBtn.addEventListener("click", () => {
       void (async () => {
-        recordBtn.disabled = true;
-        flickerStatus.textContent = "Ageing the library past its TTL…";
-        const n = await backdateProgress();
-        flickerStatus.textContent = `${n} shows aged. Recording 30s — watch the posters.`;
-        startRecording();
-        // Straight to Shows, which is where the bulk refresh actually runs.
-        location.hash = "#/library";
+        coldBtn.disabled = true;
+        const n = await armColdSimulation();
+        flickerStatus.textContent =
+          `${n} shows aged, and the next launch loads every poster on a cache-busted URL so they ` +
+          `arrive cold. Force-quit the app and open it again, wait 30s, then come back here.`;
       })();
     });
     const copyBtn = el("button", { class: "btn" }, "Copy recording");
@@ -824,18 +820,21 @@ export const settingsRoute: Route = {
       el(
         "p",
         {},
-        "Ages every show past the 12-hour TTL so the bulk refresh that follows a long-closed open " +
-          "runs on demand. Arming is the faithful one: the symptom needs a cold start as well as " +
-          "a stale library, and only a real relaunch gives that.",
+        "A 12-hour-old open is three things at once: the library is stale, the process is cold, " +
+          "and iOS has purged the HTTP cache. The last one can't be faked by ageing a timestamp — " +
+          "the previous attempt had all 80 API calls finishing in 250ms off the cache, with no " +
+          "window for anything to go wrong in. So either wait for a real one, or fake the cold " +
+          "cache with busted URLs. Either way: force-quit, reopen, wait 30s, come back here.",
       ),
       flickerStatus,
-      el("div", { class: "btn-row" }, armBtn, recordBtn, copyBtn),
+      el("div", { class: "btn-row" }, realBtn, coldBtn, copyBtn),
       flickerOut,
     );
-    void progressAges().then((s) => {
+    void libraryState().then((s) => {
       if (flickerStatus.textContent) return;
-      flickerStatus.textContent = isArmed()
-        ? `Armed — force-quit and reopen. (${s}.)`
+      const mode = armedMode();
+      flickerStatus.textContent = mode
+        ? `Armed (${mode === "real" ? "waiting for a genuinely stale open" : "cold-cache fake"}) — ${s}.`
         : `Right now: ${s}.`;
     });
     showLast();
