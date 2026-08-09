@@ -129,6 +129,18 @@ export interface PosterCardOpts {
 const posterImgs = new Map<string, HTMLImageElement>();
 const POSTER_IMG_LIMIT = 500;
 
+/**
+ * Temporary, for the flicker investigation.
+ *
+ * Every node held here keeps its decoded bitmap alive, and a w342 poster is ~700 KB of RGBA once
+ * decoded — so a full cache pins something like 350 MB, which is the region where iOS starts
+ * throwing a PWA's web process away. If that is what is happening, this cache is causing the
+ * flicker it was written to prevent, and the recorder needs to be able to see how full it is.
+ */
+export function posterCacheSize(): number {
+  return posterImgs.size;
+}
+
 /** One node can only be in one place, so the same URL twice in a single render
  * pass has to fall back to a throwaway <img> for the duplicate. */
 const claimed = new Set<string>();

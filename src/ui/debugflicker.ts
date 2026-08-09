@@ -21,6 +21,7 @@
 import { setPosterBuster } from "../api/tmdb";
 import { dbGetAll, dbPut } from "../data/db";
 import type { ProgressRec } from "../data/model";
+import { posterCacheSize } from "./components";
 
 const REPORT_KEY = "watchwhat.flickerReport";
 const ARMED_KEY = "watchwhat.flickerArmed";
@@ -45,6 +46,14 @@ interface Sample {
   worstFrame: number;
   /** Which screen, so a dip to zero can be told from you walking off to Settings. */
   at: string;
+  /**
+   * Rough megabytes of decoded bitmap the page is holding: every poster in the document plus
+   * every one pinned by the reuse cache, at 4 bytes a pixel. This is the number the memory theory
+   * lives or dies on — if it is in the hundreds, iOS discarding our images is the likely story.
+   */
+  bitmapMB: number;
+  /** How many <img> nodes the reuse cache is pinning. */
+  pinned: number;
 }
 
 interface ResourceSummary {
@@ -55,13 +64,50 @@ interface ResourceSummary {
 
 export interface FlickerReport {
   at: string;
+  /**
+   * Which build produced this. A recording was once read as a finding for a while before its
+   * shape gave away that it came from the previous deploy — the phone had not picked the new one
+   * up yet. Cheap to carry, and it settles that question before any of the numbers are believed.
+   */
+  build: string;
   mode: Mode;
   /** How stale the library was when the run started — the real event's defining feature. */
   staleHours: number;
   samples: Sample[];
   images: ResourceSummary;
   api: ResourceSummary;
+  /** Wall-clock ms between recent app starts. Several small gaps means iOS is killing the process. */
+  launchGaps: number[];
   verdict: string;
+}
+
+const LAUNCHES_KEY = "watchwhat.flickerLaunches";
+
+/**
+ * Note every start of the app, keeping the last twenty.
+ *
+ * If iOS is jettisoning the web process under memory pressure — the strongest form of the memory
+ * theory — the app does not merely lose its pictures, it starts again from scratch. That is
+ * invisible from inside a single session and obvious across this list: several launches seconds
+ * apart, with no one having tapped anything. Runs on every load, costs one small write.
+ */
+export function noteLaunch(): void {
+  let launches: number[] = [];
+  try {
+    launches = JSON.parse(localStorage.getItem(LAUNCHES_KEY) ?? "[]") as number[];
+  } catch {
+    launches = [];
+  }
+  launches.push(Date.now());
+  localStorage.setItem(LAUNCHES_KEY, JSON.stringify(launches.slice(-20)));
+}
+
+function recentLaunches(): number[] {
+  try {
+    return JSON.parse(localStorage.getItem(LAUNCHES_KEY) ?? "[]") as number[];
+  } catch {
+    return [];
+  }
 }
 
 async function ageLibrary(): Promise<number> {
@@ -204,10 +250,15 @@ export function startRecording(mode: Mode, hours: number): void {
       const r = n.getBoundingClientRect();
       return r.bottom > 0 && r.top < innerHeight;
     });
+    // Poster dimensions come from the decoded image, so an <img> that never loaded contributes
+    // nothing — which is right: it is holding no bitmap.
+    const bitmapBytes = posters.reduce((sum, n) => sum + n.naturalWidth * n.naturalHeight * 4, 0);
     samples.push({
       t: Math.round(performance.now() - t0),
       inView: inView.length,
       up: inView.filter((n) => n.complete && n.naturalWidth > 0).length,
+      bitmapMB: Math.round(bitmapBytes / 1048576),
+      pinned: posterCacheSize(),
       imgReqs: resourceEntries("image.tmdb.org").length,
       apiReqs: resourceEntries("api.themoviedb.org").length,
       rebuilds,
@@ -232,11 +283,16 @@ export function startRecording(mode: Mode, hours: number): void {
     restoreFetch();
     const report: FlickerReport = {
       at: new Date().toISOString(),
+      build: __BUILD_STAMP__,
       mode,
       staleHours: hours,
       samples,
       images: summarize("image.tmdb.org"),
       api: summarize("api.themoviedb.org"),
+      launchGaps: recentLaunches()
+        .slice(-8)
+        .map((t, i, all) => (i === 0 ? 0 : t - all[i - 1]!))
+        .slice(1),
       verdict: "",
     };
     report.verdict = verdictOf(report);
@@ -250,12 +306,29 @@ function verdictOf(report: FlickerReport): string {
   const settled = report.samples.filter((s) => s.inView > 0);
   if (settled.length < 4) return "Nothing to read — no posters were on screen long enough.";
 
+  // A run whose samples stop for seconds was backgrounded — iOS freezes the timers — so its gaps
+  // are not evidence of anything. The last recording spanned eleven minutes this way.
+  const gaps = report.samples.slice(1).map((s, i) => s.t - report.samples[i]!.t);
+  const frozen = gaps.some((g) => g > 3000);
+  // Arming and reopening is itself two launches a few seconds apart, so one short gap proves
+  // nothing. A process being killed and restarted comes in a run of them, and fast.
+  const relaunches = report.launchGaps.filter((g) => g < 15000).length;
+  const notes =
+    (frozen ? "The app was backgrounded mid-run, so the timeline has holes. " : "") +
+    (relaunches >= 2 ? `${relaunches + 1} app starts within seconds of each other — the process is being killed and restarted. ` : "");
+
+  const peakBitmap = Math.max(...report.samples.map((s) => s.bitmapMB ?? 0));
+  const memory = `Peak ${peakBitmap}MB of decoded posters, ${Math.max(...report.samples.map((s) => s.pinned ?? 0))} pinned by the reuse cache. `;
+
   const warm = report.api.count > 10 && report.api.medianMs < 25;
-  const preface = warm
-    ? `Warm run: ${report.api.count} API calls with a median of ${report.api.medianMs}ms, so they came ` +
-      `from the cache and the refresh was over before it began. Not the event. `
-    : `Library was ${report.staleHours}h stale; ${report.api.count} API calls, median ${report.api.medianMs}ms, ` +
-      `${report.images.count} poster requests, median ${report.images.medianMs}ms. `;
+  const preface =
+    notes +
+    memory +
+    (warm
+      ? `Warm run: ${report.api.count} API calls with a median of ${report.api.medianMs}ms, so they came ` +
+        `from the cache and the refresh was over before it began. Not the event. `
+      : `Library was ${report.staleHours}h stale; ${report.api.count} API calls, median ${report.api.medianMs}ms, ` +
+        `${report.images.count} poster requests, median ${report.images.medianMs}ms. `);
 
   const peak = Math.max(...settled.map((s) => s.up));
   if (peak === 0) return `${preface}No poster ever loaded in 30s.`;
@@ -302,16 +375,16 @@ export function lastReport(): FlickerReport | null {
 
 /** Narrow enough to read on a phone; only every other row once the fast phase is over. */
 export function formatReport(report: FlickerReport): string {
-  const head = "    t  up/view  imgs  api  rb  worst  at";
+  const head = "    t  up/view  imgs  api  rb  worst   MB  at";
   const rows = report.samples
     .filter((s, i) => s.t < FAST_UNTIL || i % 4 === 0)
     .map(
       (s) =>
         `${(s.t / 1000).toFixed(2).padStart(6)} ${String(s.up).padStart(3)}/${String(s.inView).padEnd(3)} ` +
         `${String(s.imgReqs).padStart(5)} ${String(s.apiReqs).padStart(4)} ${String(s.rebuilds).padStart(3)} ` +
-        `${String(s.worstFrame).padStart(6)}  ${s.at}`,
+        `${String(s.worstFrame).padStart(6)} ${String(s.bitmapMB).padStart(4)}  ${s.at}`,
     );
-  return [head, ...rows].join("\n");
+  return [`build ${report.build}`, head, ...rows].join("\n");
 }
 
 export function reportAsJson(report: FlickerReport): string {
