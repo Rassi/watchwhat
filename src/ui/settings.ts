@@ -790,9 +790,9 @@ export const settingsRoute: Route = {
       realBtn.disabled = true;
       armForRealOpen();
       flickerStatus.textContent =
-        "Armed. Nothing has been faked — it sits until you open the app on a library that is " +
-        "genuinely over 12 hours stale, records that launch, and disarms. Tonight and tomorrow " +
-        "morning, in other words.";
+        "Armed. Nothing has been faked — it stays armed through ordinary opens and only records a " +
+        "launch that followed 6+ hours of the app being shut, then disarms. Deploying and working " +
+        "on other things is fine; just don't open this app on the phone again before the morning.";
     });
     const coldBtn = el("button", { class: "btn" }, "Or fake one now");
     coldBtn.addEventListener("click", () => {

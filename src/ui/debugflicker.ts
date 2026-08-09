@@ -82,8 +82,10 @@ export interface FlickerReport {
    */
   build: string;
   mode: Mode;
-  /** How stale the library was when the run started — the real event's defining feature. */
+  /** How stale the library was when the run started. */
   staleHours: number;
+  /** Hours the app had been shut before this launch — what actually defines the real event. */
+  shutHours: number;
   samples: Sample[];
   images: ResourceSummary;
   api: ResourceSummary;
@@ -119,6 +121,22 @@ function recentLaunches(): number[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Hours since the launch before this one — how long the app was actually shut.
+ *
+ * This, not any timestamp in the library, is what "opened after twelve hours" means. The obvious
+ * measure looked at how stale the progress records were, and it would have misfired on the very
+ * next open: ended shows the user has finished are exempt from bulk refreshes, so their
+ * `fetchedAt` never moves and the library reads permanently stale. `noteLaunch` has already
+ * recorded this launch by the time anything asks, so the answer is the gap to the one before.
+ */
+function hoursSinceLastLaunch(): number {
+  const launches = recentLaunches();
+  if (launches.length < 2) return Infinity; // first ever launch on this device — treat as cold
+  const previous = launches[launches.length - 2]!;
+  return (Date.now() - previous) / 3600000;
 }
 
 async function ageLibrary(): Promise<number> {
@@ -173,15 +191,21 @@ export function disarm(): void {
  * discipline of it. Anything less and the recording is of an ordinary open, which is exactly the
  * thing that has wasted three rounds.
  */
+/** How long the app must have been shut for a launch to count as the real thing. */
+const REAL_OPEN_HOURS = 6;
+
 export function maybeRecordThisLaunch(): void {
   const mode = armedMode();
   if (!mode) return;
+  // Read before any await: a launch is only "the real one" relative to the previous launch, and
+  // the answer must not depend on how long the database took to open.
+  const shut = hoursSinceLastLaunch();
+  if (mode === "real" && shut < REAL_OPEN_HOURS) return; // an ordinary open; stay armed
   void (async () => {
     const hours = await staleHours();
-    if (mode === "real" && hours < 12) return; // not the event; keep waiting
     disarm();
     if (mode === "cold") setPosterBuster(String(Date.now()));
-    startRecording(mode, hours);
+    startRecording(mode, hours, shut);
   })();
 }
 
@@ -228,7 +252,7 @@ function bustApiCache(): () => void {
   };
 }
 
-export function startRecording(mode: Mode, hours: number): void {
+export function startRecording(mode: Mode, hours: number, shut = 0): void {
   if (recording) return;
   recording = true;
   const restoreFetch = mode === "cold" ? bustApiCache() : () => {};
@@ -317,6 +341,7 @@ export function startRecording(mode: Mode, hours: number): void {
       build: __BUILD_STAMP__,
       mode,
       staleHours: hours,
+      shutHours: Number.isFinite(shut) ? Math.round(shut * 10) / 10 : -1,
       samples,
       images: summarize("image.tmdb.org"),
       api: summarize("api.themoviedb.org"),
@@ -377,8 +402,9 @@ function verdictOf(report: FlickerReport): string {
     (warm
       ? `Warm run: ${report.api.count} API calls with a median of ${report.api.medianMs}ms, so they came ` +
         `from the cache and the refresh was over before it began. Not the event. `
-      : `Library was ${report.staleHours}h stale; ${report.api.count} API calls, median ${report.api.medianMs}ms, ` +
-        `${report.images.count} poster requests, median ${report.images.medianMs}ms. `);
+      : `App had been shut ${report.shutHours}h, library ${report.staleHours}h stale; ${report.api.count} API ` +
+        `calls, median ${report.api.medianMs}ms, ${report.images.count} poster requests, median ` +
+        `${report.images.medianMs}ms. `);
 
   const peak = Math.max(...settled.map((s) => s.up));
   if (peak === 0) return `${preface}No poster ever loaded in 30s.`;
@@ -442,11 +468,13 @@ export function reportAsJson(report: FlickerReport): string {
   return JSON.stringify(report);
 }
 
-/** For the Settings card: how stale the library is right now. */
+/** For the Settings card: how stale the library is, and how long this launch had been away. */
 export async function libraryState(): Promise<string> {
   const all = await dbGetAll<ProgressRec>("progress");
   if (all.length === 0) return "no progress records";
   const hours = await staleHours();
   const stale = all.filter((r) => (Date.now() - r.fetchedAt) / 3600000 > 12).length;
-  return `${all.length} shows, oldest ${hours}h old, ${stale} past the TTL`;
+  const shut = hoursSinceLastLaunch();
+  const gap = Number.isFinite(shut) ? `${Math.round(shut * 10) / 10}h` : "never before";
+  return `${all.length} shows, oldest ${hours}h old, ${stale} past the TTL; this launch followed a ${gap} gap`;
 }
