@@ -785,7 +785,15 @@ export const settingsRoute: Route = {
       const report = lastReport();
       flickerOut.textContent = report ? `${report.verdict}\n\n${formatReport(report)}` : "";
     };
-    const realBtn = el("button", { class: "btn primary" }, "Wait for the real one");
+    // Reflects the stored flag, not the click: leaving Settings and coming back rebuilds this
+    // card, and a re-enabled button reads as "the arming was lost" when it is still very much on.
+    const armedAlready = armedMode() === "real";
+    const realBtn = el(
+      "button",
+      { class: "btn primary" },
+      armedAlready ? "Armed — waiting" : "Wait for the real one",
+    );
+    realBtn.disabled = armedAlready;
     realBtn.addEventListener("click", () => {
       realBtn.disabled = true;
       armForRealOpen();
