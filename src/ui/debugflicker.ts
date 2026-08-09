@@ -21,7 +21,7 @@
 import { setPosterBuster } from "../api/tmdb";
 import { dbGetAll, dbPut } from "../data/db";
 import type { ProgressRec } from "../data/model";
-import { posterCacheSize } from "./components";
+import { posterCacheStats } from "./components";
 
 const REPORT_KEY = "watchwhat.flickerReport";
 const ARMED_KEY = "watchwhat.flickerArmed";
@@ -52,8 +52,19 @@ interface Sample {
    * lives or dies on — if it is in the hundreds, iOS discarding our images is the likely story.
    */
   bitmapMB: number;
-  /** How many <img> nodes the reuse cache is pinning. */
+  /** How many <img> nodes the reuse cache is pinning, and their bitmaps in MB. */
   pinned: number;
+  pinnedMB: number;
+  /**
+   * Milliseconds to decode three on-screen posters that have already loaded.
+   *
+   * This is the direct test for the memory theory, and it needs no memory API. A bitmap still
+   * resident decodes in well under a millisecond, because there is nothing to do. One WebKit has
+   * thrown away has to be decoded from the compressed bytes again, and that costs tens of
+   * milliseconds. If this number climbs while the posters are blinking, they are being purged
+   * and re-decoded, and nothing about the network is involved.
+   */
+  decodeMs: number;
 }
 
 interface ResourceSummary {
@@ -244,6 +255,22 @@ export function startRecording(mode: Mode, hours: number): void {
   };
   requestAnimationFrame(frame);
 
+  // Timed separately from the samples: decoding three posters twenty times a second would be a
+  // load of its own, and re-decoding them is exactly the work being measured.
+  let decodeMs = 0;
+  const probeDecode = (): void => {
+    if (!recording) return;
+    const loaded = [...document.querySelectorAll<HTMLImageElement>("img.poster")]
+      .filter((n) => n.complete && n.naturalWidth > 0)
+      .slice(0, 3);
+    if (loaded.length === 0) return;
+    const start = performance.now();
+    void Promise.all(loaded.map((n) => n.decode().catch(() => undefined))).then(() => {
+      decodeMs = Math.round(performance.now() - start);
+    });
+  };
+  const decodeTimer = setInterval(probeDecode, 500);
+
   const tick = (): void => {
     const posters = [...document.querySelectorAll<HTMLImageElement>("img.poster")];
     const inView = posters.filter((n) => {
@@ -253,12 +280,15 @@ export function startRecording(mode: Mode, hours: number): void {
     // Poster dimensions come from the decoded image, so an <img> that never loaded contributes
     // nothing — which is right: it is holding no bitmap.
     const bitmapBytes = posters.reduce((sum, n) => sum + n.naturalWidth * n.naturalHeight * 4, 0);
+    const cache = posterCacheStats();
     samples.push({
       t: Math.round(performance.now() - t0),
       inView: inView.length,
       up: inView.filter((n) => n.complete && n.naturalWidth > 0).length,
       bitmapMB: Math.round(bitmapBytes / 1048576),
-      pinned: posterCacheSize(),
+      pinned: cache.size,
+      pinnedMB: Math.round(cache.bytes / 1048576),
+      decodeMs,
       imgReqs: resourceEntries("image.tmdb.org").length,
       apiReqs: resourceEntries("api.themoviedb.org").length,
       rebuilds,
@@ -277,6 +307,7 @@ export function startRecording(mode: Mode, hours: number): void {
 
   setTimeout(() => {
     clearInterval(timer);
+    clearInterval(decodeTimer);
     observer.disconnect();
     recording = false;
     setPosterBuster("");
@@ -315,10 +346,29 @@ function verdictOf(report: FlickerReport): string {
   const relaunches = report.launchGaps.filter((g) => g < 15000).length;
   const notes =
     (frozen ? "The app was backgrounded mid-run, so the timeline has holes. " : "") +
-    (relaunches >= 2 ? `${relaunches + 1} app starts within seconds of each other — the process is being killed and restarted. ` : "");
+    (relaunches >= 2
+      ? `${relaunches + 1} app starts within seconds of each other, which looks like the process ` +
+        `being killed and restarted — check launchGaps before believing it. `
+      : "");
 
   const peakBitmap = Math.max(...report.samples.map((s) => s.bitmapMB ?? 0));
-  const memory = `Peak ${peakBitmap}MB of decoded posters, ${Math.max(...report.samples.map((s) => s.pinned ?? 0))} pinned by the reuse cache. `;
+  const peakPinnedMB = Math.max(...report.samples.map((s) => s.pinnedMB ?? 0));
+  const peakPinned = Math.max(...report.samples.map((s) => s.pinned ?? 0));
+  // Judged against this run's own baseline, not a fixed threshold: `decode()` resolves on a
+  // promise and costs a few milliseconds even when there is nothing to do, and that floor differs
+  // between devices. A purge shows as a spike over the run's own quiet level, not as any
+  // particular number.
+  const decodes = report.samples.map((s) => s.decodeMs ?? 0).filter((n) => n > 0).sort((a, b) => a - b);
+  const medianDecode = decodes.length ? decodes[Math.floor(decodes.length / 2)]! : 0;
+  const worstDecode = decodes.length ? decodes[decodes.length - 1]! : 0;
+  const purging = decodes.length > 4 && worstDecode > Math.max(medianDecode * 4, 20);
+  const memory =
+    `Peak ${peakBitmap}MB of decoded posters on screen, plus ${peakPinnedMB}MB across ${peakPinned} ` +
+    `pinned by the reuse cache. Decoding an already-loaded poster took ${medianDecode}ms normally, ` +
+    `${worstDecode}ms at worst` +
+    (purging
+      ? " — a spike that size means the bitmap was gone and had to be rebuilt, which is the memory theory. "
+      : ", steady, so the bitmaps stayed resident. ");
 
   const warm = report.api.count > 10 && report.api.medianMs < 25;
   const preface =
@@ -375,14 +425,15 @@ export function lastReport(): FlickerReport | null {
 
 /** Narrow enough to read on a phone; only every other row once the fast phase is over. */
 export function formatReport(report: FlickerReport): string {
-  const head = "    t  up/view  imgs  api  rb  worst   MB  at";
+  const head = "    t  up/view  imgs  api  rb  worst   MB  pin/MB  dec  at";
   const rows = report.samples
     .filter((s, i) => s.t < FAST_UNTIL || i % 4 === 0)
     .map(
       (s) =>
         `${(s.t / 1000).toFixed(2).padStart(6)} ${String(s.up).padStart(3)}/${String(s.inView).padEnd(3)} ` +
         `${String(s.imgReqs).padStart(5)} ${String(s.apiReqs).padStart(4)} ${String(s.rebuilds).padStart(3)} ` +
-        `${String(s.worstFrame).padStart(6)} ${String(s.bitmapMB).padStart(4)}  ${s.at}`,
+        `${String(s.worstFrame).padStart(6)} ${String(s.bitmapMB).padStart(4)} ` +
+        `${String(s.pinned).padStart(4)}/${String(s.pinnedMB).padEnd(3)} ${String(s.decodeMs).padStart(4)}  ${s.at}`,
     );
   return [`build ${report.build}`, head, ...rows].join("\n");
 }

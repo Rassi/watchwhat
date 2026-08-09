@@ -135,10 +135,16 @@ const POSTER_IMG_LIMIT = 500;
  * Every node held here keeps its decoded bitmap alive, and a w342 poster is ~700 KB of RGBA once
  * decoded — so a full cache pins something like 350 MB, which is the region where iOS starts
  * throwing a PWA's web process away. If that is what is happening, this cache is causing the
- * flicker it was written to prevent, and the recorder needs to be able to see how full it is.
+ * flicker it was written to prevent.
+ *
+ * These nodes are mostly *detached*, which is exactly why they need counting separately: they do
+ * not appear in any query over the document, so a sweep of the visible grid misses the entire
+ * suspected hoard.
  */
-export function posterCacheSize(): number {
-  return posterImgs.size;
+export function posterCacheStats(): { size: number; bytes: number } {
+  let bytes = 0;
+  for (const img of posterImgs.values()) bytes += img.naturalWidth * img.naturalHeight * 4;
+  return { size: posterImgs.size, bytes };
 }
 
 /** One node can only be in one place, so the same URL twice in a single render
