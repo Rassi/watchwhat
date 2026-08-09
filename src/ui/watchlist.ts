@@ -203,7 +203,7 @@ export const watchlistRoute: Route = {
           });
           // A plain button with a verb on it, like Discover's "Load more" — the dashed band
           // this replaced said what was behind it but never that it could be opened.
-          const more = el("button", { class: "btn" }, `Show ${hiddenCount} older shows, last watched before ${since}`);
+          const more = el("button", { class: "btn" }, `Show ${hiddenCount} older shows, before ${since}`);
           more.addEventListener("click", () => {
             showOldStale = true;
             renderContent();
