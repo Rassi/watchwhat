@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Poster flicker test</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; padding: 14px; background: #111; color: #eee;
+             font: 15px/1.45 -apple-system, system-ui, sans-serif; }
+      h1 { font-size: 17px; margin: 0 0 6px; }
+      p { margin: 0 0 12px; color: #999; font-size: 13px; }
+      button { font: inherit; font-weight: 600; padding: 12px 20px; border: 0; border-radius: 8px;
+               background: #f5c518; color: #111; }
+      button[disabled] { opacity: 0.4; }
+      #status { margin: 12px 0 0; font-weight: 600; min-height: 20px; }
+      #verdict:not(:empty) { margin-top: 12px; padding: 12px; border-radius: 8px; background: #1d1d1d;
+                             border-left: 3px solid #f5c518; font-size: 14px; }
+      #out { white-space: pre; overflow-x: auto; font: 12px/1.5 ui-monospace, Menlo, monospace;
+             background: #000; padding: 10px; border-radius: 8px; margin-top: 12px; }
+      #out:empty { display: none; }
+      #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px;
+              margin-top: 14px; }
+      #grid img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: #333;
+                  border-radius: 6px; display: block; }
+      #ask:not(:empty) { margin-top: 14px; padding: 12px; border-radius: 8px; background: #1d1d1d; }
+      #ask button { margin: 8px 8px 0 0; background: #333; color: #eee; padding: 10px 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>Poster flicker test</h1>
+    <p>
+      Two runs of about 12 seconds. Watch the posters below while it runs, and keep the page in
+      the foreground — iOS throttles timers in a background tab. Downloads about 1 MB.
+    </p>
+    <button id="go">Run test</button>
+    <div id="status"></div>
+    <div id="verdict"></div>
+    <div id="ask"></div>
+    <div id="out"></div>
+    <div id="grid"></div>
+
+    <script>
+      // WatchWhat's grids rebuild by calling replaceChildren(), and a bulk TMDB refresh — the one
+      // that fires when the app has been shut longer than 12 hours — triggers one rebuild per
+      // 300ms for as long as it runs. The suspicion is that detaching and reattaching an
+      // <img loading="lazy"> blanks it on iOS even when the picture is already loaded and cached,
+      // which would explain posters flickering on and off for a few seconds and then all coming
+      // back at once the moment the refresh finishes.
+      //
+      // So: load the posters, wait until every one of them is up, and only then start rebuilding.
+      // Nothing here touches the network after the first three seconds; anything that blanks is
+      // blanking a picture the browser already has.
+
+      const PATHS = [
+        "/oKxBWbXmnWFO2Wh1QRTtshdfIRa.jpg", "/hr5aLuCdLC5X423c9G1pPkWR6Ud.jpg",
+        "/3wB4R3Ac3lKSQWKpoU0zeRY8XqL.jpg", "/uWpG7GqfKGQqX4YMAo3nv5OrglV.jpg",
+        "/ztkUQFLlC19CCMYHW9o1zWhJRNq.jpg", "/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg",
+        "/q8dWfc4JwQuv3HayIZeO84jAXED.jpg", "/k5Qg5rgPoKdh3yTJJrLtyoyYGwC.jpg",
+        "/ekaa7YjGPTkFLcPhwWXTnARuCEU.jpg", "/2NhBFUTg5KVBmGwafxtLwVdsqrr.jpg",
+        "/ie1quhMk09lDtvtAyQAHTu09R9Z.jpg", "/hvGugwL2mu3rpbFy001pe0ZBuk.jpg",
+      ];
+      const COUNT = 24;
+      const REBUILD_MS = 300;  // batchNotify's throttle, src/data/sync.ts
+      const CHURN_MS = 6000;
+      const SETTLE_MS = 2500;
+      const SAMPLE_MS = 50;    // fast enough to catch a blank that lasts one frame
+
+      const grid = document.getElementById("grid");
+      const out = document.getElementById("out");
+      const status = document.getElementById("status");
+      const verdict = document.getElementById("verdict");
+      const go = document.getElementById("go");
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      async function arm(label, lazy) {
+        // A fresh query string per run, so the second arm cannot be handed decoded pixels the
+        // first arm left in memory.
+        const tag = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const nodes = Array.from({ length: COUNT }, (_, i) => {
+          const img = document.createElement("img");
+          if (lazy) img.loading = "lazy";
+          img.alt = "";
+          img.src = `https://image.tmdb.org/t/p/w342${PATHS[i % PATHS.length]}?b=${tag}-${i}`;
+          return img;
+        });
+        grid.replaceChildren(...nodes);
+        scrollTo(0, 0);
+
+        const inView = () =>
+          nodes.filter((n) => {
+            const r = n.getBoundingClientRect();
+            return r.bottom > 0 && r.top < innerHeight;
+          });
+        const showing = (list) => list.filter((n) => n.complete && n.naturalWidth > 0).length;
+
+        // Wait for a full house before touching anything, up to 15s.
+        status.textContent = `${label}: loading…`;
+        const deadline = performance.now() + 15000;
+        let visible = inView().length;
+        while (showing(inView()) < visible && performance.now() < deadline) {
+          await sleep(200);
+          visible = inView().length;
+        }
+        const before = showing(inView());
+        await sleep(500);
+
+        status.textContent = `${label}: rebuilding every ${REBUILD_MS}ms…`;
+        const samples = [];
+        let rebuilds = 0;
+        const sampler = setInterval(() => samples.push(showing(inView())), SAMPLE_MS);
+
+        // `complete` only says the bytes arrived. iOS throws away *decoded* images under memory
+        // pressure, and a grid that reattaches 24 of them every 300ms can end up re-decoding
+        // faster than it can paint — which would look exactly like flickering while every probe
+        // above still reports a full house. Frames that take far longer than 16ms are the tell.
+        const frames = [];
+        let frameLast = performance.now();
+        let framing = true;
+        const onFrame = (now) => {
+          frames.push(now - frameLast);
+          frameLast = now;
+          if (framing) requestAnimationFrame(onFrame);
+        };
+        requestAnimationFrame(onFrame);
+
+        const rebuilder = setInterval(() => {
+          rebuilds++;
+          // Exactly what renderContent does: empty the grid, then put the same nodes back.
+          grid.replaceChildren();
+          grid.replaceChildren(...nodes);
+        }, REBUILD_MS);
+
+        await sleep(CHURN_MS);
+        clearInterval(rebuilder);
+        framing = false;
+        const churnSamples = samples.slice(2); // the first rebuild lands after sampling starts
+        await sleep(SETTLE_MS);
+        clearInterval(sampler);
+        const after = showing(inView());
+
+        const worst = churnSamples.length ? Math.min(...churnSamples) : before;
+        const mean = churnSamples.length
+          ? Math.round(churnSamples.reduce((s, n) => s + n, 0) / churnSamples.length)
+          : before;
+        const blankFrac = churnSamples.length
+          ? Math.round((churnSamples.filter((n) => n < visible / 2).length / churnSamples.length) * 100)
+          : 0;
+
+        const slowFrames = frames.filter((f) => f > 100).length;
+        const worstFrame = frames.length ? Math.round(Math.max(...frames)) : 0;
+
+        out.textContent +=
+          `${label.padEnd(9)} of ${visible} posters: ${before} up before, ` +
+          `${mean} on average while rebuilding (worst ${worst}), ${after} after it stops\n` +
+          `          blank more than half the grid in ${blankFrac}% of samples, ${rebuilds} rebuilds\n` +
+          `          frames: ${frames.length} drawn, ${slowFrames} took over 100ms, worst ${worstFrame}ms\n`;
+        return { label, visible, before, mean, worst, after, blankFrac, slowFrames, worstFrame };
+      }
+
+      // The eye is the only instrument that sees a decode-level blank, so it gets asked directly.
+      function askWhatYouSaw(lazyArm, eagerArm) {
+        const ask = document.getElementById("ask");
+        ask.replaceChildren();
+        ask.append(Object.assign(document.createElement("div"), {
+          textContent: "Did the posters flicker on and off while it ran?",
+          style: "font-weight:600;margin-bottom:4px",
+        }));
+        const answers = [
+          ["Yes, both runs", "both"],
+          ["Only the first run", "lazy only"],
+          ["No flicker at all", "neither"],
+        ];
+        for (const [text, key] of answers) {
+          const b = document.createElement("button");
+          b.textContent = text;
+          b.addEventListener("click", () => {
+            const measured = lazyArm.mean < lazyArm.before * 0.8;
+            ask.replaceChildren(Object.assign(document.createElement("div"), {
+              textContent:
+                key === "neither"
+                  ? "Then rebuilding the grid is not what empties the posters on the phone — " +
+                    "something else is, and this is the wrong tree."
+                  : key === "lazy only"
+                    ? 'Rebuilding blanks lazy images on this device and eager ones survive. ' +
+                      'The fix is to stop the posters being lazy once they are on screen.'
+                    : measured
+                      ? "Rebuilding blanks the posters either way. The fix is to stop rebuilding " +
+                        "the whole grid on every refresh tick."
+                      : "You saw it flicker but every probe read a full house — so iOS is throwing " +
+                        "away decoded images and re-decoding them on each reattach. Same fix: stop " +
+                        "rebuilding the grid, and the decodes stop with it.",
+              style: "font-weight:600",
+            }));
+            out.textContent += `\nwhat you saw: ${key}\n`;
+          });
+          ask.append(b);
+        }
+      }
+
+      go.addEventListener("click", async () => {
+        go.disabled = true;
+        document.getElementById("ask").replaceChildren();
+        out.textContent = "";
+        verdict.textContent = "";
+        try {
+          const lazyArm = await arm('lazy', true);
+          await sleep(800);
+          const eagerArm = await arm('eager', false);
+          grid.replaceChildren();
+          status.textContent = "Done.";
+
+          const flickers = lazyArm.mean < lazyArm.before * 0.8 || lazyArm.worst < lazyArm.before / 2;
+          verdict.textContent = flickers
+            ? `The page can see it: rebuilding blanks posters that were already loaded — ` +
+              `${lazyArm.mean} of ${lazyArm.visible} showing on average, dropping to ${lazyArm.worst}, ` +
+              `back to ${lazyArm.after} once it stops. ` +
+              (eagerArm.mean >= eagerArm.before * 0.8
+                ? `Without loading="lazy" it holds steady at ${eagerArm.mean}.`
+                : `It happens without loading="lazy" too (${eagerArm.mean}).`)
+            : `The page saw no blanking: ${lazyArm.mean} of ${lazyArm.visible} stayed up throughout ` +
+              `(worst ${lazyArm.worst}), eager ${eagerArm.mean}. If you still saw it flicker, the ` +
+              `blanking is in the decoder, below anything this page can measure.`;
+          askWhatYouSaw(lazyArm, eagerArm);
+        } catch (e) {
+          status.textContent = `Failed: ${e && e.message ? e.message : e}`;
+        } finally {
+          go.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
