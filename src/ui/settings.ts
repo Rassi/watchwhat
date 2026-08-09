@@ -785,22 +785,25 @@ export const settingsRoute: Route = {
       const report = lastReport();
       flickerOut.textContent = report ? `${report.verdict}\n\n${formatReport(report)}` : "";
     };
-    // Reflects the stored flag, not the click: leaving Settings and coming back rebuilds this
-    // card, and a re-enabled button reads as "the arming was lost" when it is still very much on.
+    // Label from the stored flag, not from the click: leaving Settings and coming back rebuilds
+    // this card, and a plain re-enabled button reads as "the arming was lost" when it is still on.
+    // Left enabled all the same, because re-arming resets the clock and ages the library again.
     const armedAlready = armedMode() === "real";
     const realBtn = el(
       "button",
       { class: "btn primary" },
-      armedAlready ? "Armed — waiting" : "Wait for the real one",
+      armedAlready ? "Armed — tap to re-arm" : "Arm for a real open",
     );
-    realBtn.disabled = armedAlready;
     realBtn.addEventListener("click", () => {
-      realBtn.disabled = true;
-      armForRealOpen();
-      flickerStatus.textContent =
-        "Armed. Nothing has been faked — it stays armed through ordinary opens and only records a " +
-        "launch that followed 6+ hours of the app being shut, then disarms. Deploying and working " +
-        "on other things is fine; just don't open this app on the phone again before the morning.";
+      void (async () => {
+        realBtn.disabled = true;
+        const n = await armForRealOpen();
+        flickerStatus.textContent =
+          `Armed, and ${n} shows aged so there is certain to be a refresh waiting. Now leave the ` +
+          `app shut for 6+ hours — that part cannot be faked, it is what makes iOS reclaim the ` +
+          `process and drop its caches. The next open after that gap records itself and disarms. ` +
+          `Opening it sooner is harmless but restarts the 6 hours.`;
+      })();
     });
     const coldBtn = el("button", { class: "btn" }, "Or fake one now");
     coldBtn.addEventListener("click", () => {

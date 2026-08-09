@@ -158,14 +158,21 @@ async function staleHours(): Promise<number> {
 }
 
 /**
- * Wait for the genuine article.
+ * Wait for a real gap, having made sure there will be something to see when it comes.
  *
- * No timestamps are touched: the point is to catch an open that is stale because the app really
- * was shut all night, with a cache that iOS really did purge. Arming survives launches until one
- * of them qualifies, so it can be set now and collected tomorrow morning.
+ * The event has three ingredients and they are not equally fakeable. A cold process and a purged
+ * HTTP cache can only come from real hours away — that is what the waiting buys, and every
+ * attempt to shortcut it has produced a warm run that measured nothing. Library staleness is only
+ * data, and faking it costs nothing in fidelity.
+ *
+ * So age the library here rather than leaving it to chance. Otherwise a six-hour gap can easily
+ * find the running shows an hour short of their 12h TTL, no refresh runs at all, and the wait is
+ * spent for a recording of an ordinary open.
  */
-export function armForRealOpen(): void {
+export async function armForRealOpen(): Promise<number> {
+  const n = await ageLibrary();
   localStorage.setItem(ARMED_KEY, "real");
+  return n;
 }
 
 /** Age the library and force cold poster loads on the next launch, without waiting a night. */
@@ -468,13 +475,19 @@ export function reportAsJson(report: FlickerReport): string {
   return JSON.stringify(report);
 }
 
-/** For the Settings card: how stale the library is, and how long this launch had been away. */
+/**
+ * For the Settings card: the library's state, and — the thing actually worth knowing — the clock
+ * time from which the next open will count as a real one. The gap is measured against the most
+ * recent launch, which is this one, so every open pushes that moment six hours further out.
+ */
 export async function libraryState(): Promise<string> {
   const all = await dbGetAll<ProgressRec>("progress");
   if (all.length === 0) return "no progress records";
   const hours = await staleHours();
   const stale = all.filter((r) => (Date.now() - r.fetchedAt) / 3600000 > 12).length;
-  const shut = hoursSinceLastLaunch();
-  const gap = Number.isFinite(shut) ? `${Math.round(shut * 10) / 10}h` : "never before";
-  return `${all.length} shows, oldest ${hours}h old, ${stale} past the TTL; this launch followed a ${gap} gap`;
+  const launches = recentLaunches();
+  const thisLaunch = launches[launches.length - 1] ?? Date.now();
+  const eligible = new Date(thisLaunch + REAL_OPEN_HOURS * 3600 * 1000);
+  const clock = eligible.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `${all.length} shows, oldest ${hours}h old, ${stale} past the TTL. An open from ${clock} onwards counts`;
 }
