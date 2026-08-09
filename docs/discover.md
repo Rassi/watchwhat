@@ -169,7 +169,7 @@ control.
 ## The Rotten Tomatoes score, and why it isn't here
 
 The popcorn score is the one thing the original brief wanted that none of this
-provides. Assessed 2026-08-04:
+provides. Assessed 2026-08-09:
 
 | Source | Verdict |
 |---|---|
@@ -191,3 +191,91 @@ is spent once per film rather than once per view.
   list is sorted once on the first batch and later pages are appended, so nothing
   already on screen moves, and they stay where they landed.
 - **Shows.** Movies only, so far.
+
+---
+
+# Planned: a NEW RELEASES tab
+
+Sitting after POPULAR, answering the one question POPULAR structurally cannot:
+**what landed on streaming most recently, in order**. Researched 2026-08-09, not
+yet built.
+
+## Why it needs a different data source
+
+POPULAR ranks by attention and only ever *filters* on dates, because TMDB has no
+sort on the digital release date — the whole reason the day-walk was built and
+deleted. So "newest streaming, in order" cannot be asked of TMDB at all:
+
+| Endpoint | Why not |
+|---|---|
+| `/discover/movie?sort_by=primary_release_date.desc` | The cinema date. *Demon Slayer* opened a year before it streamed. |
+| `/movie/now_playing`, `/movie/upcoming` | Cinemas, not streaming. |
+| Day-walk over `release_date.gte`/`.lte` | Works, but one request per day of window. Rejected once already. |
+
+**JustWatch can, and it is already a dependency** — `src/api/justwatch.ts`, proxied
+through the Worker at `/justwatch` because JustWatch sends no CORS header.
+
+## The endpoint
+
+`newTitleBuckets` — undocumented, found by probing, since introspection is
+disabled and the schema is unpublished. Buckets are keyed `date_packageId` (the
+`cursor` is that string, base64) and arrive **date-descending**, which is the
+ordering the whole tab needs. Its sibling `newTitles` returns the same titles
+flat and in no useful order — a single page cannot be sorted into a true "newest"
+list, so use the buckets.
+
+One query returns everything a card needs:
+
+```graphql
+newTitleBuckets(country: "US", first: 16, filter: {
+  objectTypes: [MOVIE],
+  monetizationTypes: [FLATRATE, FREE, ADS],
+  releaseYear: { min: <this year - 3> }        # IntFilter { min, max }
+}) { edges { cursor node { edges { node { ... on Movie {
+  content(country: "US", language: "en") {
+    title originalReleaseYear posterUrl
+    externalIds { tmdbId }
+    scoring { imdbScore imdbVotes tmdbScore tmdbPopularity jwRating tomatoMeter }
+  }
+  offers(country: "US", platform: WEB, filter: { monetizationTypes: [FLATRATE, FREE, ADS] }) {
+    availableFromTime package { clearName }
+  }
+} } } } } }
+```
+
+Measured on US: 16 buckets → 43 distinct films, **every one with a `tmdbId` and a
+`posterUrl`**. `first: 30` fails with `TOO_BIG`; 16 is safe.
+
+`scoring` is the find. It carries `tmdbPopularity`, so the same notability cut
+POPULAR uses is available without a second request — and `tomatoMeter`, the RT
+**critic** score. There is no audience score (`tomatoAudience`, `audienceScore`,
+`popcornScore` all probed, none exist), so MDBList remains the only popcorn route.
+
+## Two problems, both measured, both fixable in the query
+
+**Catalogue swamps it.** Unfiltered, a US page is 1947, 1950, 1961, 1985 — ad-supported
+services adding back-catalogue daily. Worse in the US than DK for exactly that
+reason. `releaseYear: { min: … }` is the fix, same three-year rule as POPULAR.
+
+**With recency applied it becomes a firehose of nobodies** — Hallmark-style TV
+movies and direct-to-streaming filler, because "newest" with no notability signal
+is mostly volume. A `scoring.tmdbPopularity` floor, as `FORWARD_MIN_POPULARITY`
+already does, is the cut, and it costs nothing extra.
+
+## Region
+
+**US first.** Not DK, though DK works and returns real Danish arrival dates that
+TMDB cannot supply at all (TMDB: 452 films a month for US against 8 for DK). US is
+what he asked for; DK is a natural second, and the country is a single argument, so
+this is a setting rather than a rewrite.
+
+## Risks to weigh before building
+
+- **JustWatch is unofficial.** The existing rule in `justwatch.ts` is that every
+  caller treats failure as "no extra information" and keeps TMDB's answer. A whole
+  tab cannot degrade that way — when the schema shifts, the tab is empty, not
+  merely less precise. This is a different risk posture from a provider top-up.
+- **It needs the Worker.** No CORS, so no sync token means no tab. Every other
+  screen works without one.
+- **Pagination is by bucket, not by title.** Sixteen buckets gave 43 films, but a
+  bucket is one service on one day, so the yield per page is not stable.
