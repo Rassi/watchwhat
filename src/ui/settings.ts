@@ -765,6 +765,26 @@ export const settingsRoute: Route = {
       reloadBtn,
     );
 
+    // --- Poster flicker test ---
+    // Temporary, and meant to be deleted along with public/lazytest.html once the flicker after a
+    // 12-hour-old open is understood. It lives here because the symptom only ever appears on the
+    // home-screen app, which has no address bar to type a URL into. A plain link, not a new tab:
+    // iOS would hand target="_blank" to Safari and the test would then run in a different engine
+    // context than the one being measured. The page itself offers the way back.
+    const flickerCard = el(
+      "div",
+      { class: "card" },
+      el("h2", {}, "Poster flicker test"),
+      el(
+        "p",
+        {},
+        "Rebuilds a grid of already-loaded posters the way a bulk refresh does, to find out why " +
+          "they blank out for a few seconds after a long-closed open. Takes about 25 seconds — " +
+          "watch the posters while it runs.",
+      ),
+      el("a", { class: "btn", href: "lazytest.html" }, "Open the test"),
+    );
+
     // Ordered by how often a card is actually wanted, not by how fundamental it is.
     // Reload is the most-used control on this screen — it is the only way to pick up
     // a new build on an iPhone home-screen app — and the credentials are the least
@@ -778,6 +798,7 @@ export const settingsRoute: Route = {
       syncCard,
       transferCard,
       dataCard,
+      flickerCard,
     );
   },
 };

@@ -13,6 +13,8 @@
       button { font: inherit; font-weight: 600; padding: 12px 20px; border: 0; border-radius: 8px;
                background: #f5c518; color: #111; }
       button[disabled] { opacity: 0.4; }
+      #back { display: inline-block; margin-bottom: 14px; color: #f5c518; text-decoration: none;
+              font-size: 14px; font-weight: 600; }
       #status { margin: 12px 0 0; font-weight: 600; min-height: 20px; }
       #verdict:not(:empty) { margin-top: 12px; padding: 12px; border-radius: 8px; background: #1d1d1d;
                              border-left: 3px solid #f5c518; font-size: 14px; }
@@ -28,6 +30,8 @@
     </style>
   </head>
   <body>
+    <!-- Reached from Settings inside the home-screen app, which has no back button of its own. -->
+    <a id="back" href="index.html#/settings">‹ Back to WatchWhat</a>
     <h1>Poster flicker test</h1>
     <p>
       Two runs of about 12 seconds. Watch the posters below while it runs, and keep the page in
