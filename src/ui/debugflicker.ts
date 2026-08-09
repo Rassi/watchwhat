@@ -84,8 +84,15 @@ export interface FlickerReport {
   mode: Mode;
   /** How stale the library was when the run started. */
   staleHours: number;
-  /** Hours the app had been shut before this launch — what actually defines the real event. */
+  /** Hours the app had been away before this return — what actually defines the real event. */
   shutHours: number;
+  /**
+   * Whether iOS reloaded the page or merely resumed the suspended one.
+   *
+   * A finding in its own right: the two have different causes available to them. Only a resumed
+   * page can have had its image memory reclaimed while the document carried on existing.
+   */
+  path: "launch" | "resume";
   samples: Sample[];
   images: ResourceSummary;
   api: ResourceSummary;
@@ -95,6 +102,7 @@ export interface FlickerReport {
 }
 
 const LAUNCHES_KEY = "watchwhat.flickerLaunches";
+const HIDDEN_AT_KEY = "watchwhat.flickerHiddenAt";
 
 /**
  * Note every start of the app, keeping the last twenty.
@@ -198,8 +206,43 @@ export function disarm(): void {
  * discipline of it. Anything less and the recording is of an ordinary open, which is exactly the
  * thing that has wasted three rounds.
  */
-/** How long the app must have been shut for a launch to count as the real thing. */
+/** How long the app must have been away for a return to count as the real thing. */
 const REAL_OPEN_HOURS = 6;
+
+/**
+ * Watch for the app coming *back*, which is how he actually meets this bug.
+ *
+ * iOS keeps a standalone web app's page alive across launches from the App Switcher — the comment
+ * at the top of refresh.ts is about exactly this. So reopening after a night has two possible
+ * paths: iOS reclaimed the process and the page reloads, or it merely suspended it and the same
+ * page resumes. Only the first runs main.ts. He has never force-quit when he saw the flicker, so
+ * instrumenting the launch alone could have sat armed through the whole event and recorded
+ * nothing, and telling him to force-quit would have forced the one path he is never on.
+ *
+ * A suspended page is also the better suspect: it is where iOS has had hours to reclaim the image
+ * memory out from under a document that still exists and still believes its posters are loaded.
+ */
+export function installResumeWatch(): void {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      // Written on every hide, armed or not: the timestamp has to already be there when a return
+      // six hours later turns out to be the one worth recording.
+      localStorage.setItem(HIDDEN_AT_KEY, String(Date.now()));
+      return;
+    }
+    const mode = armedMode();
+    if (!mode || recording) return;
+    const hiddenAt = Number(localStorage.getItem(HIDDEN_AT_KEY) ?? 0);
+    const away = hiddenAt > 0 ? (Date.now() - hiddenAt) / 3600000 : 0;
+    if (mode === "real" && away < REAL_OPEN_HOURS) return;
+    void (async () => {
+      const hours = await staleHours();
+      disarm();
+      if (mode === "cold") setPosterBuster(String(Date.now()));
+      startRecording(mode, hours, away, "resume");
+    })();
+  });
+}
 
 export function maybeRecordThisLaunch(): void {
   const mode = armedMode();
@@ -212,7 +255,7 @@ export function maybeRecordThisLaunch(): void {
     const hours = await staleHours();
     disarm();
     if (mode === "cold") setPosterBuster(String(Date.now()));
-    startRecording(mode, hours, shut);
+    startRecording(mode, hours, shut, "launch");
   })();
 }
 
@@ -259,7 +302,7 @@ function bustApiCache(): () => void {
   };
 }
 
-export function startRecording(mode: Mode, hours: number, shut = 0): void {
+export function startRecording(mode: Mode, hours: number, shut = 0, path: "launch" | "resume" = "launch"): void {
   if (recording) return;
   recording = true;
   const restoreFetch = mode === "cold" ? bustApiCache() : () => {};
@@ -349,6 +392,7 @@ export function startRecording(mode: Mode, hours: number, shut = 0): void {
       mode,
       staleHours: hours,
       shutHours: Number.isFinite(shut) ? Math.round(shut * 10) / 10 : -1,
+      path,
       samples,
       images: summarize("image.tmdb.org"),
       api: summarize("api.themoviedb.org"),
@@ -409,7 +453,8 @@ function verdictOf(report: FlickerReport): string {
     (warm
       ? `Warm run: ${report.api.count} API calls with a median of ${report.api.medianMs}ms, so they came ` +
         `from the cache and the refresh was over before it began. Not the event. `
-      : `App had been shut ${report.shutHours}h, library ${report.staleHours}h stale; ${report.api.count} API ` +
+      : `iOS ${report.path === "resume" ? "resumed the suspended page" : "reloaded the page"} after ` +
+        `${report.shutHours}h away, library ${report.staleHours}h stale; ${report.api.count} API ` +
         `calls, median ${report.api.medianMs}ms, ${report.images.count} poster requests, median ` +
         `${report.images.medianMs}ms. `);
 

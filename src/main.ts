@@ -16,7 +16,7 @@ import { dbDelete } from "./data/db";
 import { purgeTraktRemnants, seedCloudStamps } from "./data/settings";
 import { migrateMovieListsToSettings, seedListAddedAt, seedProviderSince, trimProviderCountries } from "./data/sync";
 import { installSyncTriggers, syncEvents } from "./data/replay";
-import { maybeRecordThisLaunch, noteLaunch } from "./ui/debugflicker";
+import { installResumeWatch, maybeRecordThisLaunch, noteLaunch } from "./ui/debugflicker";
 
 applyTheme();
 stripReloadParam();
@@ -62,6 +62,9 @@ registerRoute(settingsRoute);
 // very first render is inside any recording.
 noteLaunch();
 maybeRecordThisLaunch();
+// And the other way back in: iOS often suspends a home-screen app rather than killing it, so
+// reopening after a night resumes this very page and never runs any of the above.
+installResumeWatch();
 
 startRouter(document.getElementById("app")!);
 

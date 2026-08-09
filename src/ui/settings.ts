@@ -799,10 +799,10 @@ export const settingsRoute: Route = {
         realBtn.disabled = true;
         const n = await armForRealOpen();
         flickerStatus.textContent =
-          `Armed, and ${n} shows aged so there is certain to be a refresh waiting. Now leave the ` +
-          `app shut for 6+ hours — that part cannot be faked, it is what makes iOS reclaim the ` +
-          `process and drop its caches. The next open after that gap records itself and disarms. ` +
-          `Opening it sooner is harmless but restarts the 6 hours.`;
+          `Armed, and ${n} shows aged so there is certain to be a refresh waiting. Now just leave ` +
+          `the app alone for 6+ hours — don't force-quit it, close it however you normally do. ` +
+          `Coming back after that gap records itself and disarms, whether iOS reloaded the page ` +
+          `or only resumed it. Opening it sooner is harmless but restarts the 6 hours.`;
       })();
     });
     const coldBtn = el("button", { class: "btn" }, "Or fake one now");
