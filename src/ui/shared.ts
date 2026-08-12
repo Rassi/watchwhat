@@ -126,6 +126,14 @@ export function serviceRules(): ServiceRule[] {
 }
 
 /**
+ * A service carried under someone else's billing, or its own channel storefront: "HBO Max
+ * Amazon Channel", "Starz Roku Premium Channel", "Lionsgate+ Amazon Channels", "Plex Channel".
+ * TMDB files each as a provider in its own right, so an entry naming the service itself does
+ * not catch them.
+ */
+const CHANNEL_SUFFIX = /\s+(?:amazon|apple tv|roku premium|roku)?\s*channels?$/i;
+
+/**
  * The entry that decides a provider in a country, or null for "no opinion". A subscription is
  * not worldwide — a Netflix account in one country is no help in another — so an entry may be
  * limited with "Netflix@DK/US"; a bare entry counts everywhere. A block wins over a plain
@@ -136,13 +144,27 @@ export function serviceRules(): ServiceRule[] {
  * convenient to type, but it made an entry's reach invisible: "Paramount+" quietly claimed
  * seven providers including resellers, and "Max" would claim Cinemax. The picker now writes
  * TMDB's own spellings, one entry per provider, so there is nothing left to guess at.
+ *
+ * **With one asymmetry: a block carries to the channel variants of the service it names**, when
+ * nothing in the list names the variant itself. A service you have said you cannot use is not
+ * one you can suddenly use because it is being resold — and the miss was not hypothetical:
+ * `-Plex@US` left `Plex Channel` counting as a free way to watch, which put four catalogue
+ * films at the top of Releases on a service that had been ruled out in writing.
+ *
+ * It stays one-directional, which is what keeps reach visible. A block only ever *removes* a
+ * way to watch, so guessing wide costs a listing you would not have used; deriving a positive
+ * the same way would claim providers the list never named, which is the failure mode exact
+ * matching exists to prevent.
  */
 export function matchServiceRule(rules: ServiceRule[], name: string, country: string): ServiceRule | null {
+  const here = rules.filter((r) => r.countries === null || r.countries.includes(country));
   const normalized = normalizeService(name);
-  const hits = rules.filter(
-    (r) => r.name === normalized && (r.countries === null || r.countries.includes(country)),
-  );
-  return hits.find((r) => r.blocked) ?? hits[0] ?? null;
+  const hits = here.filter((r) => r.name === normalized);
+  if (hits.length > 0) return hits.find((r) => r.blocked) ?? hits[0];
+
+  const base = normalizeService(name.replace(CHANNEL_SUFFIX, ""));
+  if (base === normalized) return null; // not a channel variant of anything
+  return here.find((r) => r.blocked && r.name === base) ?? null;
 }
 
 type ServiceVerdict = "mine" | "blocked" | null;
