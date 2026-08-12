@@ -235,6 +235,13 @@ export interface MovieRec {
    */
   providerSeen?: string[];
   /**
+   * When this device first stamped this film, and so the point from which an arrival can be
+   * believed at all. See `PROVIDER_SETTLE_MS`: TMDB's provider ingest is per-country and lags,
+   * so a single first look is one sample of a feed still filling in, not a picture of what the
+   * film was on.
+   */
+  providerBaselineAt?: number;
+  /**
    * This title's JustWatch node id (`tm1433295`), saved so a repeat top-up costs one request
    * rather than three. Derived and per-device like `providers`, so it is not in the event log.
    */

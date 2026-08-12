@@ -384,6 +384,18 @@ Two settings drive the whole card:
   - A block beats a plain match, so a narrow `-YouTube Free` still overrides a
     broad `YouTube`. Names match loosely — lowercased, punctuation stripped,
     "plus" folded to "+" — so `Disney+` and `Disney Plus` are the same service.
+  - **A block carries to the channel variants of the service it names**, when
+    nothing in the list names the variant itself: `-Plex` also rules out `Plex
+    Channel`, `-HBO Max` also rules out `HBO Max Amazon Channel`. TMDB files each
+    variant as a provider in its own right, so an entry naming the service alone
+    used to miss them — `-Plex@US` left `Plex Channel` counting as a *free* way to
+    watch, which put four catalogue films at the top of Releases on a service that
+    had been ruled out in writing.
+  - **That asymmetry is deliberate and one-directional.** A block only ever
+    removes a way to watch, so guessing wide costs a listing you would not have
+    used anyway; a *positive* is never derived the same way, because claiming
+    providers the list never named is the exact failure that killed substring
+    matching. Reach stays visible.
 
 Then, per country:
 
@@ -406,6 +418,56 @@ stream it — as are physical discs, matched by substring (`DVD`, `BLURAY`,
 `BLU_RAY`, `PHYSICAL`) because the variants multiply and a missed one shows a
 disc as a rental.
 
+## Dating an arrival
+
+`providers` is replaced wholesale on every refresh, so the one fact Releases is
+built on — *this only just turned up* — has to be kept separately.
+`providerSince` maps `"DK:Netflix"` to when the listing was first seen, `0`
+meaning "already there when this film started being tracked". Per-device and
+derived, like `providers` themselves.
+
+**A stamp is an observation, not a date, and the distinction is the whole
+subject.** Everything below exists because the two are easy to confuse, and a
+screen whose job is "what just became watchable" is worthless the moment it
+starts announcing things that did not just happen.
+
+- **An arrival is dated to the previous fetch, never to now.** All that is known
+  is that the listing appeared somewhere between the last look and this one, and
+  the older end is the only end that cannot overstate. Refreshing a library last
+  seen three days ago otherwise stamps everything as arriving *today* (`a4e97de`).
+- **A film's first two days are baseline, whatever it gains** (`SETTLE_MS`). A
+  first look is one instant of a feed that fills in unevenly — TMDB's provider
+  ingest is per-country and lags, which is the reason the JustWatch top-up exists
+  at all — so a country missing from a first fetch is at least as likely to be
+  behind as to be empty. *The Four Seasons* (1981) was baselined **two seconds
+  before it was added**, with TMDB then listing Netflix in US and SE alone; GB, NO
+  and AU filled in that evening and DK the next afternoon, and the film sat at the
+  top of Releases claiming to have arrived yesterday. The window is per record,
+  from its own first stamp, so a library already being tracked is unaffected.
+- **The date shown is the earliest sighting across your countries, not the
+  latest.** The question is when the film became watchable, not when the last of
+  your services got round to carrying it. Taking the most recent made every stamp
+  a ratchet: a film re-dated itself as each slower country was noticed, and the
+  date shown was always whichever country TMDB ingested last.
+- **A baseline `0` therefore wins outright**, and falls back to the film's
+  published streaming or digital date. That is the honest answer — it was already
+  there, nobody watched it arrive — and it is usually the *better* one: for *The
+  Four Seasons* the fallback is TMDB's own `Netflix`-noted digital entry, 9 Aug.
+
+> **Stamps written before the feature existed are not observations.** When
+> `providerSince` shipped it seeded its baseline from providers already cached,
+> and the first refresh afterwards diffed a fresh fetch against a cache of unknown
+> age — writing the whole difference down as arrivals, correctly dated to a fetch
+> that predated the feature. On the live device that was 17 stamps sharing two
+> minutes (2026-08-03 08:27 and 08:28) across unrelated films, five of them still
+> holding the top of Releases nine days later, on the churniest listings TMDB has:
+> Plex Channel, YouTube TV, Apple TV Amazon Channel, fuboTV, SBS On Demand.
+> `cleanProviderSinceBackdates` returns those to `0`, once, per device.
+>
+> The tell was the clustering. Independent arrivals do not share a minute — so if
+> Releases ever fills up again, count the distinct timestamps *before* believing
+> any of them.
+
 ## Gotchas
 
 - **Two devices disagreeing is usually cache age, not a bug.** Check the "checked
@@ -419,6 +481,9 @@ disc as a rental.
   confirmed — so the ↻ is what clears it.
 - **Providers are not in the sync log and should not be.** Syncing them would
   propagate one device's stale answer to a device that had a fresher one.
+- **A film that just appeared in Releases is TMDB catching up more often than it
+  is news.** Check `providerSince` before believing the date: a `0` beside the
+  same service in another country means it was there all along.
 - **A show's providers live on the episodes record**, not the show record.
 - **Shows never call JustWatch.** If a show's providers look wrong, TMDB is the
   only thing to blame and the only thing to fix. Shows therefore never get an

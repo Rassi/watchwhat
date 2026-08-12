@@ -560,6 +560,28 @@ function knownDates(movie: MovieRec): number[] {
  * Rentals are skipped for the same reason they are left out of the service catalogue: a shop
  * carrying a title is not the title becoming watchable.
  */
+
+/**
+ * How long a film's baseline stays open before anything appearing on it counts as an arrival.
+ *
+ * A first look is one instant of a feed that fills in unevenly: TMDB's provider ingest is
+ * per-country and lags, which `where-to-watch.md` documents as the whole reason the JustWatch
+ * top-up exists. So a country missing from a first fetch is at least as likely to be behind as
+ * to be genuinely empty, and dating its catch-up as an arrival invents an event out of the
+ * ingest.
+ *
+ * *The Four Seasons* (1981) is the case that found this: baselined at 18:50:50 on 10 Aug, two
+ * seconds before it was added, with TMDB then listing Netflix in US and SE alone. GB, NO and AU
+ * filled in that evening and DK the next afternoon, and the film sat at the top of Releases
+ * claiming to have arrived yesterday — on a service half the list already had it on.
+ *
+ * Two days, from the shape of the lag rather than a round number, and it costs almost nothing:
+ * a film added today is not one whose arrival you are waiting to hear about. The window is per
+ * record, measured from that record's own first stamp, so a library already being tracked
+ * notices arrivals exactly as before.
+ */
+const SETTLE_MS = 2 * 24 * 3600 * 1000;
+
 function stampProviderSightings(movie: MovieRec): void {
   const countries = watchCountryList();
   /**
@@ -582,9 +604,15 @@ function stampProviderSightings(movie: MovieRec): void {
   const since = movie.providerSince ?? {};
   const live = new Set<string>();
 
+  // Dated to the same end as an arrival, for the same reason: all that is known about the first
+  // stamp is that it happened by the previous fetch.
+  movie.providerBaselineAt ??= arrivedAt || Date.now();
+  const settled = arrivedAt > 0 && arrivedAt - movie.providerBaselineAt >= SETTLE_MS;
+
   for (const cc of countries) {
-    // Never looked here before, so nothing it lists can be said to have arrived.
-    const known = seen.has(cc);
+    // Never looked here before, so nothing it lists can be said to have arrived — and for the
+    // first two days neither can anything else on the film, however often it is looked at.
+    const known = settled && seen.has(cc);
     for (const p of movie.providers?.[cc]?.providers ?? []) {
       if (p.kind === "rent") continue;
       const key = `${cc}:${p.name}`;
@@ -630,7 +658,7 @@ async function saveMovieFields(movie: MovieRec, keys: readonly (keyof MovieRec)[
 /** What a TMDB refresh owns. Everything else on the record belongs to the event log. */
 const TMDB_DERIVED_FIELDS = [
   "poster", "backdrop", "overview", "trailer", "cast", "genres",
-  "providers", "providersVersion", "providerSince", "providerSeen",
+  "providers", "providersVersion", "providerSince", "providerSeen", "providerBaselineAt",
   "digitalRelease", "streamingRelease", "jwNodeId", "topUp", "tmdbFetchedAt",
 ] as const satisfies readonly (keyof MovieRec)[];
 
@@ -665,9 +693,61 @@ export async function seedProviderSince(): Promise<void> {
     // countries that are never read.
     if (movie.providerSince !== undefined && movie.providerSeen !== undefined) continue;
     stampProviderSightings(movie);
-    await saveMovieFields(movie, ["providerSince", "providerSeen"]);
+    await saveMovieFields(movie, ["providerSince", "providerSeen", "providerBaselineAt"]);
   }
   localStorage.setItem(PROVIDER_SINCE_SEEDED_KEY, new Date().toISOString());
+}
+
+const PROVIDER_SINCE_SEEDED_V1_KEY = "watchwhat.providerSinceSeeded";
+const PROVIDER_SINCE_CLEANED_KEY = "watchwhat.providerSinceCleaned";
+
+/**
+ * Retire the arrivals this device recorded for a period it was not actually watching.
+ *
+ * `providerSince` shipped onto a library that already had providers cached, and seeded its
+ * baseline from them. The first real refresh afterwards then diffed a fresh fetch against a
+ * cache of unknown age and wrote the whole difference down as arrivals — dated, correctly, to
+ * the fetch that cache came from, which is *before the feature existed*. On the live device
+ * that is 17 stamps sharing two minutes, 2026-08-03 08:27 and 08:28, across films with nothing
+ * to do with each other; nine days later five of them were still holding the top of Releases.
+ *
+ * `a4e97de` fixed the date those stamps carry. It could not fix the fact that nobody saw the
+ * listings appear, and a date is not an observation.
+ *
+ * So: a stamp from before this record was being watched goes back to `0` — "already there when
+ * tracking began", which is exactly what it was. Two starting points, because a film added
+ * since has its own:
+ *
+ * - **The library's**, when the feature seeded. Nothing before it was witnessed by anybody.
+ * - **The film's**, for one added later — `listedAt`, plus the settle window that did not exist
+ *   when it was stamped. This is what catches *The Four Seasons*, baselined two seconds before
+ *   it went on the list and reporting Denmark's ingest catching up a day later as an arrival.
+ *
+ * Everything after both is left alone, real arrivals included.
+ */
+export async function cleanProviderSinceBackdates(): Promise<void> {
+  if (localStorage.getItem(PROVIDER_SINCE_CLEANED_KEY)) return;
+  const seededAt = Date.parse(
+    localStorage.getItem(PROVIDER_SINCE_SEEDED_V1_KEY) ?? localStorage.getItem(PROVIDER_SINCE_SEEDED_KEY) ?? "",
+  );
+  if (Number.isFinite(seededAt)) {
+    for (const movie of await dbGetAll<MovieRec>("movies")) {
+      const since = movie.providerSince;
+      if (!since) continue;
+      const listed = Date.parse(movie.listedAt ?? "");
+      const from = Number.isFinite(listed) ? Math.max(seededAt, listed + SETTLE_MS) : seededAt;
+      let changed = false;
+      for (const [key, at] of Object.entries(since)) {
+        if (at > 0 && at <= from) [since[key], changed] = [0, true];
+      }
+      // Settled by construction: every record here was being tracked before this pass ran, so
+      // the window in `stampProviderSightings` has nothing left to protect it from. Backdating
+      // the baseline is what keeps a two-day blackout off the whole library.
+      if (movie.providerBaselineAt === undefined) [movie.providerBaselineAt, changed] = [seededAt, true];
+      if (changed) await saveMovieFields(movie, ["providerSince", "providerBaselineAt"]);
+    }
+  }
+  localStorage.setItem(PROVIDER_SINCE_CLEANED_KEY, new Date().toISOString());
 }
 
 const LIST_DATES_SEEDED_KEY = "watchwhat.listDatesSeeded";
