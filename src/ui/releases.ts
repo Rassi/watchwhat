@@ -90,10 +90,19 @@ function availableNow(movie: MovieRec, rules: ServiceRule[], countries: string[]
   }
   if (candidates.length === 0) return null;
 
-  // Most recent first: on two of your services, the later arrival is the news. Then plain
-  // services ahead of resellers — TMDB lists "HBO Max" and "HBO Max Amazon Channel" as separate
-  // providers, and where both are yours the label should name the service you think of it as.
-  candidates.sort((a, b) => b.at - a.at || Number(isReseller(a.name)) - Number(isReseller(b.name)));
+  // **Earliest sighting first**, which is the date being asked for: this section says when the
+  // film became watchable, not when the last of your services got round to carrying it. Taking
+  // the most recent instead made every stamp a ratchet — a film re-dated itself as each slower
+  // country's listing was noticed, and the date shown was always whichever country TMDB had
+  // ingested last. *The Four Seasons* read "Netflix · yesterday" two days after it was added
+  // because Denmark's listing was the last of six to appear.
+  //
+  // A baseline `0` therefore wins outright, and should: it means the film was already on that
+  // service when tracking began, so nothing arrived and the published date below is the honest
+  // stand-in. Then plain services ahead of resellers — TMDB lists "HBO Max" and "HBO Max Amazon
+  // Channel" separately, and where both are yours the label should name the one you think of it
+  // as. Ties keep settings order, so the first watch country wins a genuine tie.
+  candidates.sort((a, b) => a.at - b.at || Number(isReseller(a.name)) - Number(isReseller(b.name)));
   const provider = candidates[0].name;
   const stamped = candidates[0].at;
   if (stamped > 0) return { movie, provider, at: stamped, observed: true };
