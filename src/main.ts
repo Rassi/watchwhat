@@ -16,7 +16,6 @@ import { dbDelete } from "./data/db";
 import { purgeTraktRemnants, seedCloudStamps } from "./data/settings";
 import { migrateMovieListsToSettings, seedListAddedAt, seedProviderSince, trimProviderCountries } from "./data/sync";
 import { installSyncTriggers, syncEvents } from "./data/replay";
-import { installResumeWatch, maybeRecordThisLaunch, noteLaunch } from "./ui/debugflicker";
 
 applyTheme();
 stripReloadParam();
@@ -56,15 +55,6 @@ registerRoute(releasesRoute);
 registerRoute(discoverRoute);
 registerRoute(searchRoute);
 registerRoute(settingsRoute);
-
-// Temporary, with the rest of the flicker investigation. The launch note is unconditional — it is
-// how a web process iOS killed and restarted becomes visible at all. Before the router, so the
-// very first render is inside any recording.
-noteLaunch();
-maybeRecordThisLaunch();
-// And the other way back in: iOS often suspends a home-screen app rather than killing it, so
-// reopening after a night resumes this very page and never runs any of the above.
-installResumeWatch();
 
 startRouter(document.getElementById("app")!);
 

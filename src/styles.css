@@ -618,18 +618,6 @@ a.btn {
   text-decoration: none;
 }
 
-/* Temporary, with the flicker recording it belongs to. */
-.flicker-report:not(:empty) {
-  margin-top: 12px;
-  padding: 10px;
-  border-radius: 8px;
-  background: var(--bg-raised);
-  color: var(--text);
-  font: 11px/1.4 ui-monospace, Menlo, monospace;
-  white-space: pre;
-  overflow-x: auto;
-}
-
 .btn.primary {
   background: var(--accent);
   color: #000;

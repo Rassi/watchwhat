@@ -106,6 +106,7 @@ Design notes worth reading before changing anything in these areas:
 [sync-plan.md](docs/sync-plan.md),
 [shared-title-cache.md](docs/shared-title-cache.md),
 [dependencies.md](docs/dependencies.md) (the measured API load and the TTLs
-governing it).
+governing it), [poster-flicker.md](docs/poster-flicker.md) (an unsolved iOS bug,
+and what four recordings ruled out).
 
 This product uses the TMDB API but is not endorsed or certified by TMDB.

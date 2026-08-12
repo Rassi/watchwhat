@@ -380,22 +380,8 @@ export async function fetchMovieSummary(tmdbId: number): Promise<TmdbMovieSummar
   };
 }
 
-/**
- * Temporary, with the flicker investigation: forces genuinely cold poster loads.
- *
- * A twelve-hour-old open finds the HTTP cache purged as well as the library stale, and ageing a
- * timestamp cannot age a cache — every simulated run so far had its posters served warm and
- * finished before anything could flicker. Set by ui/debugflicker.ts, empty in normal use.
- */
-let posterBuster = "";
-
-export function setPosterBuster(value: string): void {
-  posterBuster = value;
-}
-
 export function posterUrl(path: string | null | undefined, size = "w342"): string | null {
-  if (!path) return null;
-  return posterBuster ? `${IMG}${size}${path}?cb=${posterBuster}` : `${IMG}${size}${path}`;
+  return path ? `${IMG}${size}${path}` : null;
 }
 
 export function stillUrl(path: string | null | undefined, size = "w300"): string | null {

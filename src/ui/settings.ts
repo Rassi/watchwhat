@@ -12,15 +12,6 @@ import { flush, getCursor, pendingCount, setCursor } from "../data/outbox";
 import { syncEvents, syncNow } from "../data/replay";
 import { syncConfigured, testConnection } from "../api/syncserver";
 import { reconcileSettings } from "../data/cloudsettings";
-import {
-  armColdSimulation,
-  armForRealOpen,
-  armedMode,
-  formatReport,
-  lastReport,
-  libraryState,
-  reportAsJson,
-} from "./debugflicker";
 
 function field(labelText: string, input: HTMLInputElement): HTMLElement {
   return el("div", { class: "field" }, el("label", {}, labelText), input);
@@ -774,82 +765,6 @@ export const settingsRoute: Route = {
       reloadBtn,
     );
 
-    // --- Poster flicker recording ---
-    // Temporary; goes when the flicker is understood, along with src/ui/debugflicker.ts.
-    // Deliberately instruments the real app rather than a test page: a standalone page has to
-    // guess which ingredient of a stale open matters, and the first two guesses each removed the
-    // one that did.
-    const flickerStatus = el("p", {}, "");
-    const flickerOut = el("pre", { class: "flicker-report" });
-    const showLast = (): void => {
-      const report = lastReport();
-      flickerOut.textContent = report ? `${report.verdict}\n\n${formatReport(report)}` : "";
-    };
-    // Label from the stored flag, not from the click: leaving Settings and coming back rebuilds
-    // this card, and a plain re-enabled button reads as "the arming was lost" when it is still on.
-    // Left enabled all the same, because re-arming resets the clock and ages the library again.
-    const armedAlready = armedMode() === "real";
-    const realBtn = el(
-      "button",
-      { class: "btn primary" },
-      armedAlready ? "Armed — tap to re-arm" : "Arm for a real open",
-    );
-    realBtn.addEventListener("click", () => {
-      void (async () => {
-        realBtn.disabled = true;
-        const n = await armForRealOpen();
-        flickerStatus.textContent =
-          `Armed, and ${n} shows aged so there is certain to be a refresh waiting. Now just leave ` +
-          `the app alone for 6+ hours — don't force-quit it, close it however you normally do. ` +
-          `Coming back after that gap records itself and disarms, whether iOS reloaded the page ` +
-          `or only resumed it. Opening it sooner is harmless but restarts the 6 hours.`;
-      })();
-    });
-    const coldBtn = el("button", { class: "btn" }, "Or fake one now");
-    coldBtn.addEventListener("click", () => {
-      void (async () => {
-        coldBtn.disabled = true;
-        const n = await armColdSimulation();
-        flickerStatus.textContent =
-          `${n} shows aged, and the next launch loads every poster on a cache-busted URL so they ` +
-          `arrive cold. Force-quit the app and open it again, wait 30s, then come back here.`;
-      })();
-    });
-    const copyBtn = el("button", { class: "btn" }, "Copy recording");
-    copyBtn.addEventListener("click", () => {
-      const report = lastReport();
-      if (!report) return void toast("Nothing recorded yet");
-      void navigator.clipboard.writeText(reportAsJson(report)).then(
-        () => toast("Recording copied"),
-        () => toast("Could not copy", "error"),
-      );
-    });
-    const flickerCard = el(
-      "div",
-      { class: "card" },
-      el("h2", {}, "Poster flicker recording"),
-      el(
-        "p",
-        {},
-        "A 12-hour-old open is three things at once: the library is stale, the process is cold, " +
-          "and iOS has purged the HTTP cache. The last one can't be faked by ageing a timestamp — " +
-          "the previous attempt had all 80 API calls finishing in 250ms off the cache, with no " +
-          "window for anything to go wrong in. So either wait for a real one, or fake the cold " +
-          "cache with busted URLs. Either way: force-quit, reopen, wait 30s, come back here.",
-      ),
-      flickerStatus,
-      el("div", { class: "btn-row" }, realBtn, coldBtn, copyBtn),
-      flickerOut,
-    );
-    void libraryState().then((s) => {
-      if (flickerStatus.textContent) return;
-      const mode = armedMode();
-      flickerStatus.textContent = mode
-        ? `Armed (${mode === "real" ? "waiting for a genuinely stale open" : "cold-cache fake"}) — ${s}.`
-        : `Right now: ${s}.`;
-    });
-    showLast();
-
     // Ordered by how often a card is actually wanted, not by how fundamental it is.
     // Reload is the most-used control on this screen — it is the only way to pick up
     // a new build on an iPhone home-screen app — and the credentials are the least
@@ -863,7 +778,6 @@ export const settingsRoute: Route = {
       syncCard,
       transferCard,
       dataCard,
-      flickerCard,
     );
   },
 };
