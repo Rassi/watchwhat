@@ -1,5 +1,5 @@
 import type { Route } from "../router";
-import { el, posterCard, sectionHeader } from "./components";
+import { el, posterCard, renderGate, sectionHeader } from "./components";
 import { getSettings } from "../data/settings";
 import { ensureImages, ensureProgress, loadLibrary } from "../data/sync";
 import { isEnded, type Library, type ProgressRec, type ShowRec, type WatchedRec } from "../data/model";
@@ -131,6 +131,8 @@ export const watchlistRoute: Route = {
     // behaviour back again. Survives the re-renders that lazy loads trigger.
     let showOldStale = false;
 
+    const changed = renderGate();
+
     const renderContent = (): void => {
       const cutoff = Date.now() - getSettings().staleDays * 24 * 3600 * 1000;
 
@@ -156,6 +158,20 @@ export const watchlistRoute: Route = {
         .sort((a, b) => (b.listedAt ?? "").localeCompare(a.listedAt ?? "")) // newest additions first
         .map((e) => lib.shows.get(e.traktId))
         .filter((s): s is ShowRec => s !== undefined);
+
+      // Everything the cards draw, plus the fold state. `ensureProgress` and `ensureImages` call
+      // back per show, and most of those calls leave this screen identical — repainting anyway is
+      // what turns a background refresh into a flickering grid. See docs/poster-flicker.md.
+      const rowKey = (r: RowData): string =>
+        `${r.show.traktId}:${r.show.poster ?? ""}:${r.completed}/${r.aired}:${isEnded(r.show) ? 1 : 0}` +
+        `:${isNewBadge(r) ? 1 : 0}:${r.progress?.nextEpisode?.season ?? ""}-${r.progress?.nextEpisode?.number ?? ""}`;
+      const signature = [
+        watchNext.map(rowKey).join(","),
+        stale.map(rowKey).join(","),
+        notStarted.map((s) => `${s.traktId}:${s.poster ?? ""}`).join(","),
+        showOldStale ? "open" : "folded",
+      ].join("|");
+      if (!changed(signature)) return;
 
       grids.replaceChildren();
 

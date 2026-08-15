@@ -108,16 +108,30 @@ blank on arrival. It cannot explain five blinks over several seconds.
 ### The amplifier is the rebuild storm
 
 `renderContent` on Releases is called on every `ensureMovieDetails` batch, and
-`batchNotify` throttles that only to one per 300ms. Measured against a stale
-library: **~50 full grid rebuilds in 14 seconds** (109 clear-mutations), each one
+`batchNotify` throttled that only to one per 300ms. Measured against a stale
+library with a cold API: **19 full grid rebuilds in 20 seconds**, each one a
 `replaceChildren` followed by rebuilding every card. The library screen does the
 same on `ensureProgress`.
 
-Whatever makes a poster take a moment to paint, doing it fifty times in fourteen
-seconds is what turns it into a visible flicker — and it fits the shape of the
-symptom, which stops the moment the refresh does. Cutting the rebuild count is
-worth doing on its own terms and does not depend on knowing the paint-level
+(An earlier pass put this at "about fifty". That counted MutationRecords with any
+removal, and moving a cached `<img>` into its new card emits one of those from
+the old parent — so it was counting posters, not renders. Count records that
+remove several children at once and add none.)
+
+Whatever makes a poster take a moment to paint, doing it nineteen times in
+twenty seconds is what turns it into a visible flicker — and it fits the shape of
+the symptom, which stops the moment the refresh does. Cutting the rebuild count
+is worth doing on its own terms and does not depend on knowing the paint-level
 cause.
+
+**Cut on 2026-08-15.** Each grid now describes what it is about to draw and
+draws it only if that description changed (`renderGate` in `ui/components.ts`),
+and `batchNotify`'s throttle went from 300ms to 1s. Same measurement as above,
+same 100 API calls: **19 rebuilds → 1**. Updates still land — blanking 24
+posters and reloading the library filled them all back in through 7 coalesced
+repaints. Whether this removes the flicker is unknown until it is next seen;
+if it does not, the amplifier is gone and the paint-level cause is still there
+to find.
 
 ## Still open, and worth suspecting
 

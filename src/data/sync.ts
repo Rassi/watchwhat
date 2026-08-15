@@ -230,17 +230,26 @@ async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
 
 /**
  * Batches `onUpdate` calls from a bulk fetch: the first result repaints
- * immediately, then at most one repaint per 300ms, plus a final one when the
- * batch ends. Views rebuild their whole grid per update, so notifying every few
- * items made a big refresh (a week-stale library) janky on a phone.
+ * immediately, then at most one repaint per `NOTIFY_MS`, plus a final one when
+ * the batch ends. Views rebuild their whole grid per update, so notifying every
+ * few items made a big refresh (a week-stale library) janky on a phone.
  */
+/**
+ * Was 300ms, which against a stale library with a cold API worked out at 19 full grid rebuilds
+ * in 20 seconds — every one of them clearing the grid and rebuilding every card. The poster
+ * flicker lasts precisely as long as that churn does, whatever paints it. A second still shows a
+ * refresh arriving progressively; nothing waits on it, since `done()` always paints the end
+ * state. See docs/poster-flicker.md.
+ */
+const NOTIFY_MS = 1000;
+
 function batchNotify(onUpdate?: () => void): { tick: () => void; done: () => void } {
   let pending = 0;
   let lastAt = 0;
   return {
     tick: () => {
       pending++;
-      if (Date.now() - lastAt < 300) return;
+      if (Date.now() - lastAt < NOTIFY_MS) return;
       lastAt = Date.now();
       pending = 0;
       onUpdate?.();

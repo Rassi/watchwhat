@@ -19,7 +19,7 @@
  */
 
 import type { Route } from "../router";
-import { el, posterCard, sectionHeader } from "./components";
+import { el, posterCard, renderGate, sectionHeader } from "./components";
 import { ensureMovieDetails, loadMovies } from "../data/sync";
 import { isTrackedMovie, type MovieRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
@@ -204,11 +204,16 @@ export const releasesRoute: Route = {
         note,
       });
 
+    // Everything a card on this screen draws. A refresh that touches a film not listed here, or
+    // touches one in a way that changes nothing visible, must not repaint the grid.
+    const cardKey = (movie: MovieRec, note: string): string =>
+      `${movie.traktId}:${movie.poster ?? ""}:${watchBadge(movie.providers) ?? ""}:${note}`;
+    const changed = renderGate();
+
     const renderContent = (): void => {
       const rules = parseServiceRules(getSettings().myServices);
       const countries = watchCountries();
       const waiting = pending(movies);
-      content.replaceChildren();
 
       const arrived = waiting
         .map((m) => availableNow(m, rules, countries))
@@ -231,6 +236,19 @@ export const releasesRoute: Route = {
         .map((m) => ({ movie: m, est: estimateRelease(movies.values(), m, "stream") }))
         .filter((row): row is { movie: MovieRec; est: ReleaseEstimate } => row.est !== null)
         .sort((a, b) => Number(a.est.overdue) - Number(b.est.overdue) || a.est.at - b.est.at);
+
+      const expected = estimated.filter((r) => !r.est.overdue);
+      const overdue = estimated.filter((r) => r.est.overdue);
+
+      const signature = [
+        arrived.map((a) => cardKey(a.movie, availableLabel(a))).join(","),
+        soon.map((b) => cardKey(b.movie, b.label)).join(","),
+        expected.map((r) => cardKey(r.movie, estimateLabel(r.est))).join(","),
+        overdue.map((r) => cardKey(r.movie, "no date announced")).join(","),
+      ].join("|");
+      if (!changed(signature)) return;
+
+      content.replaceChildren();
 
       if (arrived.length > 0) {
         content.append(
@@ -263,7 +281,6 @@ export const releasesRoute: Route = {
       }
 
       if (estimated.length > 0) {
-        const [expected, overdue] = [estimated.filter((r) => !r.est.overdue), estimated.filter((r) => r.est.overdue)];
         if (expected.length > 0) {
           content.append(
             sectionHeader(`Expected (${expected.length})`, {

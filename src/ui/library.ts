@@ -1,7 +1,7 @@
 /** All shows, grouped like TV Time's "All shows" page — purely from the local cache. */
 
 import { replaceHash, type Route } from "../router";
-import { el, posterCard, sectionHeader } from "./components";
+import { el, posterCard, renderGate, sectionHeader } from "./components";
 import { ensureImages, ensureProgress, loadLibrary } from "../data/sync";
 import { isEnded, type Library, type ShowRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
@@ -130,6 +130,8 @@ export const libraryRoute: Route = {
       });
     };
 
+    const changed = renderGate();
+
     const renderContent = (): void => {
       const buckets = new Map<Bucket, ShowRec[]>();
       for (const show of lib.shows.values()) {
@@ -137,6 +139,26 @@ export const libraryRoute: Route = {
         if (!bucket) continue;
         (buckets.get(bucket) ?? buckets.set(bucket, []).get(bucket)!).push(show);
       }
+
+      // Everything the cards below draw. `ensureProgress` calls back once per show it rebuilds,
+      // and most of those leave this screen looking identical — the progress bar only moves when
+      // the counts do. See docs/poster-flicker.md.
+      const signature = ORDER.map((bucket) => {
+        const shows = buckets.get(bucket);
+        if (!shows?.length) return "";
+        return shows
+          .map((show) => {
+            const progress = lib.progress.get(show.traktId);
+            // `lastWatchedAt` is in here for the Finished section alone, which sorts by it: a
+            // rewatch moves a card without touching any count the rest of this key would catch.
+            return (
+              `${show.traktId}:${show.poster ?? ""}:${progress?.completed ?? -1}/${progress?.aired ?? -1}` +
+              `:${isEnded(show) ? 1 : 0}:${lib.watched.get(show.traktId)?.lastWatchedAt ?? ""}`
+            );
+          })
+          .join(",");
+      }).join("|");
+      if (!changed(signature)) return;
 
       content.replaceChildren();
       burgerMenu.replaceChildren();

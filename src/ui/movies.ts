@@ -2,7 +2,7 @@
  * the watchlist or any custom personal list. */
 
 import type { Route } from "../router";
-import { el, posterCard, sectionHeader } from "./components";
+import { el, posterCard, renderGate, sectionHeader } from "./components";
 
 import { ensureMovieDetails, loadMovieLists, loadMovies } from "../data/sync";
 import { isTrackedMovie, type MovieListRec, type MovieRec } from "../data/model";
@@ -57,14 +57,44 @@ export const moviesRoute: Route = {
     const nothingYet = (): HTMLElement =>
       el("div", { class: "empty-note" }, "No movies here yet — import your data from Settings, or add some via Search.");
 
+    // Everything a card here draws.
+    const movieKey = (m: MovieRec): string =>
+      `${m.traktId}:${m.poster ?? ""}:${watchBadge(m.providers) ?? ""}:${m.title}:${m.year ?? ""}`;
+    const changed = renderGate();
+
     const renderContent = (): void => {
       const all = [...movies.values()];
+
+      // What this screen is about to show, worked out before anything is torn down. The refresh
+      // behind it walks every tracked film — some three hundred — while the screen displays a few
+      // dozen, so most of its callbacks change nothing here. Repainting on those anyway is what
+      // makes a background refresh flicker. See docs/poster-flicker.md.
+      const activeList: MovieListRec | undefined = view === "watched" ? undefined : findList(listKey);
+      const watched = all
+        .filter((m) => m.plays > 0)
+        .sort((a, b) => (b.lastWatchedAt ?? "").localeCompare(a.lastWatchedAt ?? ""));
+      const shown =
+        view === "watched"
+          ? watched
+          : activeList
+            ? all
+                .filter((m) => m.customLists?.includes(activeList.traktId) && m.plays === 0)
+                .sort((a, b) => listedOnAt(b, activeList.traktId).localeCompare(listedOnAt(a, activeList.traktId)))
+            : all.filter((m) => m.onWatchlist && m.plays === 0).sort((a, b) => watchlistedAt(b).localeCompare(watchlistedAt(a)));
+      // The picker's counts are on screen too, and they move independently of the grid.
+      const pickerCounts =
+        view === "watched"
+          ? ""
+          : [
+              all.filter((m) => m.onWatchlist && m.plays === 0).length,
+              ...lists.map((l) => all.filter((m) => m.customLists?.includes(l.traktId) && m.plays === 0).length),
+            ].join("/");
+      const signature = [view, listKey ?? "", pickerCounts, shown.map(movieKey).join(",")].join("|");
+      if (!changed(signature)) return;
+
       content.replaceChildren();
 
       if (view === "watched") {
-        const watched = all
-          .filter((m) => m.plays > 0)
-          .sort((a, b) => (b.lastWatchedAt ?? "").localeCompare(a.lastWatchedAt ?? ""));
         if (watched.length > 0) {
           content.append(sectionHeader(`Watched (${watched.length})`), el("div", { class: "poster-grid" }, ...watched.map((m) => card(m))));
         } else {
@@ -74,8 +104,6 @@ export const moviesRoute: Route = {
       }
 
       // Watch-list view: picker between the watchlist and custom lists.
-      const activeList: MovieListRec | undefined = findList(listKey);
-
       if (lists.length > 0) {
         const select = el("select", { class: "season-select list-select" });
         const optionFor = (value: string, label: string, count: number): HTMLElement => {
@@ -100,9 +128,7 @@ export const moviesRoute: Route = {
       }
 
       if (!activeList) {
-        const watchlist = all
-          .filter((m) => m.onWatchlist && m.plays === 0)
-          .sort((a, b) => watchlistedAt(b).localeCompare(watchlistedAt(a)));
+        const watchlist = shown;
         if (watchlist.length > 0) {
           content.append(sectionHeader(`Want to watch (${watchlist.length})`), el("div", { class: "poster-grid" }, ...watchlist.map((m) => card(m))));
         } else {
@@ -114,9 +140,7 @@ export const moviesRoute: Route = {
         // Custom lists hide watched movies (same rule as the watchlist); the movie
         // stays on the list, so unmarking it brings it back here.
         const onList = all.filter((m) => m.customLists?.includes(activeList.traktId));
-        const items = onList
-          .filter((m) => m.plays === 0)
-          .sort((a, b) => listedOnAt(b, activeList.traktId).localeCompare(listedOnAt(a, activeList.traktId)));
+        const items = shown;
         if (items.length > 0) {
           content.append(
             sectionHeader(`${activeList.name} (${items.length})`),

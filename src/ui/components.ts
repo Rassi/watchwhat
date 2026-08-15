@@ -85,6 +85,29 @@ export function infoButton(title: string, points: string[]): HTMLElement {
   return button;
 }
 
+/**
+ * A repaint gate for the grids that re-render from a background refresh.
+ *
+ * Those refreshes call back once per batch, and each call clears the grid and rebuilds every
+ * card. Most of the calls change nothing you can see: a Releases refresh walks ~300 tracked
+ * films while the screen is showing 26 of them, so the great majority of batches leave the
+ * rendered output identical. Measured against a stale library with a cold API, Releases rebuilt
+ * itself 19 times in 20 seconds; with this gate, once. The poster flicker, whatever paints it,
+ * lasts exactly as long as that churn does. See docs/poster-flicker.md.
+ *
+ * So each screen describes what it is about to draw, and draws it only if that description
+ * changed. The signature has to cover everything a card renders — a poster arriving mid-refresh
+ * is precisely the update worth painting — and nothing it doesn't, or the gate opens for free.
+ */
+export function renderGate(): (signature: string) => boolean {
+  let last: string | null = null;
+  return (signature: string): boolean => {
+    if (signature === last) return false;
+    last = signature;
+    return true;
+  };
+}
+
 export interface PosterCardOpts {
   title: string;
   href: string;
