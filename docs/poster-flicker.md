@@ -2,7 +2,13 @@
 
 Reopening the home-screen app after a night away, the posters that were already
 on screen blink out and come back. Seen by eye many times; never once caught by
-instrumentation. **Unresolved, and dormant since roughly 2026-08-08.**
+instrumentation. **Unresolved.**
+
+**It is not an iOS problem.** On 2026-08-15 it happened in desktop Chrome, in a
+tab that had been open since the 12th, on navigating to `#/releases`. Same
+picture: posters out for a few seconds, five or so blinks, text and layout
+untouched, then all back at once. Everything below about iOS still holds, but
+the cause has to be something both engines do.
 
 This page exists because the harness that chased it was deleted on 2026-08-12
 (`src/ui/debugflicker.ts`, its Settings card, `setPosterBuster` in
@@ -65,6 +71,54 @@ conditional revalidation going to the network cheaply, not cache hits. The
 posters were warm; the API traffic probably was not. A binary warm/cold flag
 hid that distinction.
 
+## The desktop sighting, and what it settled (2026-08-15)
+
+Caught in a tab that could be inspected while it was still there. Two readings
+from it, both of which narrow the field considerably:
+
+- **Coming back cost nothing.** The last request to `image.tmdb.org` was 164
+  seconds before the posters returned. Nothing was re-fetched.
+- **The DOM never showed it.** All 26 posters read `complete: true`,
+  `naturalWidth: 342`, full height, while the screen showed nothing. This is why
+  four recordings found nothing: the harness watched `complete && naturalWidth >
+  0`, and both stay true straight through a blank. **Any future instrument that
+  reads those two properties is measuring the wrong thing.**
+
+So the bytes are held, the elements are correct, and the pixels are absent. That
+is a paint or decode failure, not a loading one.
+
+### The reuse cache is not the cause, though it is a real fragility
+
+Suspect number one below can now be retired as the explanation, having been
+tested directly. With the cache deliberately shrunk to 10 entries, every rebuild
+recreated the whole visible grid — 104 fresh nodes against 26 — so eviction does
+force recreation, and a recreated node must decode before it paints. But under
+the real conditions:
+
+- 541 distinct poster URLs in one session, comfortably past `POSTER_IMG_LIMIT`,
+  so the cache *was* evicting;
+- then a Releases refresh that rebuilt the grid ~50 times in 14 seconds;
+- **fresh nodes: 26, once, on the first render. Zero across the ~50 rebuilds
+  that followed.**
+
+Once the visible posters are re-created they are the most recently used, and
+nothing evicts them again while the storm runs. Eviction can explain a single
+blank on arrival. It cannot explain five blinks over several seconds.
+
+### The amplifier is the rebuild storm
+
+`renderContent` on Releases is called on every `ensureMovieDetails` batch, and
+`batchNotify` throttles that only to one per 300ms. Measured against a stale
+library: **~50 full grid rebuilds in 14 seconds** (109 clear-mutations), each one
+`replaceChildren` followed by rebuilding every card. The library screen does the
+same on `ensureProgress`.
+
+Whatever makes a poster take a moment to paint, doing it fifty times in fourteen
+seconds is what turns it into a visible flicker — and it fits the shape of the
+symptom, which stops the moment the refresh does. Cutting the rebuild count is
+worth doing on its own terms and does not depend on knowing the paint-level
+cause.
+
 ## Still open, and worth suspecting
 
 - **The poster reuse cache may be causing what it prevents.** `posterImgs` in
@@ -82,8 +136,32 @@ hid that distinction.
 
 ## If it comes back
 
-Record on `visibilitychange`, not on launch. Fake the cold cache rather than
-waiting for one. Measure the reuse cache after heavy browsing, not on a fresh
-home screen. And check `decodeMs` first — it is one number, it needs no memory
-API, and it separates "the bytes were re-fetched" from "the bitmap was thrown
-away" on its own.
+`decodeMs` on an already-loaded, on-screen poster is the one measurement left
+that can see this, because the loading-level ones provably cannot. Sample it a
+few times a second **in a foregrounded tab** — a backgrounded one does not paint,
+Chrome does not run `requestAnimationFrame` in it, and `decode()` there tells you
+nothing. That constraint is why the desktop sighting could not be reproduced
+under automation: the driven tab is never the focused one.
+
+The console snippet for a real tab, which needs no build change:
+
+```js
+window.__flick = { log: [], seen: new WeakSet() };
+setInterval(async () => {
+  const imgs = [...document.querySelectorAll('img.poster')];
+  let fresh = 0;
+  for (const i of imgs) if (!__flick.seen.has(i)) { __flick.seen.add(i); fresh++; }
+  const v = imgs.filter(i => { const r = i.getBoundingClientRect();
+    return r.bottom > 0 && r.top < innerHeight && i.complete && i.naturalWidth > 0; }).slice(0, 3);
+  if (!v.length) return;
+  const t = performance.now();
+  await Promise.all(v.map(i => i.decode().catch(() => {})));
+  const ms = Math.round(performance.now() - t);
+  if (ms > 20 || fresh) __flick.log.push([new Date().toLocaleTimeString(), 'decode=' + ms, 'fresh=' + fresh]);
+}, 250);
+```
+
+A spike with `fresh=0` means the bitmap was thrown away and rebuilt from bytes
+already held. A spike with `fresh>0` means the reuse cache evicted the node —
+back to the section above, and check how many distinct posters the session has
+been through.
