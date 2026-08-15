@@ -10,7 +10,7 @@ It replaces two Trakt pages that went away with the API — `/discover` and
 score to weed out the bad ones. What follows is mostly the story of why that
 filter could not be rebuilt, and what stands in its place.
 
-## The two views
+## The three views
 
 **POPULAR** is three queries merged, deduplicated and ranked together:
 
@@ -23,6 +23,10 @@ filter could not be rebuilt, and what stands in its place.
 Three requests on first load, one per *Load more* — only the first query
 paginates. The other two are single-page by nature: trending is a chart of twenty,
 and the forward window holds four titles worth showing.
+
+**NEW** is the same window read the other way round — not what is big, but what
+just arrived, week by week. Two queries per week, and a quality cut. It has its
+own section below.
 
 **FOR YOU** asks `/movie/{id}/recommendations` about your twelve most recently
 watched films and ranks whatever keeps coming back, count first and TMDB's score
@@ -68,6 +72,110 @@ Nothing on this screen is written to IndexedDB. These are other people's films
 until you put one on a list, and caching them would push every title you scrolled
 past once into the sync log and every export.
 
+## NEW, and why it is not POPULAR sorted differently
+
+Added 2026-08-15. POPULAR answers "what is worth watching that reached home
+lately"; NEW answers "what arrived, most recent first". They read the same window
+and share the same base query, and everything below is what makes the second
+question harder than it sounds.
+
+### There is no way to sort by, or even read, the date a film reached home
+
+`sort_by` offers `primary_release_date` — the cinema date — and nothing else about
+dates. That much was already known. What was **wrong** in an earlier draft of this
+file, and is worth stating plainly because it looks so plausible: setting `region`
+does *not* make the response report the date it matched on.
+
+Measured 2026-08-15 over 294 films. For 21 of them the returned `release_date` is
+not the day the window caught:
+
+| Film | Matched | `release_date` says | US release types |
+|---|---|---|---|
+| Michael | 10 Aug | 9 June | theatrical 20 Apr, digital 9 June, **TV 10 Aug** |
+| Five Nights at Freddy's 2 | 3 Aug | 23 Dec 2025 | digital 23 Dec 2025 |
+| A Poet | 7 Aug | 24 Mar | digital 24 Mar |
+
+So the hit reports the film's own US release while the *filter* matched a later
+digital or TV listing. Ordering by arrival cannot come from sorting, and cannot
+come from reading the hits. **It can only come from the question**: whatever
+period you ask about is the only thing you know about the films that come back.
+
+### A week per question, asked twice
+
+The honest build is a query per day, walking backwards — exact to the day, seven
+requests a week. The cheap build is one query per week, which loses the day but
+costs one. NEW does neither quite: **one week per window, asked twice**, sorting
+`popularity.desc` and then `vote_count.desc`.
+
+The second sort is the whole trick. Ranked by attention, a week's page of twenty
+is the loud films; ranked by vote count, it is the ones that had a cinema run.
+Against a full day-by-day walk of the same three weeks as ground truth:
+
+| | Requests | Films after the cut |
+|---|---|---|
+| Day-walk, 21 days | 21 | 40 |
+| Weekly windows, two sorts | 6 | 40 |
+
+**Recall was 40 of 40.** Nothing was lost but the ordering inside a week, which is
+why the screen groups by week — *This week*, *Last week*, *Week of 26 July* — and
+ranks by popularity within one. Two weeks on first load, one per *Load more*, out
+to a quarter.
+
+### The quality cut, and why a vote floor is right here and wrong on POPULAR
+
+A window of US digital releases is **299 films over three weeks, median vote count
+zero**. Most never saw a cinema: wrestling cards, TV movies, films with a poster
+and eight votes. Sorted by date rather than by attention, they are the whole
+screen. A cut is not optional here the way it is on POPULAR, where popularity
+already sinks them.
+
+The rule is `(popularity >= 10 OR votes >= 100)`, vetoed by
+`votes >= 100 AND score < 6.0`. 299 films become 40.
+
+**This contradicts "a vote floor is an age filter" above, and both are true.** That
+warning is about films new *in cinemas*, which have had no time to gather votes. A
+film reaching home has usually finished a theatrical run months earlier and
+arrives already rated — *Michael* lands with 4 008 votes at 8.7, *Demon Slayer*
+with 1 831, *Supergirl* with 1 838. On this window a vote count is not a proxy for
+age; it is a proxy for **having had a cinema release at all**.
+
+Which is why it is an `OR` and not an `AND`:
+
+- **Popularity** catches what has just landed and is being looked at before anyone
+  has voted — *Borderline* at 10 votes, which any vote floor would have cut.
+- **Votes** catch the film with a real audience and no buzz — *A Poet*, 8.8 from
+  117 votes at popularity 3.4, invisible to any attention-based cut.
+
+The score is a **veto, never an entry ticket**, and only where enough people voted
+for it to mean anything. It fires on three films in three weeks — *Winnie-the-Pooh:
+Blood and Honey 2* (5.8), *Bambi: The Reckoning* (5.8), *Peter Pan's Neverland
+Nightmare* (5.7) — which is precisely the category it exists for. A low score on
+four votes is not evidence and is left alone.
+
+What none of this can do is judge a film nobody has watched yet. A few weak titles
+ride in on popularity alone, and that is the ceiling: on a screen about the last
+seven days, there is no source — TMDB, Rotten Tomatoes or otherwise — that has an
+opinion yet.
+
+### What was considered and not built
+
+- **JustWatch's `newTitles(country:, date:, filter:)`**, which is the feed behind
+  their own New page and the only source that knows *"landed on a service in
+  Denmark on this date"* — real arrivals, per country, per day, with `tmdbId`,
+  poster and provider attached, and the Worker already proxies arbitrary GraphQL
+  so it would work deployed. Rejected on dependency rather than on quality: it is
+  an unofficial API already carrying the near-release provider top-ups, which
+  matter more, and a browse feed would multiply the calls made against it. It is
+  also the wrong question — see below.
+- **The [Streaming Availability API](https://www.movieofthenight.com/about/api)**
+  (`/changes?change_type=new`), the licensed version of the same thing. Another
+  key, another proxy route, 100 requests/day free.
+- **Danish arrivals.** NEW is dated against **US** releases, deliberately. Films
+  reach home there first and most of the services in use are US ones, so "new" in
+  Denmark would mean weeks late. `watchCountries` was reordered to put US first at
+  the same time — its first entry is the primary region, which is what the *On my
+  services* filter asks about.
+
 ## Why popularity, and nothing else
 
 Every filter this screen started with was a proxy for "is this worth my time", and
@@ -78,6 +186,11 @@ few of them however big it is — which is exactly wrong on a screen about films
 three weeks old. `vote_count.gte=100` was cutting *Borderline* at 10 votes and
 *The Debt Collector* at 55, both of which TMDB's own popularity put inside the top
 twenty of the month.
+
+> Narrower than it reads, and NEW relies on the exception: this holds for a film
+> that has *just* come out, not for one that reached home after a cinema run and
+> arrives with thousands of votes already. A vote floor used **as an OR alongside
+> popularity** rather than as a gate is sound — see the NEW section above.
 
 **A score floor hides the small films.** TMDB's score is its own users voting
 0–10, and it is the *only* score TMDB publishes — nothing from IMDb, Rotten
@@ -154,10 +267,13 @@ before it streamed. Asking day by day and walking backwards *does* give true
 digital order, and was built and then deleted — it cost one request per day of
 window for an ordering nobody had asked for.
 
-**Discover responses carry no release dates.** Saying *when* an upcoming film
-lands costs a `/release_dates` request per film — twenty extra calls to turn
-"Coming soon" into "Coming 10 Aug". Not worth it; the film's own page has the
-date.
+**Discover responses carry no *usable* release dates.** There is a `release_date`
+on every hit, and setting `region` genuinely changes what it holds — but it is the
+film's own US release, not the digital or TV listing the window matched, so it
+cannot say when something reached home. Measured 2026-08-15; the table in the NEW
+section has the cases. Saying *when* an upcoming film lands still costs a
+`/release_dates` request per film — twenty extra calls to turn "Coming soon" into
+"Coming 10 Aug". Not worth it; the film's own page has the date.
 
 **Twenty results a page, always.** Widening the window never returns *more*, it
 returns *better*, because more films compete for the same twenty slots. The

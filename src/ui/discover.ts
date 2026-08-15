@@ -29,8 +29,8 @@ import { getSettings } from "../data/settings";
 import { normalizeService, scoreNote, serviceRules } from "./shared";
 import { tmdbKey, type MovieRec } from "../data/model";
 
-type View = "home" | "foryou";
-const isView = (s: string | undefined): s is View => s === "home" || s === "foryou";
+type View = "home" | "new" | "foryou";
+const isView = (s: string | undefined): s is View => s === "home" || s === "new" || s === "foryou";
 
 /**
  * The filter bar's two toggles, kept in the module rather than the address. Unlike Search's
@@ -145,6 +145,63 @@ const FORWARD_DAYS = 90;
 const FORWARD_MIN_POPULARITY = 10;
 
 /**
+ * NEW asks about a week at a time, and this is why it can afford to.
+ *
+ * The obvious build is one query per day, walking backwards: it is the only way to know the day
+ * a film reached home, since neither `sort_by` nor the response carries that date (see
+ * `discoverMovies`). It works, and it costs seven requests a week to place films to the day —
+ * on a feed where most days hold nothing worth showing.
+ *
+ * A week asked as one window costs two, because it has to be asked twice: `popularity.desc` for
+ * what people are looking at and `vote_count.desc` for what has an audience at all. Measured
+ * across three weeks on 2026-08-15, the pair returned **40 of the 40 films** a full day-by-day
+ * walk of the same period found, for 6 requests against 21. Nothing was lost but the ordering
+ * inside a week, which is why the screen groups by week and ranks by popularity within one.
+ */
+const NEW_WEEK_SORTS = ["popularity.desc", "vote_count.desc"] as const;
+
+/** Weeks fetched on first load. One week clears the fold; two make the grid look inhabited. */
+const NEW_WEEKS_FIRST = 2;
+
+/**
+ * How far back *Load more* will go. Beyond a quarter this stops being a new-releases screen, and
+ * `CATALOGUE_YEARS` is already the backstop against a service's back catalogue reading as news.
+ */
+const NEW_WEEKS_BACK = 13;
+
+/**
+ * The cut that decides what NEW shows, and the only quality judgement in the app.
+ *
+ * The measurements behind every number are in `docs/discover.md`; the short of it is that a
+ * window of US digital releases is 299 films over three weeks, median vote count **zero**. Most
+ * of them never saw a cinema. Two tests admit a film, because the two kinds worth showing fail
+ * opposite tests:
+ *
+ * - **Popularity** catches what has just landed and is being looked at, before anyone has voted.
+ * - **Votes** catches the film that had a real theatrical run and arrives home already rated —
+ *   *A Poet* is 8.8 from 117 votes at popularity 3.4, and no attention-based cut would keep it.
+ *
+ * The score is a *veto*, never an entry ticket, and only where enough people voted to mean
+ * something. It fires on three films in three weeks — *Winnie-the-Pooh: Blood and Honey 2*,
+ * *Bambi: The Reckoning*, *Peter Pan's Neverland Nightmare* — which is exactly the category it
+ * exists for. **A low score with few votes is not evidence**, so it is left alone; the same
+ * reasoning that keeps a score floor off POPULAR.
+ *
+ * What this cannot do is judge a film nobody has watched yet. 299 down to 40 is the useful part;
+ * a couple of weak titles ride in on popularity alone and that is the honest ceiling here.
+ */
+const NEW_MIN_POPULARITY = 10;
+const NEW_MIN_VOTES = 100;
+const NEW_MIN_SCORE = 6;
+
+/** Whether a film has earned a place on NEW — see the constants above. */
+function worthShowing(hit: TmdbDiscoverHit): boolean {
+  const judged = hit.votes >= NEW_MIN_VOTES;
+  if (judged && (hit.rating ?? 0) < NEW_MIN_SCORE) return false;
+  return hit.popularity >= NEW_MIN_POPULARITY || judged;
+}
+
+/**
  * Which country's release dates the window is read against.
  *
  * Not the user's country, deliberately. TMDB's release-date coverage is heavily US-weighted:
@@ -182,8 +239,22 @@ const CATALOGUE_YEARS = 3;
  * The last answer drawn, so returning from a film's page repaints the same grid instead of
  * asking TMDB again — and repaints it synchronously, before the router restores the scroll,
  * which a fresh request would arrive far too late for.
+ *
+ * The three id sets ride along with the hits because they are *part of the answer*, not a
+ * decoration on it: which films were upcoming, which were only trending, and which week each
+ * one landed in are all facts about the batch that fetched them, and none can be recomputed
+ * from a hit. Before NEW they were left out, so coming back from a film's page silently
+ * repainted POPULAR with "Coming soon" and "Trending" replaced by scores.
  */
-let lastFeed: { key: string; hits: TmdbDiscoverHit[]; nextPage: number; totalPages: number } | null = null;
+let lastFeed: {
+  key: string;
+  hits: TmdbDiscoverHit[];
+  nextPage: number;
+  totalPages: number;
+  upcoming: number[];
+  trendingOnly: number[];
+  weeks: [number, number][];
+} | null = null;
 
 const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
 
@@ -222,6 +293,7 @@ export const discoverRoute: Route = {
         "div",
         { class: "home-tabs" },
         tab("POPULAR", "#/discover", view === "home"),
+        tab("NEW", "#/discover/new", view === "new"),
         tab("FOR YOU", "#/discover/foryou", view === "foryou"),
       ),
     );
@@ -270,7 +342,8 @@ export const discoverRoute: Route = {
 
     /** Everything fetched so far for the current view, before the hide-known filter. */
     let hits: TmdbDiscoverHit[] = [];
-    let nextPage = 1;
+    /** Pages for POPULAR, weeks back for NEW — which is why it starts at a different number. */
+    let nextPage = view === "new" ? 0 : 1;
     let totalPages = 0;
     let loading = false;
     /**
@@ -289,12 +362,37 @@ export const discoverRoute: Route = {
      * true of all of them, rather than guessing at where they can be watched.
      */
     const trendingOnly = new Set<number>();
+    /**
+     * Which week's window each film came back in, and NEW's whole notion of order. The date a
+     * film reached home cannot be read off the hit, so the only thing that knows it is the
+     * question that found it.
+     */
+    const weekOf = new Map<number, number>();
 
-    const hasMore = (): boolean => nextPage <= totalPages;
+    // For NEW, `nextPage` counts weeks back rather than pages: week 0 is the last seven days.
+    const hasMore = (): boolean => (view === "new" ? nextPage < NEW_WEEKS_BACK : nextPage <= totalPages);
 
     function paint(): void {
-        const shown = filters.hideKnown && view === "home" ? hits.filter((h) => !isKnown(h)) : hits;
-      grid.replaceChildren(...shown.map(card));
+      const shown = filters.hideKnown && view !== "foryou" ? hits.filter((h) => !isKnown(h)) : hits;
+      // NEW is a run of weeks, each its own grid under its own heading; the other two are one
+      // grid. `grid` is therefore a plain container there and the poster grid one level down.
+      if (view === "new") {
+        grid.className = "";
+        const weeks = [...new Set(shown.map((h) => weekOf.get(h.tmdbId) ?? 0))].sort((a, b) => a - b);
+        grid.replaceChildren(
+          ...weeks.flatMap((week) => {
+            // Within a week nothing orders the films but attention — see NEW_WEEK_SORTS for why
+            // the day they landed on isn't knowable without spending a request per day.
+            const inWeek = shown
+              .filter((h) => (weekOf.get(h.tmdbId) ?? 0) === week)
+              .sort((a, b) => b.popularity - a.popularity);
+            return [sectionHeader(weekLabel(week)), el("div", { class: "poster-grid" }, ...inWeek.map(card))];
+          }),
+        );
+      } else {
+        grid.className = "poster-grid";
+        grid.replaceChildren(...shown.map(card));
+      }
       footer.replaceChildren();
       status.replaceChildren();
 
@@ -312,7 +410,9 @@ export const discoverRoute: Route = {
               ? "Everything here is already watched or on a list. Untick “Hide watched & listed” to see it."
               : view === "foryou"
                 ? "Nothing to go on yet — mark a few films watched and this fills up."
-                : "Nothing matched. Try a longer window.",
+                : view === "new"
+                  ? "Nothing has reached home lately that's worth the space. Load more to look further back."
+                  : "Nothing matched. Try a longer window.",
           ),
         );
         return;
@@ -344,6 +444,24 @@ export const discoverRoute: Route = {
     /** Films that have already reached home, within the window the bar asks for. */
     async function homePage(page: number): Promise<DiscoverMoviePage> {
       return discoverMovies({ ...(await baseQuery()), atHomeFrom: daysAgo(AT_HOME_DAYS), atHomeTo: isoDay(new Date()), page });
+    }
+
+    /**
+     * One week of arrivals, asked twice and merged — see `NEW_WEEK_SORTS`.
+     *
+     * Week 0 is the last seven days including today. The windows are contiguous and never
+     * overlap, so a film can only be caught by one of them; `absorb` keeps the first, which is
+     * the most recent, and that is the right answer for the handful of films that reach home
+     * twice (a digital release, then a TV one months later).
+     */
+    async function newWeek(week: number): Promise<TmdbDiscoverHit[]> {
+      const base = await baseQuery();
+      const pages = await Promise.all(
+        NEW_WEEK_SORTS.map((sortBy) =>
+          discoverMovies({ ...base, atHomeFrom: daysAgo(week * 7 + 6), atHomeTo: daysAgo(week * 7), sortBy, page: 1 }),
+        ),
+      );
+      return pages.flatMap((p) => p.hits).filter(worthShowing);
     }
 
     /** Films with a digital date announced but not yet reached. One page is plenty — there
@@ -384,8 +502,8 @@ export const discoverRoute: Route = {
      * question every time the box is ticked.
      */
     const feedKey = (): string => {
-      if (view !== "home") return `foryou\n${forYouFilters.skipHorror}`;
-      return `home\n${filters.onMyServices}`;
+      if (view === "foryou") return `foryou\n${forYouFilters.skipHorror}`;
+      return `${view}\n${filters.onMyServices}`;
     };
 
     /**
@@ -412,6 +530,20 @@ export const discoverRoute: Route = {
       try {
         if (view === "foryou") {
           hits = await buildForYou(movies);
+        } else if (view === "new") {
+          // Two weeks to open with, one per Load more. Both weeks go out at once rather than in
+          // sequence: they are independent questions, and waiting for the first to decide the
+          // second would double the time to a full screen for nothing.
+          const weeks = nextPage === 0 ? [...Array(NEW_WEEKS_FIRST).keys()] : [nextPage];
+          const batches = await Promise.all(weeks.map(newWeek));
+          weeks.forEach((week, i) => {
+            // First week wins, which is the most recent one — the same rule `absorb` applies to
+            // the hits themselves, and they have to agree or a film would be filed under a week
+            // its card is not in.
+            for (const hit of batches[i]) if (!weekOf.has(hit.tmdbId)) weekOf.set(hit.tmdbId, week);
+          });
+          absorb(batches.flat());
+          nextPage = weeks[weeks.length - 1] + 1;
         } else if (nextPage === 1) {
           // First page only, and the only place three queries are spent: what is at home, what
           // is about to be, and what is big anywhere. Overlap between them is heavy — thirteen
@@ -435,7 +567,15 @@ export const discoverRoute: Route = {
           nextPage = page.page + 1;
           totalPages = page.totalPages;
         }
-        lastFeed = { key: feedKey(), hits, nextPage, totalPages };
+        lastFeed = {
+          key: feedKey(),
+          hits,
+          nextPage,
+          totalPages,
+          upcoming: [...upcoming],
+          trendingOnly: [...trendingOnly],
+          weeks: [...weekOf],
+        };
       } catch (e) {
         toast(e instanceof Error ? e.message : "TMDB request failed", "error");
       } finally {
@@ -447,15 +587,27 @@ export const discoverRoute: Route = {
     /** Start over — a filter changed, so the pages already fetched no longer describe anything. */
     function reload(): void {
       hits = [];
-      nextPage = 1;
+      // NEW counts weeks back from zero; the other views count pages from one.
+      nextPage = view === "new" ? 0 : 1;
       totalPages = 0;
       upcoming.clear();
       trendingOnly.clear();
+      weekOf.clear();
       lastFeed = null;
       void loadPage();
     }
 
-    if (view === "home") controls.append(filterBar(reload, paint));
+    if (view === "new") {
+      controls.append(
+        el(
+          "div",
+          { class: "discover-blurb" },
+          "What reached home in the US lately — digital and TV releases, newest week first. " +
+            "Quiet titles nobody has watched or voted on are left out, so this is shorter than the week really was.",
+        ),
+      );
+    }
+    if (view === "home" || view === "new") controls.append(filterBar(reload, paint));
     if (view === "foryou") {
       controls.append(
         sectionHeader("Because you watched"),
@@ -482,12 +634,27 @@ export const discoverRoute: Route = {
       hits = lastFeed.hits;
       nextPage = lastFeed.nextPage;
       totalPages = lastFeed.totalPages;
+      for (const id of lastFeed.upcoming) upcoming.add(id);
+      for (const id of lastFeed.trendingOnly) trendingOnly.add(id);
+      for (const [id, week] of lastFeed.weeks) weekOf.set(id, week);
       paint();
     } else {
       void loadPage();
     }
   },
 };
+
+/**
+ * What to call a week counted back from this one. "This week" means the last seven days rather
+ * than since Monday — the windows are seven-day slices ending today, so a heading that named a
+ * calendar week would be describing a different period than the one that was asked about.
+ */
+function weekLabel(week: number): string {
+  if (week === 0) return "This week";
+  if (week === 1) return "Last week";
+  const start = new Date(Date.now() - (week * 7 + 6) * 86_400_000);
+  return `Week of ${start.toLocaleDateString(undefined, { day: "numeric", month: "long" })}`;
+}
 
 function tab(label: string, href: string, active: boolean): HTMLElement {
   return el("a", { class: `home-tab ${active ? "active" : ""}`, href }, label);

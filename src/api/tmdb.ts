@@ -594,6 +594,21 @@ export interface DiscoverMovieQuery {
   providers?: number[];
   /** TMDB production-company ids to exclude outright. */
   withoutCompanies?: number[];
+  /**
+   * How the page of twenty is chosen out of everything the window matched. Defaults to
+   * `popularity.desc`.
+   *
+   * `vote_count.desc` is the only other one worth asking for, and it is not a quality sort —
+   * it is "which of these has an audience at all". A window of digital releases is mostly
+   * films that never saw a cinema, and those have no votes; asking twice, once each way, is
+   * what stops a well-reviewed film with a small audience from being invisible next to a
+   * loud one. Measured over three weeks: the two sorts together return every film a
+   * day-by-day walk of the same window found, for a fraction of the requests.
+   *
+   * `vote_average.desc` is deliberately absent — without a vote floor it returns nothing but
+   * ten-out-of-ten from a single vote, and with one it is an age filter.
+   */
+  sortBy?: "popularity.desc" | "vote_count.desc";
   page?: number;
 }
 
@@ -615,11 +630,14 @@ export async function discoverMovies(query: DiscoverMovieQuery): Promise<Discove
     include_adult: "false",
     include_video: "false",
     page: String(query.page ?? 1),
-    // Always popularity. The alternatives were offered and both failed: `primary_release_date`
-    // sorts by the cinema date, which buries a film that reached streaming a year later, and
-    // `vote_average` without a vote floor returns nothing but ten-out-of-ten from a single
-    // vote. There is no third caller wanting something else.
-    sort_by: "popularity.desc",
+    // Popularity unless asked otherwise — see `sortBy`. What is *not* on offer is a date sort:
+    // TMDB's only one is `primary_release_date`, the cinema date, which buries a film that
+    // reached streaming a year later. Nor does the response tell you the date it matched on:
+    // with `region` and `with_release_type` set, `release_date` comes back as the film's own US
+    // release, not the digital or TV listing the window caught. Measured 2026-08-15 — *Michael*
+    // matches a 10 August TV release and reports 9 June. Ordering by when something reached home
+    // therefore has to come from *asking* about a period, never from sorting or reading the hits.
+    sort_by: query.sortBy ?? "popularity.desc",
   });
   if (query.releaseTypes) params.set("with_release_type", query.releaseTypes);
   if (query.atHomeFrom) params.set("release_date.gte", query.atHomeFrom);
