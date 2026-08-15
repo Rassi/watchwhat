@@ -96,12 +96,18 @@ const defaults: AppSettings = {
     "Apple TV@DK, " +
     "-Kanopy, -Hoopla, -YouTube Free, -Cineasterna, -Filmoteket, -Beamafilm, -FXNow, -Adult Swim, " +
     "-The Roku Channel, -Plex@SE/NO/US/GB/AU",
-  // The order here is the order the rows appear in on a title page, so it runs from where you
-  // can actually watch things to where you mostly can't: DK and US are the real ones, GB is a
-  // maybe, and SE/NO/AU are kept only for the handful of free-to-air catalogues they add (SVT,
+  // The order here is the order the rows appear in on a title page, and **the first entry is
+  // read as the primary region** — Discover asks it for "on my services". So it runs from where
+  // you can actually watch things to where you mostly can't: US and DK are the real ones, GB is
+  // a maybe, and SE/NO/AU are kept only for the handful of free-to-air catalogues they add (SVT,
   // NRK, SBS and ABC iview carry things the others don't). Grouping the Nordics together reads
   // more tidily but buries US halfway down the card.
-  watchCountries: "DK, US, GB, SE, NO, AU",
+  //
+  // US leads deliberately. Films reach home there first, the US catalogue is the one with the
+  // most of his services in it, and every release date in the app is already read against US —
+  // see RELEASE_DATE_REGION in ui/discover.ts. With DK first, a US-dated feed was being filtered
+  // by Danish availability, which is the worst of both.
+  watchCountries: "US, DK, GB, SE, NO, AU",
   movieLists: "",
   // The URL is not a secret, so it ships as a default and only the token has to be
   // typed on each device.
