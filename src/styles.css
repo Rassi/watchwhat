@@ -168,6 +168,26 @@ button {
   background: linear-gradient(160deg, var(--ph1), var(--ph2));
 }
 
+/*
+ * A film you have already opened from Discover. The point of the screen is spotting what is
+ * new since last time, and a poster you have looked at and moved on from is noise.
+ *
+ * The poster fades further than the text does. Recognition on these grids is by artwork, so
+ * knocking the image back is what makes a row scannable, while the title has to stay readable —
+ * a card faded to nothing reads as broken rather than as visited. Grayscale was tried and
+ * dropped: it made a colourful poster *more* eye-catching than its neighbours, not less.
+ */
+.poster-card.dimmed .poster {
+  opacity: 0.35;
+}
+
+.poster-card.dimmed .poster-subtitle,
+.poster-card.dimmed .poster-note,
+.poster-card.dimmed .badge,
+.poster-card.dimmed .stream-badge {
+  opacity: 0.6;
+}
+
 .poster-card .badge {
   position: absolute;
   top: 6px;

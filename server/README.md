@@ -20,7 +20,18 @@ Both endpoints need `Authorization: Bearer <SYNC_TOKEN>`.
 | `GET /titles?ids=movie:1,movie:2` | `{ titles: { "movie:1": { jwProviders, jwUpcoming, jwNodeId, jwVerified, jwFetched, tmdbProviders, tmdbFetched, dates, providerSince } } }` — what the table holds for those titles. Ids it has never seen are simply absent: a cache miss is not an error. Up to 500 ids. |
 | `GET /titles?since=<iso>` | `{ titles, cursor, more }` — rows changed after the cursor, oldest change first, 100 per page. Keep calling while `more` is true. `since=` (empty) means from the beginning. The cursor runs on `MAX(tmdb_fetched, jw_fetched)`, so a write to either half advances it. |
 | `POST /titles` | `{ titles: { "movie:1": { … } } }` → `{ received, applied }`. Each title may carry the JustWatch half, the TMDB half, or both; **each is guarded on its own timestamp**, so a top-up and a refresh never overwrite one another, and a write whose timestamp is not newer than the stored one is dropped. `applied` counts what the guards let through, which is why it can be less than `received`. |
+| `GET /inspected?since=<iso>` | `{ inspected: { "movie:1": "<iso>" }, cursor, more }` — films opened from Discover, oldest look first, 1000 per page. `since=` (empty) means everything. |
+| `POST /inspected` | `{ inspected: { "movie:1": "<iso>" } }` → `{ received, applied }`. Up to 500 ids. Keeps the **later** of the two timestamps, so a queue flushed late cannot move a film backwards. |
 | `PUT /settings` | Same shape in, and the full post-write state back. Upserts per key, and **rejects any field whose `updated` is not newer than the stored one**, so a device flushing a stale offline edit cannot clobber a newer one. `value: null` means "back on the app's default" and is how a Reset travels. |
+
+`inspected` is the odd one out: not a cache, and not something anyone did to their
+library. It records that a film was opened *from Discover*, so its poster can be
+dimmed everywhere and a grid seen before reads as "these four are new". It is a
+set that only ever grows, so merging has no conflict case — two devices marking
+different films both win, and the same film twice keeps the later look. That is
+why it is neither a settings field (last-write-wins would drop one device's marks)
+nor an event (replay mints an unseen title from TMDB, so a glance would *create* a
+record on every device).
 
 `titles` is a shared *cache* of what TMDB and JustWatch say about a title, so that
 two devices stop asking the same questions independently — reasoning in

@@ -25,6 +25,7 @@ import {
   type TmdbDiscoverHit,
 } from "../api/tmdb";
 import { ensureMovieGenres, loadMovies } from "../data/sync";
+import { isInspected, markInspected } from "../data/inspected";
 import { getSettings } from "../data/settings";
 import { normalizeService, scoreNote, serviceRules } from "./shared";
 import { tmdbKey, type MovieRec } from "../data/model";
@@ -325,7 +326,10 @@ export const discoverRoute: Route = {
     function card(hit: TmdbDiscoverHit): HTMLElement {
       const rec = known(hit);
       const badge = rec == null ? null : rec.plays > 0 ? "SEEN" : rec.onWatchlist || rec.customLists?.length ? "LISTED" : null;
-      return posterCard({
+      const poster = posterCard({
+        // Faded once you have opened it, so what is left bright is what you have not
+        // considered yet. Read synchronously — see `data/inspected`.
+        dimmed: isInspected(hit.tmdbId),
         title: hit.title,
         href: `#/movie/${rec ? rec.traktId : tmdbKey(hit.tmdbId)}`,
         posterUrl: posterUrl(hit.poster),
@@ -338,6 +342,18 @@ export const discoverRoute: Route = {
         // usually has no score anyway.
         note: upcoming.has(hit.tmdbId) ? "Coming soon" : trendingOnly.has(hit.tmdbId) ? "Trending" : scoreNote(hit),
       });
+      // Marked here rather than on the film's page, so this stays a record of what *Discover*
+      // showed you and you chose to look at. Opening the same film later from Search or from
+      // your own library says nothing about this screen and leaves it alone.
+      //
+      // The card is dimmed on the spot instead of waiting for the repaint on the way back: the
+      // navigation is instant, and a poster that only fades once you return reads as the app
+      // having changed its mind about something you already left.
+      poster.addEventListener("click", () => {
+        markInspected(hit.tmdbId);
+        poster.classList.add("dimmed");
+      });
+      return poster;
     }
 
     /** Everything fetched so far for the current view, before the hide-known filter. */

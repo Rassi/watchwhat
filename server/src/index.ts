@@ -77,6 +77,14 @@ const TITLE_PAGE_SIZE = 100;
 /** A country's offers are a few short names; the whole row is well under this. */
 const MAX_TITLE_VALUE_CHARS = 16384;
 
+/**
+ * Bounds for `/inspected`. A row here is an id and a timestamp — about 30 bytes
+ * against a title's couple of kilobytes — so a page can be far larger without the
+ * response being one.
+ */
+const MAX_INSPECTED_IDS = 500;
+const INSPECTED_PAGE_SIZE = 1000;
+
 /** "movie:1325734" — kind and TMDB id, never a traktId. */
 const TITLE_ID = /^(movie|show):[1-9][0-9]{0,9}$/;
 
@@ -91,7 +99,13 @@ export default {
 
     const url = new URL(request.url);
     const route = url.pathname;
-    if (route !== "/events" && route !== "/justwatch" && route !== "/settings" && route !== "/titles") {
+    if (
+      route !== "/events" &&
+      route !== "/justwatch" &&
+      route !== "/settings" &&
+      route !== "/titles" &&
+      route !== "/inspected"
+    ) {
       return json({ error: "Not found" }, 404, cors);
     }
 
@@ -112,6 +126,11 @@ export default {
       if (route === "/titles") {
         if (request.method === "GET") return await handleGetTitles(url, env, cors);
         if (request.method === "POST") return await handlePostTitles(request, env, cors);
+        return json({ error: "Method not allowed" }, 405, cors);
+      }
+      if (route === "/inspected") {
+        if (request.method === "GET") return await handleGetInspected(url, env, cors);
+        if (request.method === "POST") return await handlePostInspected(request, env, cors);
         return json({ error: "Method not allowed" }, 405, cors);
       }
       if (request.method === "GET") return await handleGet(url, env, cors);
@@ -533,6 +552,83 @@ async function handlePostTitles(request: Request, env: Env, cors: HeadersInit): 
   // a success, and the discard is the interesting case here.
   const applied = written.reduce((n, r) => n + (r.meta?.changes ?? 0), 0);
   return json({ received: statements.length, applied }, 200, cors);
+}
+
+/**
+ * Films opened from Discover, read by cursor.
+ *
+ * The same `?since=` shape as `/titles` and for the same reason — a device asks
+ * on every sync and the answer is usually nothing — but the page is far larger
+ * because a row is an id and a timestamp rather than a provider blob. A thousand
+ * of them is about 30 KB, which is a year of browsing in one response.
+ */
+async function handleGetInspected(url: URL, env: Env, cors: HeadersInit): Promise<Response> {
+  const since = url.searchParams.get("since") ?? "";
+  const { results } = await env.DB.prepare("SELECT id, at FROM inspected WHERE at > ? ORDER BY at LIMIT ?")
+    .bind(since, INSPECTED_PAGE_SIZE + 1) // the extra row answers "is there more?"
+    .all<{ id: string; at: string }>();
+
+  const rows = results ?? [];
+  const more = rows.length > INSPECTED_PAGE_SIZE;
+  const page = more ? rows.slice(0, INSPECTED_PAGE_SIZE) : rows;
+  const inspected: Record<string, string> = {};
+  for (const row of page) inspected[row.id] = row.at;
+
+  return json(
+    {
+      inspected,
+      // Holding the old cursor on an empty page keeps a no-op poll a no-op.
+      cursor: page.length ? page[page.length - 1].at : since,
+      more,
+    },
+    200,
+    cors,
+  );
+}
+
+/**
+ * Record looks. `MAX` on the timestamp rather than last-write-wins, so a phone
+ * flushing a queue it built yesterday cannot move a film back in time — and two
+ * devices sending different films is not a conflict at all, which is the whole
+ * reason this is a table of its own and not a field in `/settings`.
+ */
+async function handlePostInspected(request: Request, env: Env, cors: HeadersInit): Promise<Response> {
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return json({ error: "Body must be JSON" }, 400, cors);
+  }
+
+  const incoming = (payload as { inspected?: unknown })?.inspected;
+  if (typeof incoming !== "object" || incoming === null || Array.isArray(incoming)) {
+    return json({ error: "Expected { inspected: { id: timestamp } }" }, 400, cors);
+  }
+  const entries = Object.entries(incoming as Record<string, unknown>);
+  if (entries.length > MAX_INSPECTED_IDS) {
+    return json({ error: `At most ${MAX_INSPECTED_IDS} ids per request` }, 400, cors);
+  }
+
+  const upsert = env.DB.prepare(
+    "INSERT INTO inspected (id, at) VALUES (?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET at = excluded.at WHERE excluded.at > inspected.at",
+  );
+  const statements = [];
+  for (const [id, at] of entries) {
+    if (!TITLE_ID.test(id)) return json({ error: `\`${id}\`: expected "movie:123" or "show:123"` }, 400, cors);
+    if (typeof at !== "string" || Number.isNaN(Date.parse(at))) {
+      return json({ error: `\`${id}\`: \`at\` must be an ISO 8601 timestamp` }, 400, cors);
+    }
+    statements.push(upsert.bind(id, at));
+  }
+
+  if (statements.length === 0) return json({ received: 0, applied: 0 }, 200, cors);
+  const written = await env.DB.batch(statements);
+  return json(
+    { received: statements.length, applied: written.reduce((n, r) => n + (r.meta?.changes ?? 0), 0) },
+    200,
+    cors,
+  );
 }
 
 /** A column this server wrote as JSON. Corrupt beats crashing: the client treats null as a miss. */

@@ -72,6 +72,42 @@ Nothing on this screen is written to IndexedDB. These are other people's films
 until you put one on a list, and caching them would push every title you scrolled
 past once into the sync log and every export.
 
+## Dimming what you have already opened
+
+Added 2026-08-15. Clicking a card in any of the three views records the film as
+inspected, and its poster is faded from then on, on every device. The point is
+what is left bright: on a screen you visit weekly, the four new arrivals are
+otherwise indistinguishable from the twenty you already dismissed.
+
+It is the one thing Discover stores, and it does not break the rule above — a
+look is a fact about **you**, not a copy of someone else's film, and it is an id
+and a timestamp rather than a record.
+
+**Where it lives** (`src/data/inspected.ts`, `inspected` table, `/inspected` on
+the Worker):
+
+- **Not an event.** `replay.ts` mints an unseen title from TMDB so a fresh device
+  can rebuild the library from the log alone — so an event naming a film you
+  merely glanced at would *create* it, one record and one request per device. That
+  is the exact failure "Discover writes nothing" exists to prevent.
+- **Not a settings field.** Settings are last-write-wins per key, so two devices
+  each marking different films would silently discard one set.
+- **Not a column on `titles`.** That table is a cache: rebuildable, disposable.
+  This cannot be re-derived from anywhere.
+- **In localStorage as well as D1**, because `paint()` runs synchronously before
+  the router restores scroll — an `await` in that path makes the page jump. D1 is
+  the sync backing, merged on every `syncNow` and repainted through the existing
+  `applied` event.
+
+**Marked on click in Discover, deliberately, not on opening a movie page.** This
+stays a record of what *this screen* offered you and you chose to look at; opening
+the same film later from Search says nothing about that. It also keeps the table
+to films you don't own, rather than a row for every trip through your own library.
+
+**What it cannot tell you** is what you looked at and rejected on the poster
+alone, which is most of a grid. Marking everything rendered would fade the whole
+screen after one visit, so the honest scope is "opened", not "considered".
+
 ## NEW, and why it is not POPULAR sorted differently
 
 Added 2026-08-15. POPULAR answers "what is worth watching that reached home

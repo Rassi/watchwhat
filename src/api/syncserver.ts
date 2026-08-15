@@ -170,6 +170,32 @@ export async function pushTitles(titles: Record<string, TitleWrite>): Promise<vo
   });
 }
 
+export interface InspectedPage {
+  /** `"movie:1234"` -> ISO 8601 of the most recent look. */
+  inspected: Record<string, string>;
+  cursor: string;
+  more: boolean;
+}
+
+/**
+ * Films opened from Discover, by cursor — the same shape as `pullTitlesSince` and
+ * for the same reason: asked on every sync, usually answers nothing.
+ */
+export async function pullInspectedSince(cursor: string): Promise<InspectedPage> {
+  const body = (await request(`/inspected?since=${encodeURIComponent(cursor)}`)) as Partial<InspectedPage>;
+  return { inspected: body.inspected ?? {}, cursor: body.cursor ?? cursor, more: body.more ?? false };
+}
+
+/** Publish looks this device recorded. The server keeps the later of the two timestamps. */
+export async function pushInspected(inspected: Record<string, string>): Promise<void> {
+  if (Object.keys(inspected).length === 0) return;
+  await request("/inspected", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ inspected }),
+  });
+}
+
 /**
  * Round-trip that proves URL, token and CORS all line up — what the Settings
  * "Test" button calls, so a wrong token is found on the spot rather than the

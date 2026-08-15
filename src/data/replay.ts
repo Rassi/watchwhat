@@ -20,6 +20,7 @@ import { tmdbKey, type Library, type MovieRec, type ShowRec } from "./model";
 import { flush, getCursor, setCursor } from "./outbox";
 import { getDeviceId, getSettings, type CloudKey } from "./settings";
 import { reconcileSettings } from "./cloudsettings";
+import { convergeInspected } from "./inspected";
 import {
   addToWatchlist,
   convergeSharedTitles,
@@ -300,6 +301,10 @@ export async function syncNow(): Promise<SyncResult> {
   // moment to collect them, because a device only sits on a stale provider listing for as long
   // as nothing prompts it to look. See docs/shared-title-cache.md.
   const converged = await convergeSharedTitles();
+  // And which films the other device has already looked at in Discover. Same reasoning as the
+  // titles above — not something anyone *did* to their library, so not an event — but it
+  // changes what a Discover grid should look like, so this is the moment to collect it.
+  const looks = await convergeInspected();
   // `pull` fires this itself when it applied something, but a settings-only
   // change is invisible to it — and a new services list or stale-days cutoff
   // changes what every open screen should be showing. Flagged as settings-only,
@@ -310,7 +315,7 @@ export async function syncNow(): Promise<SyncResult> {
   }
   // Converged rows change what a poster badge and a Releases date say, so a screen already open
   // has to repaint. Not flagged settings-only: this is title data, and every screen renders it.
-  if (converged && applied === 0) {
+  if ((converged || looks) && applied === 0) {
     syncEvents.dispatchEvent(new CustomEvent("applied", { detail: { settingsOnly: false } }));
   }
   return { pushed, applied, skipped, settings };

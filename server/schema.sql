@@ -75,6 +75,33 @@ CREATE TABLE IF NOT EXISTS titles (
   jw_fetched      TEXT    -- ISO 8601; the whole freshness contract. Newest wins.
 );
 
+-- Films opened from Discover, so their posters can be dimmed on every device and
+-- a week-old grid reads as "these six are new since I last looked".
+--
+-- A third store rather than a column on `titles`, and the distinction is the
+-- point: `titles` is a *cache* of what outside services say about a film, and
+-- throwing it away costs nothing but requests. This is the only record that a
+-- person looked at something, it cannot be re-derived from anywhere, and it must
+-- survive anything that clears a cache.
+--
+-- Deliberately NOT in the event log either, for a sharper reason than settings:
+-- replay mints an unseen title from TMDB so a fresh device can rebuild the
+-- library from the log alone. An event naming a film that was merely glanced at
+-- would therefore *create* it — a full record, one TMDB request, on every device
+-- — which is exactly what "Discover writes nothing" exists to prevent.
+--
+-- Merging needs no conflict rule worth the name: this is a set that only ever
+-- grows, so two devices marking different films both win, and the same film
+-- marked twice keeps the later look. That is why it is not a settings blob,
+-- where last-write-wins would silently drop one device's marks.
+--
+-- `id` is "movie:1325734", the same key `titles` uses. Shows are not in Discover
+-- yet; when they are, they need no schema change.
+CREATE TABLE IF NOT EXISTS inspected (
+  id TEXT PRIMARY KEY,
+  at TEXT NOT NULL   -- ISO 8601, most recent look; also the `?since=` cursor
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key     TEXT PRIMARY KEY,
   -- JSON. The literal `null` is meaningful and distinct from an absent row: it

@@ -121,6 +121,16 @@ export interface PosterCardOpts {
    * means "done" — SEEN next to LISTED on Discover — same colour twice reads as one state.
    */
   badgeTone?: "seen" | null;
+  /**
+   * Fades the card back — "you have opened this one already". Only Discover sets it, and only
+   * from your own clicks; on a library grid, where every card is something you chose, dimming
+   * would mean nothing.
+   *
+   * A class on the card rather than a style on the poster, because `posterImg` hands back the
+   * *same* `<img>` node across renders from its cache — anything written onto that node would
+   * follow the image to whatever card next borrows it.
+   */
+  dimmed?: boolean;
   subtitle?: string | null;
   /**
    * A second subtitle line, brighter than the first. Split from `subtitle` rather than
@@ -190,7 +200,7 @@ function posterImg(src: string, alt: string): HTMLImageElement {
 }
 
 export function posterCard(opts: PosterCardOpts): HTMLElement {
-  const card = el("a", { class: "poster-card", href: opts.href });
+  const card = el("a", { class: opts.dimmed ? "poster-card dimmed" : "poster-card", href: opts.href });
   if (opts.posterUrl) {
     card.append(posterImg(opts.posterUrl, opts.title));
   } else {
