@@ -206,6 +206,24 @@ button {
   color: #fff;
 }
 
+/*
+ * Starred. Shares the top-left corner with `.badge` — no card sets both, because the grids
+ * that mark a star (the movie watch lists) are the ones that never carry a NEW/SEEN chip.
+ *
+ * A bare glyph rather than a chip: the badge beside it is a word and needs a plate to stay
+ * readable, where a star at this size is its own shape and a yellow pill around it turned the
+ * corner of every prioritised poster into a blob.
+ */
+.poster-card .star-badge {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--accent);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
 .poster-card .stream-badge {
   position: absolute;
   top: 6px;
@@ -686,6 +704,12 @@ a.btn {
 .btn.danger {
   background: var(--danger);
   color: #fff;
+}
+
+/* Starred: the yellow goes on the glyph, not the whole button. Filled accent is what "Mark
+   watched" wears, and a star is a smaller claim than the page's main action. */
+.btn.starred {
+  color: var(--accent);
 }
 
 .btn:disabled {

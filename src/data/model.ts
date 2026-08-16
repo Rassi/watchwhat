@@ -188,6 +188,18 @@ export interface MovieRec {
    * a device that learned about it from the log had nothing to sort by at all.
    */
   listAddedAt?: Record<number, string>;
+  /**
+   * Marked as one you actually want to get to, which is what floats it to the top of every
+   * watch list it sits on.
+   *
+   * Deliberately not a list of its own. A list answers "what kind of film is this"; a star
+   * answers "of everything I've listed, which ones first" — and as a list it would have to be
+   * toggled on the same film in three places to mean the same thing, then sorted somehow
+   * against itself.
+   */
+  starred?: boolean;
+  /** When it was starred, so a shelf of starred films still has an order. Cleared on unstar. */
+  starredAt?: string | null;
   overview?: string;
   runtime?: number | null;
   rating?: number | null;

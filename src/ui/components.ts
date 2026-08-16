@@ -150,6 +150,12 @@ export interface PosterCardOpts {
    * merely caught up on a running show stays green.
    */
   ended?: boolean;
+  /**
+   * A starred film, marked bottom-left of the poster. Sorting alone can't say this: a grid
+   * that opens on three starred films looks exactly like one with none, so the mark is what
+   * tells you where the priority block ends.
+   */
+  starred?: boolean;
 }
 
 /**
@@ -220,6 +226,7 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
     // bolted onto it, and the badge's position already implies "you can watch this".
     card.append(el("span", { class: `stream-badge ${opts.watch}`, title: label }, opts.watch === "rent" ? "$" : "▶"));
   }
+  if (opts.starred) card.append(el("span", { class: "star-badge", title: "Starred" }, "★"));
   if (opts.progress != null) {
     const bar = el("div", { class: "progress-track" });
     const done = Math.min(1, Math.max(0, opts.progress));

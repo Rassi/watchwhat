@@ -31,6 +31,7 @@ import {
   setEpisodesWatched,
   setMovieOnCustomList,
   setMovieOnWatchlist,
+  setMovieStarred,
   setMovieWatched,
   setShowHidden,
 } from "./sync";
@@ -173,6 +174,16 @@ async function apply(ctx: Ctx, event: RemoteEvent): Promise<void> {
       const movie = await resolveMovie(ctx, tmdbId);
       if (!movie) return void ctx.skipped++;
       await setMovieWatched(ctx.movies, movie, event.kind === "movie.watched", opts);
+      return;
+    }
+
+    case "movie.starred":
+    case "movie.unstarred": {
+      const tmdbId = num(body, "movie");
+      if (tmdbId === null) return void ctx.skipped++;
+      const movie = await resolveMovie(ctx, tmdbId);
+      if (!movie) return void ctx.skipped++;
+      await setMovieStarred(ctx.movies, movie, event.kind === "movie.starred", opts);
       return;
     }
 

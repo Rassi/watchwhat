@@ -2,7 +2,7 @@
 
 import type { Route } from "../router";
 import { dialog, el, posterCard, spinner, toast, withSyncIndicator } from "./components";
-import { ensureMovieDetails, ensureMovieExtRatings, loadMovieLists, loadMovies, setMovieWatched } from "../data/sync";
+import { ensureMovieDetails, ensureMovieExtRatings, loadMovieLists, loadMovies, setMovieStarred, setMovieWatched } from "../data/sync";
 import { describeEstimate, estimateRelease } from "../data/releaseEstimate";
 import { isTmdbKeyed, tmdbKey, UNDATED, type MovieListRec, type MovieRec } from "../data/model";
 import { backdropUrl, fetchMovieRecommendations, fetchMovieSummary, posterUrl, type TmdbDiscoverHit } from "../api/tmdb";
@@ -234,7 +234,30 @@ function renderPage(
       onChange: () => renderContent(),
     });
 
-    const actions = el("div", { class: "card" }, el("div", { class: "manage-buttons" }, watchedWrap, listsWrap));
+    /**
+     * The star: of everything on the list, this one first.
+     *
+     * Offered only on a film that is actually on a list. Starring is nothing but an ordering
+     * on those grids, so on a film that appears in none of them it would store a preference
+     * with no way to ever see it again — and the star is kept through a removal, so putting
+     * the film back brings its star with it.
+     */
+    const listed = movie.onWatchlist || (movie.customLists?.length ?? 0) > 0;
+    const starBtn = listed
+      ? el("button", { class: `btn ${movie.starred ? "starred" : ""}` }, movie.starred ? "★ Starred" : "☆ Star")
+      : null;
+    starBtn?.addEventListener("click", async () => {
+      starBtn.disabled = true;
+      try {
+        await withSyncIndicator(setMovieStarred(movies, movie, movie.starred !== true));
+        toast(movie.starred ? `Starred "${movie.title}"` : `Unstarred "${movie.title}"`);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Update failed", "error");
+      }
+      renderContent();
+    });
+
+    const actions = el("div", { class: "card" }, el("div", { class: "manage-buttons" }, watchedWrap, listsWrap, starBtn));
 
     // About
     const extLinks: [string, string][] = [];

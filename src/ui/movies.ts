@@ -38,6 +38,7 @@ export const moviesRoute: Route = {
         progress: null,
         badge: null,
         watch: watchBadge(movie.providers),
+        starred: movie.starred === true,
         // Keep the title as subtitle so in-page text search finds movies.
         subtitle: `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
       });
@@ -49,6 +50,23 @@ export const moviesRoute: Route = {
     const watchlistedAt = (m: MovieRec): string => m.listedAt ?? "";
     const listedOnAt = (m: MovieRec, listId: number): string => m.listAddedAt?.[listId] ?? "";
 
+    /**
+     * Starred films first, everything else in the order it was already in.
+     *
+     * Wrapping the existing comparator rather than replacing it: a star says which of the
+     * listed films to get to first, not how the rest are ordered, so unstarring has to put a
+     * film back exactly where it would have been. Within the starred block the same
+     * date ordering applies — `starredAt` deliberately doesn't sort here, or starring one film
+     * would reshuffle the ones already starred.
+     *
+     * The watched grid is left alone: that one is a history, newest first, and there is no
+     * sense in which a film you have seen comes first.
+     */
+    const starredFirst =
+      (cmp: (a: MovieRec, b: MovieRec) => number) =>
+      (a: MovieRec, b: MovieRec): number =>
+        Number(b.starred === true) - Number(a.starred === true) || cmp(a, b);
+
     const listUrlKey = (list: MovieListRec): string => list.slug || String(list.traktId);
     const findList = (key: string | null): MovieListRec | undefined =>
       key === null ? undefined : (lists.find((l) => l.slug === key) ?? lists.find((l) => String(l.traktId) === key));
@@ -59,7 +77,7 @@ export const moviesRoute: Route = {
 
     // Everything a card here draws.
     const movieKey = (m: MovieRec): string =>
-      `${m.traktId}:${m.poster ?? ""}:${watchBadge(m.providers) ?? ""}:${m.title}:${m.year ?? ""}`;
+      `${m.traktId}:${m.poster ?? ""}:${watchBadge(m.providers) ?? ""}:${m.title}:${m.year ?? ""}:${m.starred === true ? "★" : ""}`;
     const changed = renderGate();
 
     const renderContent = (): void => {
@@ -79,8 +97,10 @@ export const moviesRoute: Route = {
           : activeList
             ? all
                 .filter((m) => m.customLists?.includes(activeList.traktId) && m.plays === 0)
-                .sort((a, b) => listedOnAt(b, activeList.traktId).localeCompare(listedOnAt(a, activeList.traktId)))
-            : all.filter((m) => m.onWatchlist && m.plays === 0).sort((a, b) => watchlistedAt(b).localeCompare(watchlistedAt(a)));
+                .sort(starredFirst((a, b) => listedOnAt(b, activeList.traktId).localeCompare(listedOnAt(a, activeList.traktId))))
+            : all
+                .filter((m) => m.onWatchlist && m.plays === 0)
+                .sort(starredFirst((a, b) => watchlistedAt(b).localeCompare(watchlistedAt(a))));
       // The picker's counts are on screen too, and they move independently of the grid.
       const pickerCounts =
         view === "watched"

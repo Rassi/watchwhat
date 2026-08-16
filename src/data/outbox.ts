@@ -31,6 +31,8 @@ export type EventKind =
   | "episode.unwatched"
   | "movie.watched"
   | "movie.unwatched"
+  | "movie.starred"
+  | "movie.unstarred"
   | "watchlist.add"
   | "watchlist.remove"
   | "show.hidden"

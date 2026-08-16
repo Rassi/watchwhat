@@ -1245,6 +1245,31 @@ export async function setMovieOnWatchlist(
   emitChange();
 }
 
+/**
+ * Star or unstar a film — the "of everything I've listed, this one first" mark.
+ *
+ * Ordinary logged state, like a watch or a list membership: the same last-write-wins shape,
+ * the same `at` from replay so a star set on the phone yesterday doesn't arrive dated today.
+ * The star survives coming off a list on purpose — put the film back and it is still starred,
+ * where clearing it would silently lose the choice on a mis-tapped removal.
+ */
+export async function setMovieStarred(
+  movies: Map<number, MovieRec>,
+  movie: MovieRec,
+  starred: boolean,
+  opts?: MutationOpts,
+): Promise<void> {
+  const at = opts?.at ?? now();
+  movie.starred = starred;
+  movie.starredAt = starred ? at : null;
+  movies.set(movie.traktId, movie);
+  await dbPut("movies", movie.traktId, movie);
+  if (movie.ids.tmdb && !opts?.replay) {
+    await enqueue(starred ? "movie.starred" : "movie.unstarred", { movie: movie.ids.tmdb, at });
+  }
+  emitChange();
+}
+
 const EXT_RATINGS_TTL = 7 * 24 * 3600 * 1000;
 
 /** IMDb/Rotten Tomatoes ratings via OMDb, fetched on page open (7-day cache). Returns true if updated. */
