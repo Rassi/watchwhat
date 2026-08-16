@@ -454,7 +454,7 @@ export function movieListsDropdown(opts: {
   const { movies, record, lists, onChange } = opts;
   installDropdownCloser();
 
-  const wrap = el("div", { class: "menu-dropdown" });
+  const wrap = el("div", { class: "menu-dropdown lists-dropdown" });
   const button = el("button", { class: "btn" });
   const menu = el("div", { class: "burger-menu" });
   // The wrap sits inside a search row that navigates on click, so nothing in here may bubble.

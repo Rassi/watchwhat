@@ -1242,6 +1242,18 @@ a.btn {
   right: auto;
 }
 
+/* List names are short — "Watchlist", "Family" — so the menu takes the width of its longest one
+   instead of a flat 200px of mostly whitespace. It also hangs from the button's right edge: on the
+   About page the Lists button sits well into the row, and a menu growing rightwards from there ran
+   off an iPhone and dragged the whole page sideways with it. */
+.lists-dropdown .burger-menu {
+  left: auto;
+  right: 0;
+  min-width: 0;
+  width: max-content;
+  max-width: min(70vw, 240px);
+}
+
 .menu-dropdown.open .burger-menu {
   display: block;
 }
