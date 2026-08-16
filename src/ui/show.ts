@@ -25,6 +25,19 @@ function epCode(season: number, number: number): string {
   return `S${pad(season)} | E${pad(number)}`;
 }
 
+/**
+ * Ticking an episode off the Continue tracking strip removes its card, and removing it the
+ * instant you tap reads as the app glitching rather than as something you did. So the tick
+ * turns green and sits there long enough to be seen (MARK_TICK_MS), and only then does the
+ * card fade and close its gap (MARK_LEAVE_MS). Both are kept short: this is on the path
+ * through a season, and you may tick six cards in a row.
+ */
+const MARK_TICK_MS = 220;
+const MARK_LEAVE_MS = 260;
+
+/** Whoever asked for less motion gets the old instant removal, not a card that waits. */
+const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
+
 /** Position in watch order, for comparing two episodes of the same show. */
 const watchOrder = (ep: { season: number; number: number }): number => ep.season * 10_000 + ep.number;
 
@@ -169,7 +182,30 @@ function renderPage(
   // ticked off, instead of jumping about when you fill in an old gap further down.
   const upTo = lastWatchedPoint(progress0);
 
-  const rerender = (): void => renderContent();
+  /**
+   * Repaints — unless a Continue tracking card is on its way out. Ticking an episode off
+   * rebuilds the whole page, and a rebuild mid-animation replaces the animating card with a
+   * fresh one, which is the instant disappearance the animation exists to replace. Repaints
+   * asked for while the hold is up collapse into one that runs when the card has gone.
+   */
+  let renderHeld = 0;
+  let renderMissed = false;
+  const rerender = (): void => {
+    if (renderHeld > 0) {
+      renderMissed = true;
+      return;
+    }
+    renderContent();
+  };
+  const holdRender = (ms: number): void => {
+    renderHeld++;
+    setTimeout(() => {
+      if (--renderHeld === 0 && renderMissed) {
+        renderMissed = false;
+        renderContent();
+      }
+    }, ms);
+  };
 
   // ---------- helpers over current lib state ----------
 
@@ -655,12 +691,6 @@ function renderPage(
     const strip = el("div", { class: "continue-strip" });
     for (const e of next) {
       const check = el("button", { class: "check" }, "✓");
-      check.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        // No "mark previous?" prompt here: the strip is already the queue in watch
-        // order, so ticking one is a statement about that episode and nothing else.
-        void mutate([{ traktId: e.traktId, season: e.season, number: e.number }], true);
-      });
       const still = stillUrl(e.still, "w300");
       const card = el(
         "div",
@@ -680,6 +710,31 @@ function renderPage(
         ),
         check,
       );
+      check.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (card.classList.contains("marking")) return; // already on its way out
+        // No "mark previous?" prompt here: the strip is already the queue in watch
+        // order, so ticking one is a statement about that episode and nothing else.
+        const write = (): Promise<void> => mutate([{ traktId: e.traktId, season: e.season, number: e.number }], true);
+        if (REDUCED_MOTION.matches) {
+          void write();
+          return;
+        }
+        check.classList.add("on");
+        card.classList.add("marking");
+        // Frozen before it can change: the card is sized by its content, and a collapse
+        // needs a width to animate away from.
+        card.style.width = `${card.offsetWidth}px`;
+        holdRender(MARK_TICK_MS + MARK_LEAVE_MS);
+        setTimeout(() => {
+          card.classList.add("leaving");
+          card.style.width = "0px";
+        }, MARK_TICK_MS);
+        // The write goes out now rather than after the animation: what you're watching is
+        // confirmation of something already done, and leaving the page mid-animation — or
+        // closing the app — must not be able to lose the tick.
+        void write();
+      });
       strip.append(card);
     }
     return el("div", {}, el("div", { class: "strip-label" }, "Continue tracking"), strip);
