@@ -237,9 +237,9 @@ const EXCLUDED_COMPANIES = [1311]; // The Asylum
 const CATALOGUE_YEARS = 3;
 
 /**
- * The last answer drawn, so returning from a film's page repaints the same grid instead of
- * asking TMDB again — and repaints it synchronously, before the router restores the scroll,
- * which a fresh request would arrive far too late for.
+ * An answer already drawn, so returning to a question repaints the same grid instead of asking
+ * TMDB again — and repaints it synchronously, before the router restores the scroll, which a
+ * fresh request would arrive far too late for.
  *
  * The three id sets ride along with the hits because they are *part of the answer*, not a
  * decoration on it: which films were upcoming, which were only trending, and which week each
@@ -247,15 +247,66 @@ const CATALOGUE_YEARS = 3;
  * from a hit. Before NEW they were left out, so coming back from a film's page silently
  * repainted POPULAR with "Coming soon" and "Trending" replaced by scores.
  */
-let lastFeed: {
-  key: string;
+interface Feed {
   hits: TmdbDiscoverHit[];
   nextPage: number;
   totalPages: number;
   upcoming: number[];
   trendingOnly: number[];
   weeks: [number, number][];
-} | null = null;
+  /** When the *first* batch under this key was fetched — see `rememberFeed`. */
+  fetchedAt: number;
+}
+
+/**
+ * One slot per question, rather than one slot in total.
+ *
+ * A single slot covered leaving for a film and coming back, and nothing else: the three views
+ * are three keys, so POPULAR → NEW → POPULAR evicted itself twice and paid for the same three
+ * requests again. Since `feedKey` can only spell six things — three views, each with its filter
+ * either way — six slots hold every question reachable from the bar, and the eviction below is
+ * a backstop rather than something that fires.
+ */
+const FEED_SLOTS = 6;
+
+/**
+ * How long a held answer stays good.
+ *
+ * Not about the films, which barely move in a day. It is about *This week*: `weekLabel` counts
+ * back from `Date.now()` while `weekOf` was fixed when the window was asked about, so a session
+ * left open across midnight starts labelling the batch it holds with days it never asked for.
+ * Half an hour is comfortably shorter than the shortest way to be wrong and comfortably longer
+ * than a browsing session.
+ */
+const FEED_TTL = 30 * 60 * 1000;
+
+const feeds = new Map<string, Feed>();
+
+/**
+ * File an answer under its question, evicting the least recently written if that overflows —
+ * `Map` iterates in insertion order, and re-filing deletes first so a rewrite counts as recent.
+ *
+ * `fetchedAt` is deliberately **not** bumped by *Load more*: the TTL is guarding the week
+ * headings, and those were decided by the first batch. Refreshing the stamp on every page would
+ * let a feed stay eligible forever as long as you kept loading more of it.
+ */
+function rememberFeed(key: string, feed: Omit<Feed, "fetchedAt">): void {
+  const fetchedAt = feeds.get(key)?.fetchedAt ?? Date.now();
+  feeds.delete(key);
+  feeds.set(key, { ...feed, fetchedAt });
+  while (feeds.size > FEED_SLOTS) feeds.delete(feeds.keys().next().value!);
+}
+
+/** The held answer to a question, if there is one and it hasn't aged out. */
+function heldFeed(key: string): Feed | null {
+  const feed = feeds.get(key);
+  if (!feed) return null;
+  if (Date.now() - feed.fetchedAt > FEED_TTL) {
+    feeds.delete(key);
+    return null;
+  }
+  return feed;
+}
 
 const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
 
@@ -541,6 +592,10 @@ export const discoverRoute: Route = {
 
     async function loadPage(): Promise<void> {
       if (loading) return;
+      // Which question this batch answers, read before the await rather than after it — a
+      // filter can flip while it is in flight, and the answer must not be filed under the
+      // question that happens to be on screen when it lands.
+      const asked = feedKey();
       loading = true;
       paint();
       try {
@@ -583,15 +638,16 @@ export const discoverRoute: Route = {
           nextPage = page.page + 1;
           totalPages = page.totalPages;
         }
-        lastFeed = {
-          key: feedKey(),
-          hits,
-          nextPage,
-          totalPages,
-          upcoming: [...upcoming],
-          trendingOnly: [...trendingOnly],
-          weeks: [...weekOf],
-        };
+        if (feedKey() === asked) {
+          rememberFeed(asked, {
+            hits,
+            nextPage,
+            totalPages,
+            upcoming: [...upcoming],
+            trendingOnly: [...trendingOnly],
+            weeks: [...weekOf],
+          });
+        }
       } catch (e) {
         toast(e instanceof Error ? e.message : "TMDB request failed", "error");
       } finally {
@@ -600,17 +656,31 @@ export const discoverRoute: Route = {
       }
     }
 
-    /** Start over — a filter changed, so the pages already fetched no longer describe anything. */
-    function reload(): void {
-      hits = [];
+    /**
+     * Show the answer to whatever question the bar is now asking — from the last one drawn if it
+     * is still held, otherwise by going and asking. Used both on the way in and whenever a filter
+     * changes the question, which is what makes ticking a box and unticking it free.
+     *
+     * Synchronous down the cached path, deliberately: on the way in it runs inside `render`, so
+     * the grid has its full height by the time the router restores the scroll position.
+     */
+    function showFeed(): void {
+      const held = heldFeed(feedKey());
       // NEW counts weeks back from zero; the other views count pages from one.
-      nextPage = view === "new" ? 0 : 1;
-      totalPages = 0;
+      hits = held?.hits ?? [];
+      nextPage = held?.nextPage ?? (view === "new" ? 0 : 1);
+      totalPages = held?.totalPages ?? 0;
       upcoming.clear();
       trendingOnly.clear();
       weekOf.clear();
-      lastFeed = null;
-      void loadPage();
+      if (!held) {
+        void loadPage();
+        return;
+      }
+      for (const id of held.upcoming) upcoming.add(id);
+      for (const id of held.trendingOnly) trendingOnly.add(id);
+      for (const [id, week] of held.weeks) weekOf.set(id, week);
+      paint();
     }
 
     if (view === "new") {
@@ -623,7 +693,7 @@ export const discoverRoute: Route = {
         ),
       );
     }
-    if (view === "home" || view === "new") controls.append(filterBar(reload, paint));
+    if (view === "home" || view === "new") controls.append(filterBar(showFeed, paint));
     if (view === "foryou") {
       controls.append(
         sectionHeader("Because you watched"),
@@ -638,25 +708,13 @@ export const discoverRoute: Route = {
           // Changes which films are asked about, so the answer has to be fetched again.
           checkbox("Ignore horror I've watched", forYouFilters.skipHorror, (on) => {
             forYouFilters.skipHorror = on;
-            reload();
+            showFeed();
           }),
         ),
       );
     }
 
-    // Repaint what we left, if it's still the same question. Synchronously, inside render, so
-    // the grid has its full height by the time the router restores the scroll position.
-    if (lastFeed?.key === feedKey()) {
-      hits = lastFeed.hits;
-      nextPage = lastFeed.nextPage;
-      totalPages = lastFeed.totalPages;
-      for (const id of lastFeed.upcoming) upcoming.add(id);
-      for (const id of lastFeed.trendingOnly) trendingOnly.add(id);
-      for (const [id, week] of lastFeed.weeks) weekOf.set(id, week);
-      paint();
-    } else {
-      void loadPage();
-    }
+    showFeed();
   },
 };
 
