@@ -78,6 +78,18 @@ const forYouFilters = {
 };
 
 /**
+ * Which draw FOR YOU is showing. Zero is the twelve most recently watched films, which is the
+ * page you land on; every press of *Shuffle* increments it and means "twelve drawn at random
+ * from everything watched", redrawn on each press rather than cycling a fixed set.
+ *
+ * Deliberately **not** part of `feedKey`. A key per draw would mint a cache slot per press and
+ * evict POPULAR and NEW out of the six, so tabbing back would re-ask TMDB three questions it
+ * already held answers to. One FOR YOU slot, latest draw wins, and `showFeed` compares this
+ * against what the slot holds instead.
+ */
+let forYouShuffle = 0;
+
+/**
  * The genre, normalised — see `genreKey`. Two spellings of it are in the data: TMDB sends
  * `Horror` and every record cached while Trakt was alive says `horror`.
  */
@@ -254,6 +266,8 @@ interface Feed {
   upcoming: number[];
   trendingOnly: number[];
   weeks: [number, number][];
+  /** Which FOR YOU draw this batch answers — see `forYouShuffle`. */
+  shuffle: number;
   /** When the *first* batch under this key was fetched — see `rememberFeed`. */
   fetchedAt: number;
 }
@@ -496,6 +510,20 @@ export const discoverRoute: Route = {
       );
     }
 
+    /**
+     * Draws a fresh twelve. A press during a load is not lost: `loadPage` bails while one is in
+     * flight, but the counter is part of what that load was asked for, so it re-issues on the
+     * way out — see `askedFor`.
+     */
+    function shuffleButton(): HTMLElement {
+      const btn = el("button", { class: "btn small" }, "Shuffle");
+      btn.addEventListener("click", () => {
+        forYouShuffle++;
+        showFeed();
+      });
+      return btn;
+    }
+
     /** Everything both queries share: what a film is, never when it landed. */
     async function baseQuery(): Promise<DiscoverMovieQuery> {
       const region = primaryRegion();
@@ -574,6 +602,13 @@ export const discoverRoute: Route = {
     };
 
     /**
+     * Everything a load is answering to. `feedKey` alone names the *slot*, and a shuffle keeps
+     * the same slot on purpose, so it cannot tell a batch from the draw before it. This can, and
+     * it is what decides whether an answer arriving late is still the one wanted.
+     */
+    const askedFor = (): string => `${feedKey()}|${forYouShuffle}`;
+
+    /**
      * Merge a batch in, dropping anything already held *and* anything repeated inside the
      * batch. The second half matters now that three queries arrive as one batch: thirteen of
      * trending's twenty are also in the at-home page, so checking only against what was
@@ -592,15 +627,16 @@ export const discoverRoute: Route = {
 
     async function loadPage(): Promise<void> {
       if (loading) return;
-      // Which question this batch answers, read before the await rather than after it — a
-      // filter can flip while it is in flight, and the answer must not be filed under the
-      // question that happens to be on screen when it lands.
-      const asked = feedKey();
+      // What this batch answers, read before the await rather than after it — a filter can flip
+      // or a shuffle land while it is in flight, and the answer must not be filed under the
+      // question that happens to be on screen when it arrives.
+      const asked = askedFor();
       loading = true;
       paint();
       try {
         if (view === "foryou") {
-          hits = await buildForYou(movies);
+          // Draw zero is the twelve most recent; every draw after it is random.
+          hits = await buildForYou(movies, forYouShuffle > 0);
         } else if (view === "new") {
           // Two weeks to open with, one per Load more. Both weeks go out at once rather than in
           // sequence: they are independent questions, and waiting for the first to decide the
@@ -638,14 +674,18 @@ export const discoverRoute: Route = {
           nextPage = page.page + 1;
           totalPages = page.totalPages;
         }
-        if (feedKey() === asked) {
-          rememberFeed(asked, {
+        // Filed under the slot, not under what it was asked for: one FOR YOU slot holds
+        // whichever draw is current, so a shuffle overwrites its predecessor rather than
+        // crowding POPULAR and NEW out of the six.
+        if (askedFor() === asked) {
+          rememberFeed(feedKey(), {
             hits,
             nextPage,
             totalPages,
             upcoming: [...upcoming],
             trendingOnly: [...trendingOnly],
             weeks: [...weekOf],
+            shuffle: forYouShuffle,
           });
         }
       } catch (e) {
@@ -653,6 +693,10 @@ export const discoverRoute: Route = {
       } finally {
         loading = false;
         paint();
+        // A filter flipped or Shuffle was pressed while this was in flight, and the guard at the
+        // top swallowed it. Now that the guard is clear, ask what is actually on screen — which
+        // is also why a press during a load doesn't need the button disabling.
+        if (askedFor() !== asked) showFeed();
       }
     }
 
@@ -665,7 +709,10 @@ export const discoverRoute: Route = {
      * the grid has its full height by the time the router restores the scroll position.
      */
     function showFeed(): void {
-      const held = heldFeed(feedKey());
+      const slot = heldFeed(feedKey());
+      // A shuffle keeps its slot, so what the slot holds may be a draw already moved on from.
+      // Everything else about the question is in the key, so this is the only extra test.
+      const held = slot && (view !== "foryou" || slot.shuffle === forYouShuffle) ? slot : null;
       // NEW counts weeks back from zero; the other views count pages from one.
       hits = held?.hits ?? [];
       nextPage = held?.nextPage ?? (view === "new" ? 0 : 1);
@@ -700,7 +747,8 @@ export const discoverRoute: Route = {
         el(
           "div",
           { class: "discover-blurb" },
-          "TMDB has no endpoint that reads a whole library, so this asks “what's like this?” about your twelve most recent films and ranks whatever keeps coming back.",
+          "Films that resemble twelve of yours, ranked by how many of them they came back under. " +
+            "Opens on your twelve most recent; Shuffle draws twelve at random from everything you've watched.",
         ),
         el(
           "div",
@@ -710,6 +758,7 @@ export const discoverRoute: Route = {
             forYouFilters.skipHorror = on;
             showFeed();
           }),
+          shuffleButton(),
         ),
       );
     }
@@ -735,15 +784,21 @@ function tab(label: string, href: string, active: boolean): HTMLElement {
 }
 
 /**
- * Ranks what TMDB says resembles the films you've watched most recently. A title that turns
- * up under several of your seeds is a better bet than one that only matches a single film,
- * so the count leads and TMDB's score only breaks ties.
+ * Ranks what TMDB says resembles films you've watched. A title that turns up under several of
+ * your seeds is a better bet than one that only matches a single film, so the count leads and
+ * the score only breaks ties.
+ *
+ * `shuffle` decides *which* films are asked about: the twelve most recent, or twelve drawn at
+ * random from everything watched. Nothing else differs between the two — the draw only reorders
+ * the pool the seeds are taken off the top of, which is also why `withoutHorror` needs no say
+ * in it. It takes the first twelve non-horror films in whatever order it is handed.
  */
-async function buildForYou(movies: Map<number, MovieRec>): Promise<TmdbDiscoverHit[]> {
+async function buildForYou(movies: Map<number, MovieRec>, shuffle: boolean): Promise<TmdbDiscoverHit[]> {
   const watched = [...movies.values()]
     .filter((m) => m.plays > 0 && m.ids.tmdb)
     .sort((a, b) => (b.lastWatchedAt ?? "").localeCompare(a.lastWatchedAt ?? ""));
-  const seeds = forYouFilters.skipHorror ? await withoutHorror(watched, movies) : watched.slice(0, SEED_COUNT);
+  const pool = shuffle ? shuffled(watched) : watched;
+  const seeds = forYouFilters.skipHorror ? await withoutHorror(pool, movies) : pool.slice(0, SEED_COUNT);
   if (seeds.length === 0) return [];
 
   const results = await Promise.all(seeds.map((m) => fetchMovieRecommendations(m.ids.tmdb!)));
@@ -763,9 +818,47 @@ async function buildForYou(movies: Map<number, MovieRec>): Promise<TmdbDiscoverH
   }
 
   return [...scored.values()]
-    .sort((a, b) => b.count - a.count || (b.hit.rating ?? 0) - (a.hit.rating ?? 0))
+    .sort((a, b) => b.count - a.count || weightedRating(b.hit) - weightedRating(a.hit))
     .slice(0, 60)
     .map((e) => e.hit);
+}
+
+/**
+ * A Fisher-Yates copy. `sort(() => Math.random() - 0.5)` is the tempting one-liner and is not a
+ * shuffle — it feeds an inconsistent comparator to an algorithm that assumes a consistent one,
+ * and leaves the head of the list where it started more often than not, which on a list sorted
+ * by recency is exactly the bias this exists to remove.
+ */
+function shuffled<T>(items: T[]): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/**
+ * The score, pulled towards the middle by how few people voted for it.
+ *
+ * This only ever breaks ties, and until Shuffle it barely mattered: twelve recent films have
+ * enough in common that the titles worth showing come back under two or three of them, so the
+ * count did the ranking and ties were rare. Twelve films drawn from across a whole history have
+ * no such overlap — nearly every candidate arrives with a count of one, and the tiebreak
+ * silently becomes the sort.
+ *
+ * Raw `vote_average` is a bad sort. It puts 8.9 from sixty votes above 8.2 from forty thousand,
+ * so a shuffled screen fills with obscurities nobody has an opinion about. Weighting by vote
+ * count against a prior fixes the order without excluding anything, which keeps the house rule
+ * that a score is a veto and never an entry ticket — see `docs/discover.md`.
+ */
+const RATING_PRIOR_VOTES = 100;
+const RATING_PRIOR_SCORE = 6.5;
+
+function weightedRating(hit: TmdbDiscoverHit): number {
+  const votes = hit.votes;
+  const score = hit.rating ?? RATING_PRIOR_SCORE;
+  return (votes * score + RATING_PRIOR_VOTES * RATING_PRIOR_SCORE) / (votes + RATING_PRIOR_VOTES);
 }
 
 /**

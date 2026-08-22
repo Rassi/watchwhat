@@ -28,10 +28,12 @@ and the forward window holds four titles worth showing.
 just arrived, week by week. Two queries per week, and a quality cut. It has its
 own section below.
 
-**FOR YOU** asks `/movie/{id}/recommendations` about your twelve most recently
-watched films and ranks whatever keeps coming back, count first and TMDB's score
-only breaking ties. TMDB has no endpoint that reads a whole library, so this is
-the closest thing to Trakt's recommendations that exists without one.
+**FOR YOU** asks `/movie/{id}/recommendations` about twelve of your watched films
+and ranks whatever keeps coming back, count first and a weighted score only
+breaking ties. TMDB has no endpoint that reads a whole library, so this is the
+closest thing to Trakt's recommendations that exists without one. It opens on the
+twelve you watched most recently; *Shuffle* draws twelve at random from your whole
+history — see below.
 
 Its one control, *Ignore horror I've watched*, filters the **question** rather
 than the answer: a horror film you watched stops being asked "what's like this?",
@@ -71,6 +73,49 @@ So records converge on TMDB's spelling as they refresh, at no extra request.
 Nothing on this screen is written to IndexedDB. These are other people's films
 until you put one on a list, and caching them would push every title you scrolled
 past once into the sync log and every export.
+
+### Shuffle
+
+Added 2026-08-22, because a screen seeded by your last twelve films only changes
+when your viewing does — twice a week at best, and never while you are looking at
+it. *Shuffle* redraws the seeds at random from **everything** with a play, and the
+draw is uniform over the whole history rather than windowed or weighted towards
+recent watches. Both of those were considered and are the wrong shape: reaching
+films you watched years ago is the entire point, and a draw that leans on the last
+few months gives you a noisier version of the page you already had.
+
+Mechanically it is the cheapest feature on this screen. A press costs exactly what
+a load costs — twelve `/movie/{id}/recommendations` calls, the same twelve — and
+adds no endpoint the app was not already calling. Nothing reaches the Worker, D1,
+the sync log or the outbox.
+
+**It exposed a tiebreak that had been wrong all along.** Ranking is count first,
+score second. Twelve *recent* films have enough in common that the good answers
+come back under two or three of them, so the count did the ranking and the
+tiebreak rarely fired. Twelve films drawn from across a whole history have no such
+overlap: nearly every candidate arrives with a count of one, and the tiebreak
+quietly becomes the sort.
+
+The tiebreak was raw `vote_average`, which puts 8.9 from sixty votes above 8.2
+from forty thousand — so shuffling filled the screen with obscurities nobody has
+an opinion about. It is now the score pulled toward a prior of 6.5 by how few
+people voted (`weightedRating`, 100 votes of prior weight). That keeps the rule
+this file states twice already: a score is a veto, never an entry ticket. Nothing
+is excluded; the order is just no longer decided by forty voters.
+
+**The draw is not part of `feedKey`.** It is tempting, and it would have cost
+something real: the cache holds six slots, sized so all six questions the bar can
+ask fit at once, and a slot per draw would evict POPULAR and NEW after two
+presses. Tabbing back would then re-ask TMDB three questions it had answers to —
+a shuffle button making *other screens* more expensive. So FOR YOU keeps its one
+slot, the newest draw overwrites the last, and `showFeed` compares the draw
+counter against what the slot holds.
+
+What the counter *is* part of is `askedFor`, which is what a load in flight
+records. `feedKey` alone cannot tell one draw from the next, so an answer landing
+after a press would look current. It also means a press during a load is not
+swallowed by the `if (loading) return` guard: the load finishes, sees that what it
+was asked for is no longer what is on screen, and re-issues.
 
 ## Dimming what you have already opened
 
