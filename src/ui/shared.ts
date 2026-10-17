@@ -43,7 +43,7 @@ export function scoreNote(hit: TmdbDiscoverHit): string | null {
 
 export type ProvidersRecord = Record<
   string,
-  { link: string | null; providers: { name: string; logo: string | null; kind: string }[] }
+  { link: string | null; providers: { name: string; logo: string | null; kind: string; until?: string }[] }
 >;
 
 /**
@@ -277,7 +277,7 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
       // testing for "rent" matters because TMDB's order is arbitrary — a "stream" listing
       // arriving before the "free" one used to win and quietly hide the free tier.
       const cost = (kind: string): number => (kind === "free" || kind === "ads" ? 0 : kind === "rent" ? 2 : 1);
-      const seen = new Map<string, { name: string; logo: string | null; kind: string }>();
+      const seen = new Map<string, ProvidersRecord[string]["providers"][number]>();
       for (const p of entry.providers) {
         const existing = seen.get(p.name);
         if (!existing || cost(p.kind) < cost(existing.kind)) seen.set(p.name, p);
@@ -298,6 +298,7 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
         const rent = p.kind === "rent";
         const v = rent ? null : verdict(p.name, cc);
         const free = !rent && v !== "blocked" && (p.kind === "free" || p.kind === "ads");
+        const leaving = rent ? null : leavingDays(p.until);
         const suffix = rent
           ? " (rent or buy)"
           : v === "blocked"
@@ -332,6 +333,13 @@ export function whereToWatchCard(providers: ProvidersRecord | undefined, opts?: 
           p.name,
           rent ? el("span", { class: "chip-rent", title: "Costs extra — rent or buy" }, "$") : null,
           free ? el("span", { class: "chip-free" }, p.kind === "ads" ? "FREE · ADS" : "FREE") : null,
+          leaving === null
+            ? null
+            : el(
+                "span",
+                { class: "chip-leaving", title: leavingText(p.name, p.until!) },
+                leaving === 0 ? "LAST DAY" : `${leaving} DAY${leaving === 1 ? "" : "S"} LEFT`,
+              ),
         );
         if (rent) {
           rentChips.push(chip);
@@ -508,6 +516,63 @@ export function movieListsDropdown(opts: {
   button.addEventListener("click", () => wrap.classList.toggle("open"));
   wrap.append(button, menu);
   return wrap;
+}
+
+/**
+ * How far ahead a leaving date is worth saying. JustWatch's own site only says "Leaving in…"
+ * when it is close; most dates further out are just the end of a licence term, and a warning
+ * that sits on a poster for eight months stops meaning anything.
+ */
+const LEAVING_SOON_DAYS = 30;
+
+/** Whole days from today to a `YYYY-MM-DD` last day: 0 is today. Calendar days, not 24h blocks. */
+function daysLeft(until: string): number {
+  const now = new Date();
+  return Math.round((Date.parse(until) - Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())) / 86_400_000);
+}
+
+/** A date worth warning about: not past (a past one is a stale listing, not news), not far off. */
+function leavingDays(until: string | undefined): number | null {
+  if (!until) return null;
+  const days = daysLeft(until);
+  return days >= 0 && days <= LEAVING_SOON_DAYS ? days : null;
+}
+
+function leavingText(service: string, until: string): string {
+  const days = daysLeft(until);
+  const day = new Date(`${until}T00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  if (days === 0) return `Last day on ${service} is today`;
+  if (days === 1) return `Leaving ${service} tomorrow`;
+  return `Leaving ${service} in ${days} days — last day ${day}`;
+}
+
+/**
+ * Whether the way a poster's badge says you can watch is about to go: every listing that earns
+ * it — yours if there are any, otherwise the free ones — ends within the window. A film leaving
+ * Prime but staying on Viaplay, which you also have, is not leaving you at all, so it says
+ * nothing. Returns the tooltip, naming the listing that lasts longest, since that is the real
+ * deadline.
+ *
+ * Only as good as the last JustWatch check: TMDB carries no dates, so a film nobody has opened
+ * or refreshed lately has none to warn about.
+ */
+export function leavingSoon(providers: ProvidersRecord | undefined): string | null {
+  if (!providers) return null;
+  const verdict = serviceVerdicts();
+  const mine: { name: string; until?: string }[] = [];
+  const free: { name: string; until?: string }[] = [];
+  for (const cc of watchCountries()) {
+    for (const p of providers[cc]?.providers ?? []) {
+      if (p.kind === "rent") continue;
+      const v = verdict(p.name, cc);
+      if (v === "mine") mine.push(p);
+      else if (v !== "blocked" && (p.kind === "free" || p.kind === "ads")) free.push(p);
+    }
+  }
+  const ways = mine.length > 0 ? mine : free;
+  if (ways.length === 0 || ways.some((p) => leavingDays(p.until) === null)) return null;
+  const last = ways.reduce((a, b) => (b.until! > a.until! ? b : a));
+  return leavingText(last.name, last.until!);
 }
 
 /**

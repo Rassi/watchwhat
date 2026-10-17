@@ -17,7 +17,7 @@
 
 import { fetchMovieExtras, fetchMovieSummary, fetchSeasonNumbers, fetchShowExtras, fetchShowImages, fetchShowSummary } from "../api/tmdb";
 import { fetchOmdbRatings } from "../api/omdb";
-import { fetchJustWatchOffers, type JustWatchUpcoming } from "../api/justwatch";
+import { fetchJustWatchOffers, type JustWatchOffer, type JustWatchUpcoming } from "../api/justwatch";
 import { announcementWindow, gapQuartiles, type GapQuartiles } from "./releaseEstimate";
 import { dbDelete, dbGet, dbGetAll, dbPut } from "./db";
 import { enqueue, now } from "./outbox";
@@ -901,7 +901,7 @@ function sameService(a: string, b: string): boolean {
  */
 function mergeJustWatch(
   tmdb: NonNullable<MovieRec["providers"]>,
-  extra: Record<string, { name: string; kind: string }[]>,
+  extra: Record<string, JustWatchOffer[]>,
 ): NonNullable<MovieRec["providers"]> {
   const cost = (k: string): number => (k === "free" || k === "ads" ? 0 : k === "rent" ? 2 : 1);
   const merged: NonNullable<MovieRec["providers"]> = { ...tmdb };
@@ -916,7 +916,18 @@ function mergeJustWatch(
       if (at === -1) providers.push({ name: offer.name, logo: null, kind: offer.kind });
       else if (cost(offer.kind) < cost(providers[at].kind)) providers[at] = { ...providers[at], kind: offer.kind };
     }
-    merged[cc] = { link: entry.link, providers };
+    // The leaving date rides on whichever entry is shown for that service, TMDB's included —
+    // TMDB carries no dates at all. Exact name first, so a sibling ("Amazon Prime Video with
+    // Ads") never lends its date to the plain one when both are listed.
+    const included = offers.filter((o) => o.kind !== "rent");
+    merged[cc] = {
+      link: entry.link,
+      providers: providers.map((p) => {
+        if (p.kind === "rent") return p;
+        const offer = included.find((o) => o.name === p.name) ?? included.find((o) => sameService(o.name, p.name));
+        return offer?.until ? { ...p, until: offer.until } : p;
+      }),
+    };
   }
   // Logos are TMDB paths, which JustWatch does not supply. A provider already seen in another
   // country carries the same logo, so borrow it rather than render a bare chip.

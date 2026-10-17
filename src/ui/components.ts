@@ -156,6 +156,12 @@ export interface PosterCardOpts {
    * tells you where the priority block ends.
    */
   starred?: boolean;
+  /**
+   * The way `watch` says you can see this is about to end — the tooltip text. Drawn beside that
+   * badge rather than replacing it: it is still true today that you can watch it, and the
+   * point is that it soon won't be.
+   */
+  leaving?: string | null;
 }
 
 /**
@@ -226,6 +232,7 @@ export function posterCard(opts: PosterCardOpts): HTMLElement {
     // bolted onto it, and the badge's position already implies "you can watch this".
     card.append(el("span", { class: `stream-badge ${opts.watch}`, title: label }, opts.watch === "rent" ? "$" : "▶"));
   }
+  if (opts.leaving) card.append(el("span", { class: "leaving-badge", title: opts.leaving }, "!"));
   if (opts.starred) card.append(el("span", { class: "star-badge", title: "Starred" }, "★"));
   if (opts.progress != null) {
     const bar = el("div", { class: "progress-track" });

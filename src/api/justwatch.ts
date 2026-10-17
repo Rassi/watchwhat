@@ -68,6 +68,12 @@ function isPhysical(presentationType: string): boolean {
 export interface JustWatchOffer {
   name: string;
   kind: "stream" | "free" | "ads" | "rent";
+  /**
+   * The last day it is on offer, `YYYY-MM-DD`, from JustWatch's `availableTo` — what its site
+   * turns into "Leaving in 18 days". Absent means none is known, not that it stays forever; most
+   * offers have none, and a far-off one is usually just the end of a licence term.
+   */
+  until?: string;
 }
 
 /**
@@ -283,7 +289,7 @@ export async function checkJustWatch(countries: string[]): Promise<JustWatchChec
     label: "Upcoming releases",
     ok: withUpcoming && upcomingBlocks.some((b) => Array.isArray(b.upcomingReleases)),
     detail: !withUpcoming
-      ? "Document rejected with upcomingReleases — announced streaming dates are off; offers still work"
+      ? "Document rejected with upcomingReleases or availableTo — announced streaming dates and leaving dates are off; offers still work"
       : upcomingBlocks.some((b) => Array.isArray(b.upcomingReleases))
         ? `Field resolves in ${upcomingBlocks.length} country block(s)`
         : "Resolved but returned no list — upcomingReleases may have changed shape",
@@ -343,6 +349,7 @@ interface OfferRow {
   monetizationType: string;
   presentationType?: string;
   package: { clearName: string };
+  availableTo?: string | null;
 }
 
 /** One country's slot in the aliased query: an offers array, or the content block. */
@@ -351,19 +358,21 @@ type CountryBlock = OfferRow[] | { upcomingReleases?: UpcomingRow[] | null } | u
 /**
  * Offers and upcoming releases for every country, aliased into one document.
  *
- * `withUpcoming: false` is the same query this file has always sent. It exists because the two
- * halves must not share a fate: a rename inside `upcomingReleases` is a *validation* error, which
- * fails the whole document, and that would take the provider top-up down with a feature it does
- * not depend on. Asking again without it costs one request in the broken case and none otherwise.
+ * `full: false` is the bare offers query, without anything the top-up could live without:
+ * `upcomingReleases`, and each offer's `availableTo` (the leaving date). It exists because those
+ * must not share a fate with the offers themselves: a rename in either is a *validation* error,
+ * which fails the whole document, and that would take the provider top-up down with a feature it
+ * does not depend on. Asking again without them costs one request in the broken case and none
+ * otherwise.
  */
-function offersDocument(countries: string[], withUpcoming: boolean): string {
+function offersDocument(countries: string[], full: boolean): string {
   const blocks = countries
     .map((cc) => {
       const key = cc.toLowerCase();
-      const offers = `o_${key}: offers(country: ${cc}, platform: WEB) { monetizationType presentationType package { clearName } }`;
+      const offers = `o_${key}: offers(country: ${cc}, platform: WEB) { monetizationType presentationType${full ? " availableTo" : ""} package { clearName } }`;
       // `title` is what makes a wrong id detectable — see the note below on why both documents
       // ask for the content block even though only one of them wants what is inside it.
-      const content = `u_${key}: content(country: ${cc}, language: $language) { title${withUpcoming ? `\n        ${UPCOMING_SELECTION}` : ""} }`;
+      const content = `u_${key}: content(country: ${cc}, language: $language) { title${full ? `\n        ${UPCOMING_SELECTION}` : ""} }`;
       return `${offers}\n      ${content}`;
     })
     .join("\n      ");
@@ -493,7 +502,7 @@ export async function fetchJustWatchOffers(
       const rows = offersIn(cc);
       // One package can appear several times per country (tiers, presentation types); keep the
       // cheapest kind, matching how the rest of the app de-duplicates providers.
-      const best = new Map<string, JustWatchOffer["kind"]>();
+      const best = new Map<string, JustWatchOffer>();
       for (const row of rows) {
         const kind = KINDS[row.monetizationType];
         const name = row.package?.clearName?.trim();
@@ -505,10 +514,16 @@ export async function fetchJustWatchOffers(
         // retailers turn up. This is a where-to-*watch* list, so physical copies are dropped.
         if (isPhysical(row.presentationType ?? "")) continue;
         const cost = (k: JustWatchOffer["kind"]): number => (k === "free" || k === "ads" ? 0 : k === "rent" ? 2 : 1);
+        const until = /^\d{4}-\d{2}-\d{2}$/.test(row.availableTo ?? "") ? row.availableTo! : undefined;
         const existing = best.get(name);
-        if (existing === undefined || cost(kind) < cost(existing)) best.set(name, kind);
+        if (existing === undefined || cost(kind) < cost(existing.kind)) {
+          best.set(name, { name, kind, ...(until ? { until } : {}) });
+        } else if (existing.kind === kind && until && (!existing.until || until > existing.until)) {
+          // The same offer in another quality: it stays as long as the longest-running one does.
+          existing.until = until;
+        }
       }
-      if (best.size > 0) out[cc] = [...best].map(([name, kind]) => ({ name, kind }));
+      if (best.size > 0) out[cc] = [...best.values()];
     }
     const countries = Object.keys(out);
     const soon = upcoming.length > 0 ? `; ${upcoming.length} announced release(s)` : "";
@@ -522,7 +537,7 @@ export async function fetchJustWatchOffers(
           : `${title}: matched, but no usable offers in any watch country${soon}`) +
         // Not a failure — the offers still arrived — but it is the only trace that the field this
         // now depends on has moved. The Settings canary is what tests it deliberately.
-        (askedForUpcoming ? "" : " (upcomingReleases unavailable)"),
+        (askedForUpcoming ? "" : " (upcomingReleases and availableTo unavailable)"),
       ...(unknownKinds.size > 0 ? { unknownKinds: [...unknownKinds] } : {}),
     });
     // "Matched, but nothing on offer here" is a real answer, not a breakage — a film genuinely

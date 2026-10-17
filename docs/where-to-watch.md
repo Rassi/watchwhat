@@ -442,6 +442,37 @@ stream it — as are physical discs, matched by substring (`DVD`, `BLURAY`,
 `BLU_RAY`, `PHYSICAL`) because the variants multiply and a missed one shows a
 disc as a rental.
 
+## Leaving dates
+
+Added 2026-10-17. JustWatch knows when an offer ends: each offer's `availableTo`
+is the last day, which its site turns into "Leaving in 18 days". The top-up asks
+for it and keeps it as `until` on the offer, and `mergeJustWatch` copies it onto
+whichever entry the card shows for that service, TMDB's included (exact name
+first, then `sameService`).
+
+- **Only JustWatch has it.** TMDB's providers carry no dates, so a film gets one
+  only from a top-up: near a release, on ↻, or on opening its page. Because it
+  is an absolute date, it stays correct once stored. A film checked on Monday
+  can still warn on Friday without asking again.
+- **Only near dates mean anything.** Most offers have none, and a far-off one is
+  usually the end of a licence term (Viaplay's for *Dirty Dancing* was eight
+  months out). `LEAVING_SOON_DAYS` (30) is the window; a date already past is a
+  stale listing, not news, and says nothing.
+- **On the card:** a red `N DAYS LEFT` on the chip, the last day on its tooltip.
+- **On a poster:** a red `!` beside the watch badge, but only when *every*
+  listing that earns that badge ends within the window. That means yours if you
+  have any, otherwise the free ones. A film leaving Prime but staying on Viaplay,
+  which you also have, is not leaving you at all. The tooltip names the
+  longest-lasting one, since that is the real deadline.
+- **It is in the optional half of the query.** `availableTo` sits with
+  `upcomingReleases` in the document that falls back to the bare offers query,
+  so a rename on JustWatch's side costs the dates, not the top-up.
+- `PROVIDERS_VERSION` was deliberately not bumped. It forces a TMDB refetch, and
+  TMDB has no dates to give; the whole library would have been re-asked for
+  nothing. Dates arrive as films get their next top-up.
+- The count can differ from JustWatch's site by a day. This counts calendar
+  days to the last day; what JustWatch counts is not documented.
+
 ## Dating an arrival
 
 `providers` is replaced wholesale on every refresh, so the one fact Releases is

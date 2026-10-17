@@ -258,6 +258,24 @@ button {
   font-weight: 700;
 }
 
+/* Leaving soon: the same circle, just inside the watch badge, so the two read as one statement —
+   watchable, but not for long. Never alone: it only follows a mine or free badge. */
+.poster-card .leaving-badge {
+  position: absolute;
+  top: 6px;
+  right: 32px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .progress-track {
   height: 5px;
   background: var(--track);
@@ -1644,6 +1662,18 @@ button.provider-chip {
   border-radius: 4px;
   background: var(--accent);
   color: #000;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+/* Leaving soon — red like the poster's "!", the date itself on the tooltip. */
+.chip-leaving {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--danger);
+  color: #fff;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.3px;

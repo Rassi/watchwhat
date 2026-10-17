@@ -8,7 +8,7 @@ import { ensureMovieDetails, loadMovieLists, loadMovies } from "../data/sync";
 import { isTrackedMovie, type MovieListRec, type MovieRec } from "../data/model";
 import { posterUrl } from "../api/tmdb";
 import { replaceHash } from "../router";
-import { watchBadge } from "./shared";
+import { leavingSoon, watchBadge } from "./shared";
 import { moviesTabs } from "./hometabs";
 
 export const moviesRoute: Route = {
@@ -38,6 +38,7 @@ export const moviesRoute: Route = {
         progress: null,
         badge: null,
         watch: watchBadge(movie.providers),
+        leaving: leavingSoon(movie.providers),
         starred: movie.starred === true,
         // Keep the title as subtitle so in-page text search finds movies.
         subtitle: `${movie.title}${movie.year ? ` (${movie.year})` : ""}`,
@@ -77,7 +78,7 @@ export const moviesRoute: Route = {
 
     // Everything a card here draws.
     const movieKey = (m: MovieRec): string =>
-      `${m.traktId}:${m.poster ?? ""}:${watchBadge(m.providers) ?? ""}:${m.title}:${m.year ?? ""}:${m.starred === true ? "★" : ""}`;
+      `${m.traktId}:${m.poster ?? ""}:${watchBadge(m.providers) ?? ""}:${leavingSoon(m.providers) ?? ""}:${m.title}:${m.year ?? ""}:${m.starred === true ? "★" : ""}`;
     const changed = renderGate();
 
     const renderContent = (): void => {

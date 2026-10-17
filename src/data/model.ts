@@ -216,7 +216,8 @@ export interface MovieRec {
   poster?: string | null;
   backdrop?: string | null;
   cast?: CastMemberRec[];
-  providers?: Record<string, { link: string | null; providers: { name: string; logo: string | null; kind: string }[] }>;
+  /** `until` only ever comes from a JustWatch top-up — see `JustWatchOffer.until`. */
+  providers?: Record<string, { link: string | null; providers: { name: string; logo: string | null; kind: string; until?: string }[] }>;
   /** Which provider kinds the cached `providers` were fetched with; see PROVIDERS_VERSION. */
   providersVersion?: number;
   /**
