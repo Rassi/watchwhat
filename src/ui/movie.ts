@@ -116,7 +116,7 @@ export const movieRoute: Route = {
       // as the network, to change nothing at all on the usual visit where the cache was current.
       renderPage(body, movies, movie, lists, refreshProviders);
 
-      void ensureMovieDetails(movies, [traktId], redraw)
+      void ensureMovieDetails(movies, [traktId], redraw, { page: true })
         .then(() => ensureMovieExtRatings(movies, movies.get(traktId) ?? movie).catch(() => false))
         .then(redraw)
         .catch(() => undefined);

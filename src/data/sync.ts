@@ -876,10 +876,28 @@ function detailsMaxAge(movie: MovieRec): number {
 }
 
 /**
- * Fold JustWatch's offers into TMDB's, for the near-release titles where TMDB's ingest lags.
- * TMDB stays the source of record: this only adds providers it is missing and downgrades a kind
- * when JustWatch says something is cheaper than TMDB thinks. Nothing is ever removed — an entry
- * TMDB has and JustWatch does not is far more likely to be a search miss than a delisting.
+ * Whether two provider names are the same service. TMDB names some tiers on their own ("Sling TV
+ * Orange and Blue") and is a letter apart on others ("Lionsgate+ Amazon Channels"), where
+ * JustWatch has one name for all of it. A prefix match catches both, and where it is wrong it is
+ * wrong in the safe direction: a sibling ("Netflix" for "Netflix Standard with Ads") keeps a
+ * listing rather than dropping one.
+ */
+function sameService(a: string, b: string): boolean {
+  const norm = (s: string): string => s.trim().toLowerCase().replace(/s$/, "");
+  const [x, y] = [norm(a), norm(b)];
+  return x.startsWith(y) || y.startsWith(x);
+}
+
+/**
+ * Fold JustWatch's offers into TMDB's. TMDB stays the source of record, and JustWatch corrects it
+ * in both directions, because its ingest lags both ways: it adds providers TMDB is missing,
+ * downgrades a kind when JustWatch says something is cheaper, and drops a subscription JustWatch
+ * no longer lists — Dirty Dancing kept Disney+ in five countries for weeks after leaving it.
+ *
+ * Dropping is safe because `extra` only ever exists for a confirmed answer: a search miss or a
+ * refusal returns no offers at all and never reaches this. Two guards keep it that way per
+ * country — one JustWatch returned nothing for is skipped rather than emptied, and only
+ * subscriptions are dropped, matched by `sameService` rather than by exact name.
  */
 function mergeJustWatch(
   tmdb: NonNullable<MovieRec["providers"]>,
@@ -889,7 +907,10 @@ function mergeJustWatch(
   const merged: NonNullable<MovieRec["providers"]> = { ...tmdb };
   for (const [cc, offers] of Object.entries(extra)) {
     const entry = merged[cc] ?? { link: null, providers: [] };
-    const providers = [...entry.providers];
+    const providers =
+      offers.length === 0
+        ? [...entry.providers]
+        : entry.providers.filter((p) => p.kind !== "stream" || offers.some((o) => sameService(o.name, p.name)));
     for (const offer of offers) {
       const at = providers.findIndex((p) => p.name === offer.name);
       if (at === -1) providers.push({ name: offer.name, logo: null, kind: offer.kind });
@@ -949,6 +970,20 @@ function applyUpcoming(movie: MovieRec, upcoming: JustWatchUpcoming[]): void {
 const SHARED_JW_TTL = 6 * 3600 * 1000;
 
 /**
+ * How long a JustWatch check stands when the film's own page is opened.
+ *
+ * Outside a release window nothing asks JustWatch unprompted, and a stale listing looks exactly
+ * like a current one — so without this, a film that left a service stays on it until someone
+ * already suspects it and presses ↻. Opening the page is the moment the answer is about to be
+ * acted on. One film, at human speed, at most every few days: not a sweep.
+ */
+const PAGE_TOP_UP_MAX_AGE = 3 * DAY;
+
+function pageTopUpDue(movie: MovieRec): boolean {
+  return !movie.topUp || Date.now() - movie.topUp.at > PAGE_TOP_UP_MAX_AGE;
+}
+
+/**
  * Fetch the shared JustWatch answers for whichever of this batch look likely to want a top-up.
  *
  * **Eligibility is judged on the dates already cached, before TMDB is asked.** After the refresh
@@ -963,7 +998,7 @@ const SHARED_JW_TTL = 6 * 3600 * 1000;
 async function pullSharedTopUps(
   movies: Map<number, MovieRec>,
   stale: number[],
-  streamGap: GapQuartiles,
+  topUpDue: (movie: MovieRec) => boolean,
 ): Promise<Map<number, SharedTitle>> {
   const out = new Map<number, SharedTitle>();
   if (!syncConfigured()) return out;
@@ -972,7 +1007,7 @@ async function pullSharedTopUps(
   for (const traktId of stale) {
     const movie = movies.get(traktId);
     if (!movie?.ids.tmdb) continue;
-    if (!nearRelease(movie) && !awaitingRelease(movie, streamGap)) continue;
+    if (!topUpDue(movie)) continue;
     byTmdb.set(`movie:${movie.ids.tmdb}`, traktId);
   }
   if (byTmdb.size === 0) return out;
@@ -1057,9 +1092,9 @@ function adoptSharedTitle(movie: MovieRec, row: SharedTitle): boolean {
   // one. Newest *fetch* wins here exactly as it does on the server.
   if (movie.tmdbFetchedAt != null && movie.tmdbFetchedAt >= fetchedAt) return false;
 
-  // Rebuilt from the two halves rather than from a stored merge — the merge is additive and
-  // never removes, so re-merging onto a previous merge would make JustWatch's additions
-  // permanent. This reproduces exactly what the writing device had.
+  // Rebuilt from the two halves rather than from a stored merge — the merge drops only stale
+  // subscriptions, so re-merging onto a previous merge would keep every rental and free listing
+  // JustWatch ever added. This reproduces exactly what the writing device had.
   movie.providers = row.jwProviders ? mergeJustWatch(row.tmdbProviders, row.jwProviders) : row.tmdbProviders;
   movie.providersVersion = PROVIDERS_VERSION;
   movie.digitalRelease = row.dates?.digital ?? null;
@@ -1085,7 +1120,7 @@ export async function ensureMovieDetails(
   movies: Map<number, MovieRec>,
   traktIds: number[],
   onUpdate?: () => void,
-  opts?: { skipWatchedRefresh?: boolean; force?: boolean },
+  opts?: { skipWatchedRefresh?: boolean; force?: boolean; page?: boolean },
 ): Promise<void> {
   const wanted = watchCountryList();
   const stale = traktIds.filter((id) => {
@@ -1094,6 +1129,9 @@ export async function ensureMovieDetails(
     // Asked for by hand, so the TTL has no say: the point of the button is that
     // the cached answer is the thing being disputed.
     if (opts?.force) return true;
+    // The TMDB details refetch too, though their own TTL may not be up: the merge needs a fresh
+    // TMDB answer as its base, never a previous merge.
+    if (opts?.page && pageTopUpDue(movie)) return true;
     if (movie.tmdbFetchedAt == null) return true;
     // Bulk refreshes leave watched movies alone — their details are fetched
     // once and only re-fetched when the movie page itself is opened.
@@ -1113,7 +1151,9 @@ export async function ensureMovieDetails(
 
   // Once for the whole batch: the window is a property of the library, not of any one film.
   const streamGap = gapQuartiles(movies.values(), "stream");
-  const shared = opts?.force ? new Map<number, SharedTitle>() : await pullSharedTopUps(movies, stale, streamGap);
+  const topUpDue = (movie: MovieRec): boolean =>
+    nearRelease(movie) || awaitingRelease(movie, streamGap) || (!!opts?.page && pageTopUpDue(movie));
+  const shared = opts?.force ? new Map<number, SharedTitle>() : await pullSharedTopUps(movies, stale, topUpDue);
   const publish: Record<string, TitleWrite> = {};
   const notify = batchNotify(onUpdate);
   await mapWithConcurrency(stale, 4, async (traktId) => {
@@ -1135,10 +1175,10 @@ export async function ensureMovieDetails(
     movie.digitalRelease = extras.digitalRelease;
     movie.streamingRelease = extras.streamingRelease;
     // Near a release with the dates TMDB just returned, or still waiting for the date itself —
-    // the two windows where TMDB is known to be behind, and nothing else, which keeps this off
-    // the other ~320 titles. A hand-asked refresh always tops up, whatever the dates say: someone
-    // pressing the button is reporting that TMDB looks wrong, which is why this fallback exists.
-    if (movie.ids.tmdb && (opts?.force || nearRelease(movie) || awaitingRelease(movie, streamGap))) {
+    // the two windows where TMDB is known to be behind — or the film's own page was opened on a
+    // check more than a few days old. A hand-asked refresh always tops up, whatever the dates
+    // say: someone pressing the button is reporting that TMDB looks wrong.
+    if (movie.ids.tmdb && (opts?.force || topUpDue(movie))) {
       // Another device asked recently enough — replay its answer rather than asking again. This
       // is the whole point of the shared table: the top-up runs on a 6h cadence for the
       // near-release handful, so two devices otherwise pay for the same question twice.

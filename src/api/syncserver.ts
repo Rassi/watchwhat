@@ -111,8 +111,8 @@ export interface SharedTitle {
   jwFetched: string | null;
   /**
    * TMDB's own provider answer, **before** the JustWatch merge. Kept apart from
-   * `jwProviders` because the merge is additive and never removes: re-merging onto a
-   * previous merge would make JustWatch's additions permanent.
+   * `jwProviders` because the merge drops only stale subscriptions: re-merging onto a
+   * previous merge would keep every rental JustWatch ever added.
    */
   tmdbProviders: ProvidersByCountry | null;
   tmdbFetched: string | null;

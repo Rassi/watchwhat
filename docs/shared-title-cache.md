@@ -278,9 +278,10 @@ already for.
 
 ## Invariants that must survive the move
 
-> **Never store the merged blob.** `mergeJustWatch` is strictly additive — it
-> pushes providers TMDB lacks and downgrades a `kind`, and **never removes
-> anything**. That is safe today only because every refresh assigns
+> **Never store the merged blob.** `mergeJustWatch` pushes providers TMDB lacks
+> and downgrades a `kind`, and since 2026-10-17 drops a stale *subscription* —
+> but **never removes a rental or a free listing**. That is safe today only
+> because every refresh assigns
 > `movie.providers = extras.providersByCountry` from a *fresh* TMDB fetch before
 > merging, so the merge base is never a previous merge. Store the merged result
 > and let clients read it as their base, and JustWatch's additions become

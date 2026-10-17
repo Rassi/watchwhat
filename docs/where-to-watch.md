@@ -27,15 +27,21 @@ that was being made anyway.
 TMDB's ingest lags, and not uniformly — a title's record can be refreshed for a
 rental price change while a new subscription listing is still missing. TMDB
 offers no way to detect this, because watch providers never appear in its
-`/changes` feed. So around a release, and only there, the source is asked
+`/changes` feed. So around a release, and when a film's page is opened, the source is asked
 directly:
 
 - **Movies only.** `fetchJustWatchOffers` has exactly one call site, inside
   `ensureMovieDetails`. A show's providers are TMDB's answer and nothing else,
   including when the ↻ is pressed — so do not go looking for a broken top-up on
   a show page. There isn't one to break.
-- Fires when `nearRelease(movie)` **or `awaitingRelease(movie)`**, or whenever a
-  refresh is asked for by hand.
+- Fires when `nearRelease(movie)` **or `awaitingRelease(movie)`**, whenever a
+  refresh is asked for by hand, **or when the film's page is opened and its last
+  check is over 3 days old** (`PAGE_TOP_UP_MAX_AGE`, added 2026-10-17). Without
+  that last one, nothing outside a release window ever asked, so a film that left
+  a service stayed on it until someone already suspected it and pressed ↻.
+  Opening the page is when the answer is about to be acted on. It is one film at
+  human speed, at most every few days, plus the TMDB refetch the merge needs as a
+  fresh base. Only the movie page passes `page: true`; the list views never do.
 - `apis.justwatch.com/graphql`, which is **JustWatch's own web API, not a
   published one**: no versioning, no contract. Every caller must treat failure as
   "no extra information" and keep TMDB's answer.
@@ -219,10 +225,28 @@ like `providers`, so it is not in the event log.
   failing from then on.
 - **`null` is written back on failure**, clearing a dead id — keeping it would
   cost a wasted request before the search it was supposed to save.
-- It only ever *adds* a provider TMDB is missing, or *downgrades* a kind when
-  JustWatch says something is cheaper than TMDB thinks. **Nothing is ever
-  removed**: an entry TMDB has and JustWatch does not is far more likely to be a
-  search miss than a delisting.
+- It *adds* a provider TMDB is missing, *downgrades* a kind when JustWatch says
+  something is cheaper than TMDB thinks, and **drops a subscription JustWatch no
+  longer lists** (changed 2026-10-17). TMDB's ingest lags removals as well as
+  additions: *Dirty Dancing* left Disney+ in five of six watch countries and TMDB
+  kept listing it, so the card sent us looking for it on an evening it was not
+  there. The merge used to never remove anything, on the grounds that a gap was
+  likelier a search miss than a delisting — but a miss or a refusal returns no
+  offers at all and never reaches the merge, so that case could not arise. Two
+  guards do the real work:
+  - **A country JustWatch returned nothing for is skipped**, not emptied. A film
+    vanishing from every service in a country at once is likelier a hiccup.
+  - **Names are matched by `sameService`, not exactly.** TMDB names some tiers on
+    their own (*Sling TV Orange and Blue*) and is a letter apart on others
+    (*Lionsgate+ Amazon Channels*), where JustWatch has one name. A prefix match,
+    ignoring case and a trailing "s", catches both; when it is wrong it keeps a
+    listing (*Netflix* for *Netflix Standard with Ads*) rather than dropping one.
+    Measured before shipping against the 56 watch-list films with a
+    subscription: exact matching would have dropped 10 listings, two of them
+    these naming mismatches; with the guard it dropped 8, all real or plausible.
+  - Only `stream` entries are dropped. Rentals and free listings are left alone.
+    The add step still matches exact names, which is why *Sling TV* can appear
+    without a logo next to TMDB's *Sling TV Orange and Blue*.
 
 ### The top-up did not work in production (found 2026-08-01, fixed 2026-08-02)
 
