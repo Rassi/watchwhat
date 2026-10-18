@@ -16,6 +16,7 @@ import { dbDelete } from "./data/db";
 import { purgeTraktRemnants, seedCloudStamps } from "./data/settings";
 import {
   cleanProviderSinceBackdates,
+  cleanProviderSinceGap,
   migrateMovieListsToSettings,
   seedListAddedAt,
   seedProviderSince,
@@ -46,6 +47,8 @@ void (async () => {
   // Then drop the "arrivals" that were only ever the seeding meeting a stale cache — a date on
   // a listing nobody watched appear, which Releases has no way to tell from the real thing.
   await cleanProviderSinceBackdates();
+  // And the arrivals a device back from six weeks away dated to the day it left.
+  await cleanProviderSinceGap();
   // Then give every custom-list membership a date of its own, so the lists stop being ordered
   // by the watchlist's date — and so the repair pass has something true to send.
   await seedListAddedAt();

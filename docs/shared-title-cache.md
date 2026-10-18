@@ -323,6 +323,14 @@ The zero-means-baseline rule carries over unchanged: a listing first seen at the
 moment tracking began cannot be said to have arrived, and must never read as
 news.
 
+Sharing does not fix the device that comes back. Whoever refreshes first after a
+long absence writes the stamp everyone adopts, and before 2026-10-18 it dated
+the whole gap's arrivals to its previous fetch — 196 listings across 59 films in
+one second of 5 Sep, six of them on services that had not carried them yet. A
+fetch more than eight days old (`MAX_ARRIVAL_WINDOW_MS`) now stamps `0`, the same
+"undatable, not news" as a baseline, and Releases falls back to the published
+date.
+
 ## What would still differ between devices
 
 | | TTL | matters? |

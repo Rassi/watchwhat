@@ -591,6 +591,23 @@ function knownDates(movie: MovieRec): number[] {
  */
 const SETTLE_MS = 2 * 24 * 3600 * 1000;
 
+/**
+ * The widest gap between two fetches that can still date an arrival. Past it, a listing that
+ * appeared in between is stamped `0` — undatable, so Releases falls back to the film's published
+ * date — instead of carrying the older fetch's date.
+ *
+ * The older end is honest about *when at the latest*, but a stamp is read as *when*, and a wide
+ * window makes that a fiction. Worse, every film that gained anything during the gap shares the
+ * one instant, so the ten-film cut on Releases is decided by milliseconds. Found 2026-10-18: a
+ * device last seen on 5 Sep refreshed in mid-October and dated 196 listings across 59 films to
+ * the same second of 5 Sep, *The Death of Robin Hood* among them — on HBO Max since 16 Oct, and
+ * missing from Releases because it lost the tie by 0.7 s.
+ *
+ * Eight days: the 7-day TTL bucket in `detailsMaxAge`, plus a day for the app not being opened
+ * the moment it expires.
+ */
+const MAX_ARRIVAL_WINDOW_MS = 8 * DAY;
+
 function stampProviderSightings(movie: MovieRec): void {
   const countries = watchCountryList();
   /**
@@ -603,9 +620,11 @@ function stampProviderSightings(movie: MovieRec): void {
    * story: refreshing a library last seen three days ago stamped 22 films as arriving *today*,
    * which is precisely the claim this screen exists to make trustworthy. Zero when there is no
    * previous fetch to point at — an arrival that cannot be dated is not news, by the same rule
-   * that makes a first stamp baseline.
+   * that makes a first stamp baseline — and zero when that fetch is too long ago to date
+   * anything, see `MAX_ARRIVAL_WINDOW_MS`.
    */
-  const arrivedAt = movie.tmdbFetchedAt && movie.tmdbFetchedAt > 0 ? movie.tmdbFetchedAt : 0;
+  const previous = movie.tmdbFetchedAt ?? 0;
+  const arrivedAt = previous > 0 && Date.now() - previous <= MAX_ARRIVAL_WINDOW_MS ? previous : 0;
   // Countries dropped from the watch list fall out of both, so their stamps stop being carried
   // around — and a country added back later re-baselines rather than reporting its whole
   // catalogue as having arrived that afternoon.
@@ -757,6 +776,35 @@ export async function cleanProviderSinceBackdates(): Promise<void> {
     }
   }
   localStorage.setItem(PROVIDER_SINCE_CLEANED_KEY, new Date().toISOString());
+}
+
+const PROVIDER_SINCE_GAP_CLEANED_KEY = "watchwhat.providerSinceGapCleaned";
+
+/**
+ * The one second of 5 Sep that six weeks of arrivals were dated to, before
+ * `MAX_ARRIVAL_WINDOW_MS` existed. 196 stamps across 59 films, the whole of it, and six of those
+ * films have a published streaming date *after* it — they were not on any service that day.
+ */
+const GAP_STAMPS_FROM = Date.parse("2026-09-05T10:55:55Z");
+const GAP_STAMPS_UNTIL = Date.parse("2026-09-05T10:55:57Z");
+
+/**
+ * Put the stamps from that gap back to `0`, once, so the films fall back to their published
+ * dates on Releases. The shared table was repaired the same day, so a device adopting rows
+ * afterwards gets the clean version too; this covers the copies already on each device.
+ */
+export async function cleanProviderSinceGap(): Promise<void> {
+  if (localStorage.getItem(PROVIDER_SINCE_GAP_CLEANED_KEY)) return;
+  for (const movie of await dbGetAll<MovieRec>("movies")) {
+    const since = movie.providerSince;
+    if (!since) continue;
+    let changed = false;
+    for (const [key, at] of Object.entries(since)) {
+      if (at >= GAP_STAMPS_FROM && at < GAP_STAMPS_UNTIL) [since[key], changed] = [0, true];
+    }
+    if (changed) await saveMovieFields(movie, ["providerSince"]);
+  }
+  localStorage.setItem(PROVIDER_SINCE_GAP_CLEANED_KEY, new Date().toISOString());
 }
 
 const LIST_DATES_SEEDED_KEY = "watchwhat.listDatesSeeded";
