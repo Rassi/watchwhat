@@ -23,6 +23,7 @@ import { dbDelete, dbGet, dbGetAll, dbPut } from "./db";
 import { enqueue, now } from "./outbox";
 import { pullTitles, pullTitlesSince, pushTitles, syncConfigured, type SharedTitle, type TitleWrite } from "../api/syncserver";
 import type {
+  EpisodeInfo,
   EpisodesRec,
   Library,
   MovieListRec,
@@ -116,8 +117,29 @@ function watchedEpisodesOf(progress: ProgressRec | undefined): WatchedEpisodes {
 function progressFromEpisodes(traktId: number, episodes: EpisodesRec, watched?: WatchedEpisodes): ProgressRec {
   const today = new Date().toISOString().slice(0, 10);
   const hasAired = (airDate: string | null | undefined): boolean => !!airDate && airDate <= today;
+  // TMDB sometimes leaves aired episodes undated: all 13 of Location, Location, Location's
+  // ninth season, between seasons aired in 2003 and 2008, or a run in the middle of its
+  // fifteenth. Those have aired if something after them has — a later episode of the same
+  // season, or for a season with no dates at all, a later season. An undated tail on a
+  // dated season stays out: that's where TMDB parks placeholders (the same show has a
+  // dozen titled "Delete") and where a running season keeps what isn't scheduled yet.
+  // Specials keep to their dates, since their numbering says nothing about when they aired.
+  const lastAiredIn = new Map<number, number>();
+  for (const s of episodes.seasons) {
+    for (const e of s.episodes) {
+      if (hasAired(e.airDate)) lastAiredIn.set(s.number, Math.max(e.number, lastAiredIn.get(s.number) ?? 0));
+    }
+  }
+  const lastAiredSeason = Math.max(0, ...lastAiredIn.keys());
+  const undatedButAired = (season: EpisodesRec["seasons"][number], e: EpisodeInfo): boolean =>
+    !e.airDate &&
+    season.number > 0 &&
+    (e.number < (lastAiredIn.get(season.number) ?? 0) ||
+      (season.number < lastAiredSeason && season.episodes.every((x) => !x.airDate)));
   const seasons = episodes.seasons.map((s) => {
-    const kept = s.episodes.filter((e) => hasAired(e.airDate) || watched?.has(epKey(s.number, e.number)));
+    const kept = s.episodes.filter(
+      (e) => hasAired(e.airDate) || undatedButAired(s, e) || watched?.has(epKey(s.number, e.number)),
+    );
     const eps = kept.map((e) => {
       const at = watched?.get(epKey(s.number, e.number));
       return { number: e.number, completed: at !== undefined, watchedAt: at ?? null };
